@@ -1,0 +1,136 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+import 'package:client/database/database_helper.dart';
+import 'package:client/theme/hops_theme.dart';
+
+class IndividualChatTerminalView extends StatefulWidget {
+  final String peerName;
+  final Future<void> Function(String recipient, String message) onSendMessage;
+  const IndividualChatTerminalView({
+    super.key,
+    required this.peerName,
+    required this.onSendMessage,
+  });
+  @override
+  State<IndividualChatTerminalView> createState() => _IndividualChatTerminalViewState();
+}
+
+class _IndividualChatTerminalViewState extends State<IndividualChatTerminalView> {
+  List<Map<String, dynamic>> messageThreadsList = [];
+  final TextEditingController _msgInputController = TextEditingController();
+  String myPersonalUsernameLabel = "User_Vic";
+  Timer? _refreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDeviceOwnerLabel();
+    _loadPeerMessageLogs();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) => _loadPeerMessageLogs());
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _msgInputController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadDeviceOwnerLabel() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      myPersonalUsernameLabel = prefs.getString('my_username') ?? 'User_Vic';
+    });
+  }
+
+  Future<void> _loadPeerMessageLogs() async {
+    final db = await DatabaseHelper.instance.database;
+    final data = await db.query(
+      DatabaseHelper.table,
+      where: '${DatabaseHelper.columnSenderId} = ? OR ${DatabaseHelper.columnSenderId} = ?',
+      whereArgs: [widget.peerName, myPersonalUsernameLabel],
+      orderBy: '${DatabaseHelper.columnTimestamp} ASC',
+    );
+    setState(() { messageThreadsList = data; });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.peerName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)), elevation: 0),
+      body: Column(
+        children: [
+          Expanded(
+            child: messageThreadsList.isEmpty
+                ? const Center(child: Text("No messages yet.", style: TextStyle(color: Colors.grey)))
+                : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: messageThreadsList.length,
+              itemBuilder: (context, index) {
+                final msg = messageThreadsList[index];
+                bool isMe = msg[DatabaseHelper.columnSenderId] == myPersonalUsernameLabel;
+                return Align(
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: isMe ? HopsTheme.primary : HopsTheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(msg[DatabaseHelper.columnMessage], style: TextStyle(color: isMe ? Colors.white : Colors.black87)),
+                  ),
+                );
+              },
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.only(left: 16, right: 8, top: 10, bottom: 24),
+            decoration: BoxDecoration(color: HopsTheme.surfaceContainer.withOpacity(0.4)),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _msgInputController,
+                    style: const TextStyle(fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: "Type a message...",
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.6),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 20),
+                  style: IconButton.styleFrom(backgroundColor: HopsTheme.primary, padding: const EdgeInsets.all(12)),
+                  onPressed: () async {
+                    if (_msgInputController.text.isNotEmpty) {
+                      final text = _msgInputController.text.trim();
+                      final outgoingPayload = {
+                        DatabaseHelper.columnId: const Uuid().v4(),
+                        DatabaseHelper.columnMessage: text,
+                        DatabaseHelper.columnSenderId: myPersonalUsernameLabel,
+                        DatabaseHelper.columnIsForMe: 0,
+                        DatabaseHelper.columnNeedsRelay: 1,
+                        DatabaseHelper.columnTimestamp: DateTime.now().millisecondsSinceEpoch,
+                      };
+                      await DatabaseHelper.instance.insertMessage(outgoingPayload);
+                      await widget.onSendMessage(widget.peerName, text);
+                      _msgInputController.clear();
+                      _loadPeerMessageLogs();
+                    }
+                  },
+                )
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

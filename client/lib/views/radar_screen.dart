@@ -1,0 +1,396 @@
+import 'dart:async';
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:client/theme/hops_theme.dart';
+
+class RadarScreen extends StatefulWidget {
+  final Stream<List<ScanResult>> radarStream;
+  final Future<void> Function(String username) onSendFriendRequest;
+  final List<String> pendingRequests;
+  final void Function(String sender) onAcceptRequest;
+  final void Function(String sender) onDeclineRequest;
+  final Set<String> friendUsernames;
+
+  const RadarScreen({
+    super.key,
+    required this.radarStream,
+    required this.onSendFriendRequest,
+    required this.pendingRequests,
+    required this.onAcceptRequest,
+    required this.onDeclineRequest,
+    required this.friendUsernames,
+  });
+
+  @override
+  State<RadarScreen> createState() => _RadarScreenState();
+}
+
+class _RadarScreenState extends State<RadarScreen>
+    with SingleTickerProviderStateMixin {
+  final Map<String, ScanResult> _devices = {};
+  StreamSubscription<List<ScanResult>>? _sub;
+
+  late AnimationController _radarController;
+
+  @override
+  void initState() {
+    super.initState();
+    _radarController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+
+    _sub = widget.radarStream.listen((results) {
+      setState(() {
+        for (var r in results) {
+          String name = r.advertisementData.advName;
+          if (name.startsWith("HPS:")) {
+            _devices[name] = r;
+          }
+        }
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _radarController.dispose();
+    super.dispose();
+  }
+
+  double _rssiToRadius(int rssi) {
+    double clamped = rssi.clamp(-100, -30).toDouble();
+    return 0.2 + (1.0 - 0.2) * (clamped + 100) / 70.0;
+  }
+
+  List<_DeviceBlip> _computeBlips() {
+    return _devices.entries.map((entry) {
+      final r = entry.value;
+      final username = r.advertisementData.advName.substring(4);
+      final id = r.device.remoteId.toString();
+      final hash = id.hashCode;
+      final angle = (hash % 360) * (math.pi / 180.0);
+      final radius = _rssiToRadius(r.rssi);
+      return _DeviceBlip(
+        id: id,
+        username: username,
+        radius: radius,
+        angle: angle,
+        rssi: r.rssi,
+      );
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final blips = _computeBlips();
+    final screenSize = MediaQuery.of(context).size;
+    final radarSize = math.min(screenSize.width, screenSize.height * 0.55);
+
+    return Scaffold(
+      appBar: AppBar(
+        elevation: 0,
+        backgroundColor: HopsTheme.background.withOpacity(0.8),
+        title: const Row(
+          children: [
+            Icon(Icons.radar, color: HopsTheme.primary),
+            SizedBox(width: 8),
+            Text("Radar",
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: HopsTheme.primary,
+                    fontSize: 20)),
+          ],
+        ),
+      ),
+      body: Column(
+        children: [
+          // ---------- RADAR ----------
+          SizedBox(
+            height: radarSize,
+            width: double.infinity,
+            child: GestureDetector(
+              onTapUp: (details) {
+                final center = Offset(radarSize / 2, radarSize / 2);
+                final tapPos = details.localPosition - center;
+                const hitThreshold = 30.0;
+
+                _DeviceBlip? closest;
+                double minDist = double.infinity;
+                for (final blip in blips) {
+                  final blipPos = Offset(
+                    blip.radius * (radarSize / 2) * math.cos(blip.angle),
+                    blip.radius * (radarSize / 2) * math.sin(blip.angle),
+                  );
+                  final dist = (tapPos - blipPos).distance;
+                  if (dist < hitThreshold && dist < minDist) {
+                    closest = blip;
+                    minDist = dist;
+                  }
+                }
+                if (closest != null) {
+                  if (widget.friendUsernames.contains(closest.username)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text(
+                              "${closest.username} is already your friend")),
+                    );
+                  } else {
+                    widget.onSendFriendRequest(closest.username);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text(
+                              "Friend request sent to ${closest.username}!")),
+                    );
+                  }
+                }
+              },
+              child: AnimatedBuilder(
+                animation: _radarController,
+                builder: (context, child) {
+                  return CustomPaint(
+                    painter: RadarPainter(
+                      rotation: _radarController.value * 2 * math.pi,
+                      primaryColor: HopsTheme.primary,
+                      blips: blips,
+                    ),
+                    size: Size(radarSize, radarSize),
+                  );
+                },
+              ),
+            ),
+          ),
+          const Divider(height: 1),
+
+          // ---------- FRIEND REQUESTS (always visible header) ----------
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0, left: 16, right: 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                "Friend Requests",
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: HopsTheme.primary,
+                ),
+              ),
+            ),
+          ),
+
+          // Content: either a message or the list
+          if (widget.pendingRequests.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(left: 16, top: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  "No pending requests",
+                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                ),
+              ),
+            )
+          else
+            Expanded(
+              child: SizedBox(
+                height: 150,
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  itemCount: widget.pendingRequests.length,
+                  itemBuilder: (context, index) {
+                    final sender = widget.pendingRequests[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 3),
+                      child: Card(
+                        elevation: 1,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        color: Colors.white.withOpacity(0.9),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 16,
+                                    backgroundColor:
+                                    HopsTheme.primary.withOpacity(0.1),
+                                    child: Text(sender[0],
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: HopsTheme.primary,
+                                            fontSize: 14)),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      "$sender wants to add you",
+                                      style: const TextStyle(fontSize: 13),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 2,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        widget.onDeclineRequest(sender),
+                                    child: const Text("Decline",
+                                        style: TextStyle(
+                                            color: Colors.redAccent,
+                                            fontSize: 12)),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: HopsTheme.primary,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 8),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                          BorderRadius.circular(100)),
+                                      textStyle:
+                                      const TextStyle(fontSize: 12),
+                                    ),
+                                    onPressed: () {
+                                      print("🔘 Accept pressed for $sender");
+                                      widget.onAcceptRequest(sender);
+                                    },
+                                    child: const Text("Accept"),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceBlip {
+  final String id;
+  final String username;
+  final double radius;
+  final double angle;
+  final int rssi;
+
+  const _DeviceBlip({
+    required this.id,
+    required this.username,
+    required this.radius,
+    required this.angle,
+    required this.rssi,
+  });
+}
+
+class RadarPainter extends CustomPainter {
+  final double rotation;
+  final Color primaryColor;
+  final List<_DeviceBlip> blips;
+
+  RadarPainter({
+    required this.rotation,
+    required this.primaryColor,
+    required this.blips,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2 - 16;
+
+    final bgPaint = Paint()
+      ..color = Colors.white.withOpacity(0.05)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, radius, bgPaint);
+
+    final circlePaint = Paint()
+      ..color = primaryColor.withOpacity(0.2)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    for (int i = 1; i <= 4; i++) {
+      canvas.drawCircle(center, radius * i / 4, circlePaint);
+    }
+
+    final linePaint = Paint()
+      ..color = primaryColor.withOpacity(0.3)
+      ..strokeWidth = 0.5;
+    canvas.drawLine(Offset(center.dx - radius, center.dy),
+        Offset(center.dx + radius, center.dy), linePaint);
+    canvas.drawLine(Offset(center.dx, center.dy - radius),
+        Offset(center.dx, center.dy + radius), linePaint);
+
+    final sweepPaint = Paint()
+      ..color = primaryColor.withOpacity(0.8)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    final sweepEnd = Offset(
+      center.dx + radius * math.cos(rotation),
+      center.dy + radius * math.sin(rotation),
+    );
+    canvas.drawLine(center, sweepEnd, sweepPaint);
+
+    final centerDot = Paint()
+      ..color = primaryColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, 4, centerDot);
+
+    final blipPaint = Paint()
+      ..color = primaryColor
+      ..style = PaintingStyle.fill;
+    for (final blip in blips) {
+      final x = center.dx + blip.radius * radius * math.cos(blip.angle);
+      final y = center.dy + blip.radius * radius * math.sin(blip.angle);
+      final blipPos = Offset(x, y);
+
+      canvas.drawCircle(blipPos, 10, blipPaint);
+      canvas.drawCircle(blipPos, 12,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2);
+
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: blip.username,
+          style: TextStyle(
+            color: primaryColor,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            shadows: const [
+              Shadow(color: Colors.white, blurRadius: 4),
+            ],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(canvas,
+          Offset(blipPos.dx - textPainter.width / 2, blipPos.dy - 25));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant RadarPainter oldDelegate) {
+    return oldDelegate.rotation != rotation ||
+        oldDelegate.blips != blips;
+  }
+}
