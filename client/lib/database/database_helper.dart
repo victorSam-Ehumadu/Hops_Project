@@ -4,19 +4,25 @@ import 'package:path_provider/path_provider.dart';
 
 class DatabaseHelper {
   static const _databaseName = "MeshNetwork.db";
-  static const _databaseVersion = 1;
+  static const _databaseVersion = 2;   // upgraded
 
   static const table = 'messages';
+  static const vibeTable = 'vibe_records';   // new
 
-  // Columns for Mesh Routing
-  static const columnId = 'id'; // The UUID to prevent duplicates
+  // Columns for Mesh Routing (unchanged)
+  static const columnId = 'id';
   static const columnMessage = 'message';
   static const columnSenderId = 'sender_id';
-  static const columnIsForMe = 'is_for_me'; // 1 for true, 0 for false
-  static const columnNeedsRelay = 'needs_relay'; // 1 for true, 0 for false
+  static const columnIsForMe = 'is_for_me';
+  static const columnNeedsRelay = 'needs_relay';
   static const columnTimestamp = 'timestamp';
 
-  // Make this a singleton class
+  // Columns for Vibe Check records
+  static const vibeColId = 'id';
+  static const vibeColLocation = 'location_name';
+  static const vibeColDeviceCount = 'device_count';
+  static const vibeColTimestamp = 'timestamp';
+
   DatabaseHelper._privateConstructor();
   static final DatabaseHelper instance = DatabaseHelper._privateConstructor();
 
@@ -35,10 +41,10 @@ class DatabaseHelper {
       path,
       version: _databaseVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
   }
 
-  // Create the table
   Future _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE $table (
@@ -50,18 +56,60 @@ class DatabaseHelper {
         $columnTimestamp INTEGER NOT NULL
       )
     ''');
+
+    // Create vibe records table
+    await db.execute('''
+      CREATE TABLE $vibeTable (
+        $vibeColId TEXT PRIMARY KEY,
+        $vibeColLocation TEXT NOT NULL,
+        $vibeColDeviceCount INTEGER NOT NULL,
+        $vibeColTimestamp INTEGER NOT NULL
+      )
+    ''');
   }
 
-  // Insert a new message (ignores duplicates)
+  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+        CREATE TABLE $vibeTable (
+          $vibeColId TEXT PRIMARY KEY,
+          $vibeColLocation TEXT NOT NULL,
+          $vibeColDeviceCount INTEGER NOT NULL,
+          $vibeColTimestamp INTEGER NOT NULL
+        )
+      ''');
+    }
+  }
+
+  // Insert a new vibe record
+  Future<int> insertVibeRecord(Map<String, dynamic> row) async {
+    Database db = await instance.database;
+    return await db.insert(vibeTable, row, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  // Get all vibe records, ordered by most recent first
+  Future<List<Map<String, dynamic>>> getVibeRecords() async {
+    Database db = await instance.database;
+    return await db.query(
+      vibeTable,
+      orderBy: '$vibeColTimestamp DESC',
+    );
+  }
+
+  // Delete a vibe record by ID
+  Future<int> deleteVibeRecord(String id) async {
+    Database db = await instance.database;
+    return await db.delete(vibeTable, where: '$vibeColId = ?', whereArgs: [id]);
+  }
+
+  // ---------- Existing message methods (unchanged) ----------
   Future<int> insertMessage(Map<String, dynamic> row) async {
     Database db = await instance.database;
     return await db.insert(table, row, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
-  // 1. THE FETCHER: Your team's Bluetooth code will call this to get data to send
+
   Future<List<Map<String, dynamic>>> getMessagesToRelay() async {
     Database db = await instance.database;
-
-    // Query: SELECT * FROM messages WHERE needs_relay = 1
     return await db.query(
       table,
       where: '$columnNeedsRelay = ?',
@@ -69,15 +117,12 @@ class DatabaseHelper {
     );
   }
 
-  // 2. THE UPDATER: Your team calls this AFTER they successfully broadcast the message
   Future<int> markAsRelayed(String uuid) async {
     Database db = await instance.database;
-
-    // Update the row to set needs_relay to 0 (False)
     return await db.update(
       table,
       {columnNeedsRelay: 0},
-      where: '$columnId = ?', // Find the exact message by its UUID
+      where: '$columnId = ?',
       whereArgs: [uuid],
     );
   }

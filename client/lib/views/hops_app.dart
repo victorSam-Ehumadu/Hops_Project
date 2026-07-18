@@ -18,11 +18,11 @@ import 'package:client/views/token_generator.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/models/feature_item.dart';
-import 'package:client/views/half_wheel.dart';
+import 'package:client/views/vibe_check_page.dart';
+import 'package:client/views/watch_me_page.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
-
   @override
   _HopsAppState createState() => _HopsAppState();
 }
@@ -43,21 +43,46 @@ class _HopsAppState extends State<HopsApp> {
   final _radarStreamController = StreamController<List<ScanResult>>.broadcast();
   Stream<List<ScanResult>> get radarStream => _radarStreamController.stream;
 
-  // Feature toggles
-  final Set<int> enabledFeatureIds = {};
+  // Watch request stream – late initialised with onListen replay
+  late final StreamController<List<String>> _pendingWatchStreamController;
+  Stream<List<String>> get pendingWatchStream => _pendingWatchStreamController.stream;
 
-  // Friend request management (NEW – replaces the old stream/dialog)
+  // Active buddies stream – late initialised with onListen replay
+  late final StreamController<Set<String>> _watchingBuddiesStreamController;
+  Stream<Set<String>> get watchingBuddiesStream => _watchingBuddiesStreamController.stream;
+
+  // Feature toggles (persisted)
+  Set<int> enabledFeatureIds = {};
+
+  // Friend request management
   final List<String> pendingRequests = [];
   final Set<String> _processingAccepts = {};
   Set<String> get friendUsernames =>
       localActiveContacts.map((c) => c['username'] as String).toSet();
 
+  // Watch Me state
+  Set<String> _watchingBuddies = {};
+  Set<String> _watchers = {};
+  final List<String> pendingWatchRequests = [];
+  final Set<String> _processingWatchAccepts = {};
+
   @override
   void initState() {
     super.initState();
+
+    // Initialise stream controllers with replay on first listen
+    _pendingWatchStreamController = StreamController<List<String>>.broadcast(
+      onListen: () => _pendingWatchStreamController.add(List<String>.from(pendingWatchRequests)),
+    );
+    _watchingBuddiesStreamController = StreamController<Set<String>>.broadcast(
+      onListen: () => _watchingBuddiesStreamController.add(Set<String>.from(_watchingBuddies)),
+    );
+
     _loadCurrentIdentityMetrics();
+    _loadEnabledFeatures();
+    _loadWatchState();
     _checkPermissionsAndStartBLE();
-    // No dialog listener – friend requests are now shown as cards
+    _refreshContactsTrayList();
   }
 
   @override
@@ -67,10 +92,49 @@ class _HopsAppState extends State<HopsApp> {
     BlePeripheral.stopAdvertising();
     _cleanupPairingServer();
     _radarStreamController.close();
+    _pendingWatchStreamController.close();
+    _watchingBuddiesStreamController.close();
     super.dispose();
   }
 
-  // --------------- Friend request logic ---------------
+  // ---------- Watch state persistence ----------
+  Future<void> _loadWatchState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final watching = prefs.getStringList('watchingBuddies') ?? [];
+    final watchers = prefs.getStringList('watchers') ?? [];
+    setState(() {
+      _watchingBuddies = watching.toSet();
+      _watchers = watchers.toSet();
+    });
+    _notifyWatchingBuddiesChanged();
+  }
+
+  Future<void> _saveWatchState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('watchingBuddies', _watchingBuddies.toList());
+    await prefs.setStringList('watchers', _watchers.toList());
+  }
+
+  void _notifyWatchRequestsChanged() {
+    _pendingWatchStreamController.add(List<String>.from(pendingWatchRequests));
+  }
+
+  void _notifyWatchingBuddiesChanged() {
+    _watchingBuddiesStreamController.add(Set<String>.from(_watchingBuddies));
+  }
+
+  void clearAllWatchState() {
+    setState(() {
+      _watchingBuddies.clear();
+      _watchers.clear();
+      pendingWatchRequests.clear();
+      _saveWatchState();
+      _notifyWatchingBuddiesChanged();
+      _notifyWatchRequestsChanged();
+    });
+  }
+
+  // ---------- Friend request logic ----------
   Future<void> sendFriendRequest(String targetUsername) async {
     if (friendUsernames.contains(targetUsername)) {
       _showToastFeedbackAlert("$targetUsername is already your friend");
@@ -87,6 +151,28 @@ class _HopsAppState extends State<HopsApp> {
         localName: "HPS:$myUsername",
         services: [],
       );
+    });
+  }
+
+  Future<void> _advertiseVibeTag(String location, int level) async {
+    final advName = "VBT:$location:$level";
+    if (advName.length > 29) {
+      _showToastFeedbackAlert("Location name too long");
+      return;
+    }
+    print("📢 Advertising VIBE_TAG: $advName");
+    await BlePeripheral.stopAdvertising();
+    await BlePeripheral.startAdvertising(
+      localName: advName,
+      services: [],
+    );
+    Future.delayed(const Duration(seconds: 30), () {
+      BlePeripheral.stopAdvertising();
+      BlePeripheral.startAdvertising(
+        localName: "HPS:$myUsername",
+        services: [],
+      );
+      _startContinuousScan();
     });
   }
 
@@ -108,39 +194,100 @@ class _HopsAppState extends State<HopsApp> {
 
   void acceptRequest(String sender) {
     _processingAccepts.add(sender);
-    setState(() {
-      pendingRequests.remove(sender);
-    });
-    acceptFriendRequest(sender).then((_) {
-      _processingAccepts.remove(sender);
-    });
+    setState(() => pendingRequests.remove(sender));
+    acceptFriendRequest(sender).then((_) => _processingAccepts.remove(sender));
   }
 
   void declineRequest(String sender) {
     _processingAccepts.add(sender);
-    setState(() {
-      pendingRequests.remove(sender);
-    });
-    // Nothing more to do for decline, just remove from processing after a short delay
-    Future.delayed(const Duration(seconds: 2), () {
-      _processingAccepts.remove(sender);
+    setState(() => pendingRequests.remove(sender));
+    Future.delayed(const Duration(seconds: 2), () => _processingAccepts.remove(sender));
+  }
+
+  // ---------- Watch request handling ----------
+  void acceptWatchRequestFromCard(String sender) {
+    _processingWatchAccepts.add(sender);
+    setState(() => pendingWatchRequests.remove(sender));
+    _notifyWatchRequestsChanged();
+    _watchers.add(sender);
+    _saveWatchState();
+    _acceptWatchRequestBle(sender);
+    Future.delayed(const Duration(seconds: 2), () => _processingWatchAccepts.remove(sender));
+  }
+
+  void declineWatchRequestFromCard(String sender) {
+    _processingWatchAccepts.add(sender);
+    setState(() => pendingWatchRequests.remove(sender));
+    _notifyWatchRequestsChanged();
+    Future.delayed(const Duration(seconds: 2), () => _processingWatchAccepts.remove(sender));
+  }
+
+  Future<void> _acceptWatchRequestBle(String sender) async {
+    await BlePeripheral.stopAdvertising();
+    await BlePeripheral.startAdvertising(
+      localName: "WATCH_ACK:$sender:$myUsername",
+      services: [],
+    );
+    Future.delayed(const Duration(seconds: 5), () {
+      BlePeripheral.stopAdvertising();
+      BlePeripheral.startAdvertising(
+        localName: "HPS:$myUsername",
+        services: [],
+      );
     });
   }
 
-  // --------------- Permissions & BLE setup ---------------
+  void _onWatchRequestAccepted(String buddy) {
+    setState(() {
+      _watchingBuddies.add(buddy);
+      _saveWatchState();
+      _notifyWatchingBuddiesChanged();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("$buddy accepted your watch request")),
+    );
+  }
+
+  Future<void> sendWatchRequest(String targetUsername) async {
+    if (_watchingBuddies.contains(targetUsername)) {
+      _showToastFeedbackAlert("Already watching $targetUsername");
+      return;
+    }
+    print("📢 Sending WATCH_REQ to $targetUsername");
+    await BlePeripheral.stopAdvertising();
+    await BlePeripheral.startAdvertising(
+      localName: "WATCH_REQ:$targetUsername:$myUsername",
+      services: [],
+    );
+    Future.delayed(const Duration(seconds: 10), () {
+      BlePeripheral.stopAdvertising();
+      BlePeripheral.startAdvertising(
+        localName: "HPS:$myUsername",
+        services: [],
+      );
+    });
+  }
+
+  void stopWatchingBuddy(String buddy) {
+    setState(() {
+      _watchingBuddies.remove(buddy);
+      _saveWatchState();
+      _notifyWatchingBuddiesChanged();
+    });
+  }
+
+  // ---------- Permissions & BLE ----------
   Future<void> _checkPermissionsAndStartBLE() async {
     Map<Permission, PermissionStatus> statuses = await [
-      Permission.location,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.bluetoothScan,
+      Permission.location, Permission.bluetoothAdvertise,
+      Permission.bluetoothConnect, Permission.bluetoothScan,
     ].request();
-
-    bool granted = statuses[Permission.location]!.isGranted && statuses[Permission.bluetoothScan]!.isGranted;
+    bool granted = statuses[Permission.location]!.isGranted &&
+        statuses[Permission.bluetoothScan]!.isGranted;
     if (!granted) {
       if (mounted) {
         Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const HopsRootGatekeeper()),
+          MaterialPageRoute(builder: (_) => const HopsRootGatekeeper()),
               (route) => false,
         );
       }
@@ -150,78 +297,80 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   Future<void> _loadCurrentIdentityMetrics() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    setState(() {
-      myUsername = prefs.getString('my_username') ?? 'Unknown_User';
-    });
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => myUsername = prefs.getString('my_username') ?? 'Unknown_User');
   }
 
   void _initializeParallelBleTransceiverEngine() async {
     if (_bleInitialized) return;
     _bleInitialized = true;
-
     await BlePeripheral.initialize();
     await BlePeripheral.startAdvertising(
       localName: "HPS:$myUsername",
       services: [],
     );
-
     _bleScanResultsSubscription = FlutterBluePlus.scanResults.listen((results) async {
       _radarStreamController.add(results);
-
-      for (ScanResult r in results) {
-        String name = r.advertisementData.advName;
-
-        // ACK handling
+      for (final r in results) {
+        final name = r.advertisementData.advName;
+        print("📡 Scan saw: $name");
+        // ACK
         if (name.startsWith("ACK:") && _activePairingCode != null) {
-          List<String> parts = name.substring(4).split(":");
+          final parts = name.substring(4).split(":");
           if (parts.length == 2 && parts[0] == _activePairingCode) {
-            String remoteUsername = parts[1];
-            bool exists = localActiveContacts.any((c) => c['username'] == remoteUsername);
-            if (!exists) {
-              await _writeContactLogToDatabase(remoteUsername, "Mutual pairing via code");
+            final user = parts[1];
+            if (!localActiveContacts.any((c) => c['username'] == user)) {
+              await _writeContactLogToDatabase(user, "Mutual pairing via code");
             }
           }
         }
-
-        // Friend request handling (NEW – adds to pendingRequests)
+        // Friend request
         if (name.startsWith("FRIEND_REQ:")) {
-          List<String> parts = name.substring(11).split(":");
-          if (parts.length == 2) {
-            String target = parts[0];
-            String sender = parts[1];
-            if (target == myUsername) {
-              if (!friendUsernames.contains(sender) &&
-                  !pendingRequests.contains(sender) &&
-                  !_processingAccepts.contains(sender)) {
-                setState(() {
-                  pendingRequests.add(sender);
-                });
-              }
+          final parts = name.substring(11).split(":");
+          if (parts.length == 2 && parts[0] == myUsername) {
+            final sender = parts[1];
+            if (!friendUsernames.contains(sender) &&
+                !pendingRequests.contains(sender) &&
+                !_processingAccepts.contains(sender)) {
+              setState(() => pendingRequests.add(sender));
             }
           }
         }
-
-        // Friend ACK handling
+        // Friend ACK
         if (name.startsWith("FRIEND_ACK:")) {
-          List<String> parts = name.substring(11).split(":");
-          if (parts.length == 2) {
-            String target = parts[0];
-            String sender = parts[1];
-            if (target == myUsername) {
-              await _writeContactLogToDatabase(sender, "Friend added via radar");
+          final parts = name.substring(11).split(":");
+          if (parts.length == 2 && parts[0] == myUsername) {
+            await _writeContactLogToDatabase(parts[1], "Friend added via radar");
+          }
+        }
+        // Watch request
+        if (name.startsWith("WATCH_REQ:")) {
+          final parts = name.substring(10).split(":");
+          if (parts.length == 2 && parts[0] == myUsername) {
+            final sender = parts[1];
+            print("🏷️ Got WATCH_REQ from $sender");
+            if (!_watchers.contains(sender) &&
+                !pendingWatchRequests.contains(sender) &&
+                !_processingWatchAccepts.contains(sender)) {
+              setState(() => pendingWatchRequests.add(sender));
+              _notifyWatchRequestsChanged();
             }
+          }
+        }
+        // Watch ACK
+        if (name.startsWith("WATCH_ACK:")) {
+          final parts = name.substring(10).split(":");
+          if (parts.length == 2 && parts[0] == myUsername) {
+            print("📩 Got WATCH_ACK from ${parts[1]}");
+            _onWatchRequestAccepted(parts[1]);
           }
         }
       }
     });
-
     await _startContinuousScan();
   }
 
-  Future<void> _stopAllAdvertising() async {
-    await BlePeripheral.stopAdvertising();
-  }
+  Future<void> _stopAllAdvertising() async => BlePeripheral.stopAdvertising();
 
   Future<void> _startContinuousScan() async {
     await FlutterBluePlus.startScan(
@@ -230,7 +379,7 @@ class _HopsAppState extends State<HopsApp> {
     );
   }
 
-  // --------------- Existing pairing (code) ---------------
+  // ---------- Pairing ----------
   void _startPairingServer(String code) {
     _activePairingCode = code;
     BlePeripheral.stopAdvertising().then((_) {
@@ -297,24 +446,22 @@ class _HopsAppState extends State<HopsApp> {
     });
   }
 
-  // --------------- Contacts management ---------------
+  // ---------- Contacts management ----------
   Future<void> _refreshContactsTrayList() async {
     final db = await DatabaseHelper.instance.database;
-    final List<Map<String, dynamic>> maps = await db.query(DatabaseHelper.table);
+    final maps = await db.query(DatabaseHelper.table);
     Map<String, Map<String, dynamic>> contactThreads = {};
     for (var row in maps) {
-      String sender = row[DatabaseHelper.columnSenderId];
+      String sender = row[DatabaseHelper.columnSenderId] as String;
       if (sender != myUsername) {
         contactThreads[sender] = {
           'username': sender,
-          'lastMsg': row[DatabaseHelper.columnMessage],
+          'lastMsg': row[DatabaseHelper.columnMessage] as String,
           'time': 'Nearby'
         };
       }
     }
-    setState(() {
-      localActiveContacts = contactThreads.values.toList();
-    });
+    setState(() => localActiveContacts = contactThreads.values.toList());
   }
 
   Future<void> _writeContactLogToDatabase(String peerName, String text) async {
@@ -361,7 +508,7 @@ class _HopsAppState extends State<HopsApp> {
     await _startPairingClient(rawCode);
   }
 
-  // --------------- Feature toggling ---------------
+  // ---------- Feature toggling ----------
   void _toggleFeature(int featureId) {
     setState(() {
       if (enabledFeatureIds.contains(featureId)) {
@@ -370,9 +517,23 @@ class _HopsAppState extends State<HopsApp> {
         enabledFeatureIds.add(featureId);
       }
     });
+    _saveEnabledFeatures();
   }
 
-  // --------------- UI ---------------
+  // ---------- Persist features ----------
+  Future<void> _loadEnabledFeatures() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList('enabledFeatureIds') ?? [];
+    setState(() => enabledFeatureIds = ids.map((s) => int.parse(s)).toSet());
+  }
+
+  Future<void> _saveEnabledFeatures() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+        'enabledFeatureIds', enabledFeatureIds.map((id) => id.toString()).toList());
+  }
+
+  // ---------- UI ----------
   PreferredSizeWidget _buildSharedCustomAppBar(String title) {
     return AppBar(
       elevation: 0,
@@ -422,105 +583,43 @@ class _HopsAppState extends State<HopsApp> {
       ),
       _buildContactsTab(),
       _buildFeaturesTab(),
+      _buildMyFeaturesTab(),
     ];
 
-    final bool showBunny = enabledFeatureIds.isNotEmpty;
-
-    return Stack(
-      children: [
-        Scaffold(
-          body: tabs[_currentIndex],
-          floatingActionButton: _currentIndex == 1
-              ? Padding(
-            padding: const EdgeInsets.only(bottom: 12.0),
-            child: FloatingActionButton(
-              backgroundColor: HopsTheme.primary,
-              foregroundColor: Colors.white,
-              shape: const CircleBorder(),
-              onPressed: () => _showAddContactModalSheet(context),
-              child: const Icon(Icons.add, size: 28),
-            ),
-          )
-              : null,
-          bottomNavigationBar: Container(
-            decoration: BoxDecoration(
-              color: HopsTheme.surfaceContainer.withOpacity(0.8),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(24),
-                topRight: Radius.circular(24),
-              ),
-            ),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _buildNavItem(0, Icons.radar, Icons.radar, "Radar"),
-                    _buildNavItem(1, Icons.people_outline, Icons.people, "Contacts"),
-                    _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, "Features"),
-                  ],
-                ),
-              ),
+    return Scaffold(
+      body: tabs[_currentIndex],
+      floatingActionButton: _currentIndex == 1
+          ? Padding(
+        padding: const EdgeInsets.only(bottom: 12.0),
+        child: FloatingActionButton(
+          backgroundColor: HopsTheme.primary,
+          foregroundColor: Colors.white,
+          shape: const CircleBorder(),
+          onPressed: () => _showAddContactModalSheet(context),
+          child: const Icon(Icons.add, size: 28),
+        ),
+      )
+          : null,
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: HopsTheme.surfaceContainer.withOpacity(0.8),
+          borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildNavItem(0, Icons.radar, Icons.radar, "Radar"),
+                _buildNavItem(1, Icons.people_outline, Icons.people, "Contacts"),
+                _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, "Features"),
+                _buildNavItem(3, Icons.star_outline, Icons.star, "My Features"),
+              ],
             ),
           ),
         ),
-        // Bunny icon overlay
-        if (showBunny)
-          Positioned(
-            bottom: 90,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: GestureDetector(
-                onTap: () {
-                  final enabledFeatures =
-                  allFeatures.where((f) => enabledFeatureIds.contains(f.id)).toList();
-                  showModalBottomSheet(
-                    context: context,
-                    builder: (_) => HalfWheelPicker(
-                      features: enabledFeatures,
-                      onSelected: (feature) {
-                        if (feature.pageBuilder != null) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => feature.pageBuilder!()),
-                          );
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text("${feature.name} page not built yet"),
-                            ),
-                          );
-                        }
-                      },
-                    ),
-                  );
-                },
-                child: Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: HopsTheme.primary,
-                    boxShadow: [
-                      BoxShadow(
-                        color: HopsTheme.primary.withOpacity(0.4),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: const Center(
-                    child: Text(
-                      '🐰',
-                      style: TextStyle(fontSize: 28),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
+      ),
     );
   }
 
@@ -530,7 +629,7 @@ class _HopsAppState extends State<HopsApp> {
       onTap: () => setState(() => _currentIndex = index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected ? HopsTheme.primaryContainer : Colors.transparent,
           borderRadius: BorderRadius.circular(100),
@@ -540,7 +639,7 @@ class _HopsAppState extends State<HopsApp> {
           children: [
             Icon(isSelected ? activeIcon : icon, color: isSelected ? Colors.white : HopsTheme.primary.withOpacity(0.6)),
             const SizedBox(height: 2),
-            Text(label, style: TextStyle(fontSize: 10, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500, color: isSelected ? Colors.white : HopsTheme.primary.withOpacity(0.6))),
+            Text(label, style: TextStyle(fontSize: 9, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500, color: isSelected ? Colors.white : HopsTheme.primary.withOpacity(0.6))),
           ],
         ),
       ),
@@ -567,28 +666,28 @@ class _HopsAppState extends State<HopsApp> {
                 leading: CircleAvatar(
                   radius: 24,
                   backgroundColor: HopsTheme.primary.withOpacity(0.1),
-                  child: Text(contact['username']![0], style: const TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+                  child: Text(contact['username'] as String, style: const TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
                 ),
                 title: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(contact['username']!, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                    Text(contact['time']!, style: const TextStyle(fontSize: 11, color: Colors.black38)),
+                    Text(contact['username'] as String, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                    Text(contact['time'] as String, style: const TextStyle(fontSize: 11, color: Colors.black38)),
                   ],
                 ),
                 subtitle: Padding(
                   padding: const EdgeInsets.only(top: 4.0),
-                  child: Text(contact['lastMsg']!, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Colors.black54)),
+                  child: Text(contact['lastMsg'] as String, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Colors.black54)),
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                  onPressed: () => _deleteContactFromTrayIndex(contact['username']!),
+                  onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
                 ),
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => IndividualChatTerminalView(
-                        peerName: contact['username']!,
+                        peerName: contact['username'] as String,
                         onSendMessage: (recipient, message) async {},
                       ),
                     ),
@@ -796,6 +895,115 @@ class _HopsAppState extends State<HopsApp> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // --------------- My Features tab ---------------
+  Widget _buildMyFeaturesTab() {
+    final enabledFeatures = allFeatures
+        .where((f) => enabledFeatureIds.contains(f.id))
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("My Features",
+            style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+        elevation: 0,
+        backgroundColor: HopsTheme.background.withOpacity(0.8),
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.add_circle_outline, size: 18),
+            label: const Text("Manage", style: TextStyle(color: HopsTheme.primary)),
+            onPressed: () => setState(() => _currentIndex = 2),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(1.0, -1.0),
+            radius: 1.5,
+            colors: [HopsTheme.surfaceContainerLow, HopsTheme.background],
+          ),
+        ),
+        child: enabledFeatures.isEmpty
+            ? const Center(
+          child: Text(
+            "No features added yet.\nGo to 'Features' to enable some!",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey),
+          ),
+        )
+            : GridView.builder(
+          padding: const EdgeInsets.all(16),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 0.9,
+          ),
+          itemCount: enabledFeatures.length,
+          itemBuilder: (context, index) {
+            final feature = enabledFeatures[index];
+            return GestureDetector(
+              onTap: () {
+                if (feature.id == 2) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => WatchMePage(
+                        radarStream: radarStream,
+                        friendUsernames: friendUsernames,
+                        watchingBuddies: _watchingBuddies,
+                        watchingBuddiesStream: watchingBuddiesStream,
+                        pendingWatchStream: pendingWatchStream,
+                        onSendWatchRequest: sendWatchRequest,
+                        onAcceptWatchRequest: acceptWatchRequestFromCard,
+                        onDeclineWatchRequest: declineWatchRequestFromCard,
+                        onStopWatching: stopWatchingBuddy,
+                        onClearAll: clearAllWatchState,
+                      ),
+                    ),
+                  );
+                } else if (feature.id == 5) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => VibeCheckPage(
+                        radarStream: radarStream,
+                        onAdvertiseVibeTag: _advertiseVibeTag,
+                      ),
+                    ),
+                  );
+                } else if (feature.pageBuilder != null) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => feature.pageBuilder!()),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text("${feature.name} page not built yet")),
+                  );
+                }
+              },
+              child: Card(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                color: Colors.white.withOpacity(0.6),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(feature.icon, size: 36, color: HopsTheme.primary),
+                    const SizedBox(height: 8),
+                    Text(
+                      feature.name,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

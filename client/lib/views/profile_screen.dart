@@ -35,7 +35,10 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Profile Identity", style: TextStyle(fontWeight: FontWeight.bold)), elevation: 0, backgroundColor: Colors.transparent),
+      appBar: AppBar(
+          title: const Text("Profile Identity", style: TextStyle(fontWeight: FontWeight.bold)),
+          elevation: 0,
+          backgroundColor: Colors.transparent),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(

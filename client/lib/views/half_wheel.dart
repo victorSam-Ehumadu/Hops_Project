@@ -52,7 +52,7 @@ class HalfWheelPicker extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           const Text(
-            "Quick Access",
+            "My Features",
             style: TextStyle(
               fontWeight: FontWeight.bold,
               fontSize: 16,
