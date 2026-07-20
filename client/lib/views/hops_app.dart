@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:convert';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:ble_peripheral/ble_peripheral.dart';
@@ -20,6 +22,9 @@ import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/models/feature_item.dart';
 import 'package:client/views/vibe_check_page.dart';
 import 'package:client/views/watch_me_page.dart';
+import 'package:client/views/hops_and_robbers.dart';
+import 'package:client/views/task_tracker_page.dart';
+import 'package:client/views/hops_share_page.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
@@ -43,11 +48,14 @@ class _HopsAppState extends State<HopsApp> {
   final _radarStreamController = StreamController<List<ScanResult>>.broadcast();
   Stream<List<ScanResult>> get radarStream => _radarStreamController.stream;
 
-  // Watch request stream – late initialised with onListen replay
+  final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
+
+  // Watch request stream (replays current list on listen)
   late final StreamController<List<String>> _pendingWatchStreamController;
   Stream<List<String>> get pendingWatchStream => _pendingWatchStreamController.stream;
 
-  // Active buddies stream – late initialised with onListen replay
+  // Active buddies stream (replays current set on listen)
   late final StreamController<Set<String>> _watchingBuddiesStreamController;
   Stream<Set<String>> get watchingBuddiesStream => _watchingBuddiesStreamController.stream;
 
@@ -62,15 +70,16 @@ class _HopsAppState extends State<HopsApp> {
 
   // Watch Me state
   Set<String> _watchingBuddies = {};
-  Set<String> _watchers = {};
   final List<String> pendingWatchRequests = [];
   final Set<String> _processingWatchAccepts = {};
+
+  // 30-second cooldown for recently handled watch senders
+  final Set<String> _recentWatchSenders = {};
+  final Map<String, Timer> _recentWatchTimers = {};
 
   @override
   void initState() {
     super.initState();
-
-    // Initialise stream controllers with replay on first listen
     _pendingWatchStreamController = StreamController<List<String>>.broadcast(
       onListen: () => _pendingWatchStreamController.add(List<String>.from(pendingWatchRequests)),
     );
@@ -94,6 +103,10 @@ class _HopsAppState extends State<HopsApp> {
     _radarStreamController.close();
     _pendingWatchStreamController.close();
     _watchingBuddiesStreamController.close();
+    _gameEventStreamController.close();
+    for (final timer in _recentWatchTimers.values) {
+      timer.cancel();
+    }
     super.dispose();
   }
 
@@ -101,18 +114,124 @@ class _HopsAppState extends State<HopsApp> {
   Future<void> _loadWatchState() async {
     final prefs = await SharedPreferences.getInstance();
     final watching = prefs.getStringList('watchingBuddies') ?? [];
-    final watchers = prefs.getStringList('watchers') ?? [];
-    setState(() {
-      _watchingBuddies = watching.toSet();
-      _watchers = watchers.toSet();
-    });
+    setState(() => _watchingBuddies = watching.toSet());
     _notifyWatchingBuddiesChanged();
+  }
+
+  // ---- File reception ----
+  Future<void> _handleShareConnection(BluetoothDevice device, Guid serviceUuid) async {
+    try {
+      await device.connect(timeout: const Duration(seconds: 5));
+      // Request maximum MTU
+      await device.requestMtu(512);
+      final services = await device.discoverServices();
+
+      for (final service in services) {
+        if (service.uuid.toString() == serviceUuid.toString()) {
+          for (final char in service.characteristics) {
+            if (char.properties.read) {
+
+              // 1. Read header
+              List<int> headerValue = await char.read();
+              final firstNull = headerValue.indexOf(0);
+              if (firstNull == -1) break;
+              final sender = utf8.decode(headerValue.sublist(0, firstNull));
+              final secondNull = headerValue.indexOf(0, firstNull + 1);
+              if (secondNull == -1) break;
+              final fileName = utf8.decode(headerValue.sublist(firstNull + 1, secondNull));
+              final totalChunksStr = utf8.decode(headerValue.sublist(secondNull + 1, secondNull + 7));
+              final totalChunks = int.parse(totalChunksStr);
+              print("📩 Receiving $fileName from $sender – $totalChunks chunks");
+
+              // 2. Read chunks (with index verification)
+              final receivedData = <int>[];
+              int expectedIndex = 0;
+              int retries = 0;
+              const int maxRetries = 20;   // how many times we try to read the next chunk
+
+              while (expectedIndex < totalChunks && retries < maxRetries) {
+                List<int> chunkValue = await char.read();
+                final chunkNull = chunkValue.indexOf(0);
+                if (chunkNull == -1) break;
+
+                // Parse the chunk index (first 6 bytes)
+                final idxStr = utf8.decode(chunkValue.sublist(0, chunkNull));
+                final int chunkIndex = int.tryParse(idxStr) ?? -1;
+
+                if (chunkIndex == expectedIndex) {
+                  // Correct chunk – keep it
+                  final chunkData = chunkValue.sublist(chunkNull + 1);
+                  receivedData.addAll(chunkData);
+                  print("📩 Received chunk $expectedIndex / $totalChunks");
+                  expectedIndex++;
+                  retries = 0;      // reset retry count
+                } else {
+                  // Wrong chunk (duplicate or future) – wait and retry
+                  retries++;
+                  await Future.delayed(const Duration(milliseconds: 50));
+                }
+              }
+
+              if (expectedIndex < totalChunks) {
+                print("❌ Transfer incomplete – got $expectedIndex / $totalChunks chunks");
+              }
+
+              // Save file
+              final dir = await getApplicationDocumentsDirectory();
+              final filePath = '${dir.path}/$fileName';
+              final file = File(filePath);
+              await file.writeAsBytes(Uint8List.fromList(receivedData));
+              await _addReceivedFileRecord(sender, fileName, receivedData.length);
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("Received $fileName (${receivedData.length} bytes)")),
+              );
+
+              await device.disconnect();
+              return;
+            }
+          }
+        }
+      }
+      await device.disconnect();
+    } catch (e) {
+      print("Share receive error: $e");
+      try { await device.disconnect(); } catch (_) {}
+    }
+  }
+
+  Future<void> _addReceivedFileRecord(String sender, String fileName, int size) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final recordFile = File('${dir.path}/received_files.json');
+    List<Map<String, dynamic>> records = [];
+    if (await recordFile.exists()) {
+      final content = await recordFile.readAsString();
+      if (content.isNotEmpty) {
+        records = List<Map<String, dynamic>>.from(json.decode(content));
+      }
+    }
+    records.add({
+      'sender': sender,
+      'fileName': fileName,
+      'size': size,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
+    await recordFile.writeAsString(json.encode(records));
+  }
+
+  Future<void> _sendGameAction(String action, Map<String, String> data) async {
+    final advName = "GAME_$action:${data.entries.map((e) => '${e.key}=${e.value}').join(';')}";
+    await BlePeripheral.stopAdvertising();
+    await BlePeripheral.startAdvertising(localName: advName, services: []);
+    Future.delayed(const Duration(seconds: 2), () {
+      BlePeripheral.stopAdvertising();
+      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+    });
   }
 
   Future<void> _saveWatchState() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('watchingBuddies', _watchingBuddies.toList());
-    await prefs.setStringList('watchers', _watchers.toList());
   }
 
   void _notifyWatchRequestsChanged() {
@@ -126,8 +245,12 @@ class _HopsAppState extends State<HopsApp> {
   void clearAllWatchState() {
     setState(() {
       _watchingBuddies.clear();
-      _watchers.clear();
       pendingWatchRequests.clear();
+      _recentWatchSenders.clear();
+      for (final timer in _recentWatchTimers.values) {
+        timer.cancel();
+      }
+      _recentWatchTimers.clear();
       _saveWatchState();
       _notifyWatchingBuddiesChanged();
       _notifyWatchRequestsChanged();
@@ -147,48 +270,29 @@ class _HopsAppState extends State<HopsApp> {
     );
     Future.delayed(const Duration(seconds: 10), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(
-        localName: "HPS:$myUsername",
-        services: [],
-      );
+      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
     });
   }
 
   Future<void> _advertiseVibeTag(String location, int level) async {
     final advName = "VBT:$location:$level";
-    if (advName.length > 29) {
-      _showToastFeedbackAlert("Location name too long");
-      return;
-    }
-    print("📢 Advertising VIBE_TAG: $advName");
+    if (advName.length > 29) { _showToastFeedbackAlert("Location name too long"); return; }
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: advName,
-      services: [],
-    );
+    await BlePeripheral.startAdvertising(localName: advName, services: []);
     Future.delayed(const Duration(seconds: 30), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(
-        localName: "HPS:$myUsername",
-        services: [],
-      );
+      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
       _startContinuousScan();
     });
   }
 
   Future<void> acceptFriendRequest(String sender) async {
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "FRIEND_ACK:$sender:$myUsername",
-      services: [],
-    );
+    await BlePeripheral.startAdvertising(localName: "FRIEND_ACK:$sender:$myUsername", services: []);
     await _writeContactLogToDatabase(sender, "Friend added via radar");
     Future.delayed(const Duration(seconds: 5), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(
-        localName: "HPS:$myUsername",
-        services: [],
-      );
+      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
     });
   }
 
@@ -209,9 +313,15 @@ class _HopsAppState extends State<HopsApp> {
     _processingWatchAccepts.add(sender);
     setState(() => pendingWatchRequests.remove(sender));
     _notifyWatchRequestsChanged();
-    _watchers.add(sender);
+
+    // Accepter adds sender to its monitoring list
+    _watchingBuddies.add(sender);
     _saveWatchState();
+    _notifyWatchingBuddiesChanged();
+
     _acceptWatchRequestBle(sender);
+    _addRecentWatchSender(sender);   // reset cooldown
+
     Future.delayed(const Duration(seconds: 2), () => _processingWatchAccepts.remove(sender));
   }
 
@@ -219,30 +329,29 @@ class _HopsAppState extends State<HopsApp> {
     _processingWatchAccepts.add(sender);
     setState(() => pendingWatchRequests.remove(sender));
     _notifyWatchRequestsChanged();
+    _addRecentWatchSender(sender);
     Future.delayed(const Duration(seconds: 2), () => _processingWatchAccepts.remove(sender));
+  }
+
+  void _addRecentWatchSender(String sender) {
+    _recentWatchSenders.add(sender);
+    _recentWatchTimers[sender]?.cancel();
+    _recentWatchTimers[sender] = Timer(const Duration(seconds: 30), () {
+      _recentWatchSenders.remove(sender);
+      _recentWatchTimers.remove(sender);
+    });
   }
 
   Future<void> _acceptWatchRequestBle(String sender) async {
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "WATCH_ACK:$sender:$myUsername",
-      services: [],
-    );
+    await BlePeripheral.startAdvertising(localName: "WATCH_ACK:$sender:$myUsername", services: []);
     Future.delayed(const Duration(seconds: 5), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(
-        localName: "HPS:$myUsername",
-        services: [],
-      );
+      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
     });
   }
 
   void _onWatchRequestAccepted(String buddy) {
-    setState(() {
-      _watchingBuddies.add(buddy);
-      _saveWatchState();
-      _notifyWatchingBuddiesChanged();
-    });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text("$buddy accepted your watch request")),
     );
@@ -253,7 +362,6 @@ class _HopsAppState extends State<HopsApp> {
       _showToastFeedbackAlert("Already watching $targetUsername");
       return;
     }
-    print("📢 Sending WATCH_REQ to $targetUsername");
     await BlePeripheral.stopAdvertising();
     await BlePeripheral.startAdvertising(
       localName: "WATCH_REQ:$targetUsername:$myUsername",
@@ -261,10 +369,7 @@ class _HopsAppState extends State<HopsApp> {
     );
     Future.delayed(const Duration(seconds: 10), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(
-        localName: "HPS:$myUsername",
-        services: [],
-      );
+      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
     });
   }
 
@@ -274,6 +379,7 @@ class _HopsAppState extends State<HopsApp> {
       _saveWatchState();
       _notifyWatchingBuddiesChanged();
     });
+    _addRecentWatchSender(buddy);
   }
 
   // ---------- Permissions & BLE ----------
@@ -305,16 +411,12 @@ class _HopsAppState extends State<HopsApp> {
     if (_bleInitialized) return;
     _bleInitialized = true;
     await BlePeripheral.initialize();
-    await BlePeripheral.startAdvertising(
-      localName: "HPS:$myUsername",
-      services: [],
-    );
+    await BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
     _bleScanResultsSubscription = FlutterBluePlus.scanResults.listen((results) async {
       _radarStreamController.add(results);
       for (final r in results) {
         final name = r.advertisementData.advName;
-        print("📡 Scan saw: $name");
-        // ACK
+        // ACK (existing pairing)
         if (name.startsWith("ACK:") && _activePairingCode != null) {
           final parts = name.substring(4).split(":");
           if (parts.length == 2 && parts[0] == _activePairingCode) {
@@ -343,26 +445,89 @@ class _HopsAppState extends State<HopsApp> {
             await _writeContactLogToDatabase(parts[1], "Friend added via radar");
           }
         }
-        // Watch request
+        // Watch request – check cooldown, then add to cooldown immediately
         if (name.startsWith("WATCH_REQ:")) {
           final parts = name.substring(10).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
             final sender = parts[1];
-            print("🏷️ Got WATCH_REQ from $sender");
-            if (!_watchers.contains(sender) &&
+            if (!_recentWatchSenders.contains(sender) &&
                 !pendingWatchRequests.contains(sender) &&
                 !_processingWatchAccepts.contains(sender)) {
+              _addRecentWatchSender(sender);          // 🔥 ADDED HERE
               setState(() => pendingWatchRequests.add(sender));
               _notifyWatchRequestsChanged();
             }
           }
         }
-        // Watch ACK
+        // Watch ACK – add cooldown before snackbar
         if (name.startsWith("WATCH_ACK:")) {
           final parts = name.substring(10).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
-            print("📩 Got WATCH_ACK from ${parts[1]}");
-            _onWatchRequestAccepted(parts[1]);
+            final sender = parts[1];
+            if (!_recentWatchSenders.contains(sender)) {
+              _addRecentWatchSender(sender);
+              _onWatchRequestAccepted(sender);
+            }
+          }
+        }
+
+        // Hops Share receiver
+        // Hops Share receiver
+        if (r.advertisementData.advName == "SHARE") {
+          print("📡 Detected SHARE advertisement from ${r.device.remoteId}");
+          final serviceUuid = r.advertisementData.serviceUuids.isNotEmpty
+              ? r.advertisementData.serviceUuids.first
+              : null;
+          final device = r.device;
+          if (device != null && serviceUuid != null) {
+            // Temporarily stop advertising so the radio can connect
+            await BlePeripheral.stopAdvertising();
+            try {
+              await _handleShareConnection(device, serviceUuid);
+            } finally {
+              // Restart advertising when done
+              await BlePeripheral.startAdvertising(
+                localName: "HPS:$myUsername",
+                services: [],
+              );
+            }
+          }
+        }
+
+        // Tag game
+        if (name.startsWith("TAG:")) {
+          final parts = name.substring(4).split(":");
+          if (parts.length == 2 && parts[0] == myUsername) {
+            final tagger = parts[1];
+            // Show a big dialog that you've been tagged
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => AlertDialog(
+                title: const Text("You've been tagged!"),
+                content: Text("$tagger tagged you!"),
+                actions: [
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text("OK"),
+                  ),
+                ],
+              ),
+            );
+          }
+        }
+
+        // Hops & Robbers game actions
+        if (name.startsWith("GAME_")) {
+          final parts = name.substring(5).split(":");
+          if (parts.length == 2) {
+            final action = parts[0];
+            final data = <String, String>{};
+            for (final pair in parts[1].split(';')) {
+              final kv = pair.split('=');
+              if (kv.length == 2) data[kv[0]] = kv[1];
+            }
+            _gameEventStreamController.add({'action': action, 'data': data});
           }
         }
       }
@@ -371,12 +536,8 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   Future<void> _stopAllAdvertising() async => BlePeripheral.stopAdvertising();
-
   Future<void> _startContinuousScan() async {
-    await FlutterBluePlus.startScan(
-      androidUsesFineLocation: true,
-      continuousUpdates: true,
-    );
+    await FlutterBluePlus.startScan(androidUsesFineLocation: true, continuousUpdates: true);
   }
 
   // ---------- Pairing ----------
@@ -972,6 +1133,32 @@ class _HopsAppState extends State<HopsApp> {
                       builder: (_) => VibeCheckPage(
                         radarStream: radarStream,
                         onAdvertiseVibeTag: _advertiseVibeTag,
+                      ),
+                    ),
+                  );
+                } else if (feature.id == 8) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => HopsAndRobbersPage(
+                        radarStream: radarStream,
+                        myUsername: myUsername,
+                        onSendGameAction: _sendGameAction,
+                        gameEventStream: gameEventStream,
+                      ),
+                    ),
+                  );
+                } else if (feature.id == 9) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const TaskTrackerPage(),
+                    ),
+                  );
+                } else if (feature.id == 11) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => HopsSharePage(
+                        friendUsernames: friendUsernames,
+                        myUsername: myUsername,
                       ),
                     ),
                   );

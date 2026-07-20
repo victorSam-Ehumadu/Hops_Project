@@ -77,4 +77,28 @@ const List<FeatureItem> allFeatures = [
     "Create a poll and nearby students can vote. Results update in real time via BLE.",
     icon: Icons.poll,
   ),
+  FeatureItem(
+    id: 8,
+    name: "Hops & Robbers",
+    shortDesc: "Infection tag game – run from the Robbers!",
+    longDesc:
+    "One player starts as a Robber. Tag nearby Runners to turn them into Robbers. Last Runner standing wins!",
+    icon: Icons.sports_kabaddi,
+  ),
+  FeatureItem(
+    id: 9,
+    name: "Task Tracker",
+    shortDesc: "Offline task list with reminders and calendar.",
+    longDesc:
+    "Create tasks, set due dates, and get reminders – all offline. A simple calendar view helps you stay organized.",
+    icon: Icons.task_alt,
+  ),
+  FeatureItem(
+    id: 11,
+    name: "Hops Share",
+    shortDesc: "Share files and notes with friends offline.",
+    longDesc:
+    "Send PDFs, images, or quick text notes directly to a friend over Bluetooth – no internet needed.",
+    icon: Icons.file_present,
+  ),
 ];
