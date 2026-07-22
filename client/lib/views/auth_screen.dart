@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:client/theme/hops_theme.dart';
 
 class AuthScreen extends StatefulWidget {
   final Future<void> Function({
@@ -19,7 +18,7 @@ class AuthScreen extends StatefulWidget {
     super.key,
     required this.onSignUpTrigger,
     required this.onSignInTrigger,
-    required this.currentStatus
+    required this.currentStatus,
   });
 
   @override
@@ -31,13 +30,11 @@ class _AuthScreenState extends State<AuthScreen> {
   int _currentStep = 0;
   bool isJoinMeshMode = true;
 
-  // Form Controllers
   final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
-  // Visibility States
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
 
@@ -62,13 +59,16 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
           gradient: RadialGradient(
             center: Alignment(-0.6, -0.4),
             radius: 1.2,
-            colors: [Color(0xFFd7fafa), HopsTheme.background],
+            colors: [Color(0xFFd7fafa), Color(0xFFe2fffe)], // static safe fallback
           ),
         ),
         child: SafeArea(
@@ -78,9 +78,13 @@ class _AuthScreenState extends State<AuthScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
                 child: Row(
                   children: [
-                    const Icon(Icons.hub, color: HopsTheme.primary),
-                    const SizedBox(width: 8),
-                    Text("Hops", style: Theme.of(context).textTheme.headlineMedium),
+                    Icon(Icons.cruelty_free, color: colors.primary),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text("Hops",
+                          style: theme.textTheme.headlineMedium,
+                          overflow: TextOverflow.ellipsis),
+                    ),
                   ],
                 ),
               ),
@@ -92,7 +96,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   width: _currentStep == index ? 24 : 8,
                   height: 8,
                   decoration: BoxDecoration(
-                    color: _currentStep == index ? HopsTheme.primary : HopsTheme.surfaceContainerHighest,
+                    color: _currentStep == index ? colors.primary : colors.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(100),
                   ),
                 )),
@@ -116,46 +120,55 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Widget _buildOnboardingInfoStep() {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const SizedBox(height: 20),
-          Text("Welcome to the Node.", style: Theme.of(context).textTheme.displayLarge?.copyWith(fontSize: 32)),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text("Welcome to Hops",
+                style: theme.textTheme.displayLarge?.copyWith(fontSize: 32)),
+          ),
           const SizedBox(height: 8),
           const Text(
-            "Secure, decentralized communication for every student on campus.",
+            "The offline campus network that lets you chat, share, and stay safe — no Wi‑Fi or data needed.",
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.black54, fontSize: 14),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 40),
           _buildBentoInfoCard(
-            title: "Every phone is a node",
-            subtitle: "Messages hop from device to device. No Wi-Fi or cellular needed for local reach.",
+            title: "No Internet? No Problem",
+            subtitle:
+            "Hops turns every phone into a relay, passing messages from device to device via Bluetooth.",
             icon: Icons.cell_tower,
-            bgColor: HopsTheme.surfaceContainerLow,
-            avatarBg: HopsTheme.tertiaryContainer,
-            avatarFg: HopsTheme.onTertiaryContainer,
+            bgColor: colors.surface,
+            avatarBg: colors.tertiaryContainer,
+            avatarFg: colors.onTertiary,
           ),
           const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
                 child: _buildSquareBentoCard(
-                  title: "Peer-to-peer Encryption",
+                  title: "Private & Secure",
                   icon: Icons.enhanced_encryption_outlined,
-                  bgColor: HopsTheme.surfaceContainer,
-                  textColor: HopsTheme.onBackground,
+                  bgColor: colors.surface,
+                  textColor: colors.onSurface,
                 ),
               ),
               const SizedBox(width: 16),
               Expanded(
                 child: _buildSquareBentoCard(
-                  title: "Community Driven Access",
+                  title: "Built for Students",
                   icon: Icons.group_outlined,
-                  bgColor: HopsTheme.primaryContainer,
-                  textColor: HopsTheme.onPrimaryContainer,
+                  bgColor: colors.primaryContainer,
+                  textColor: colors.onPrimaryContainer,
                 ),
               ),
             ],
@@ -166,11 +179,13 @@ class _AuthScreenState extends State<AuthScreen> {
             height: 56,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: HopsTheme.primary,
+                backgroundColor: colors.primary,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
               ),
-              onPressed: () => _pageController.animateToPage(1, duration: const Duration(milliseconds: 500), curve: Curves.easeInOutCubic),
+              onPressed: () => _pageController.animateToPage(1,
+                  duration: const Duration(milliseconds: 500),
+                  curve: Curves.easeInOutCubic),
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -187,6 +202,7 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Widget _buildInteractiveFormStep() {
+    final colors = Theme.of(context).colorScheme;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
@@ -194,9 +210,12 @@ class _AuthScreenState extends State<AuthScreen> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              icon: const Icon(Icons.arrow_back, size: 16, color: HopsTheme.primary),
-              label: const Text("View info", style: TextStyle(color: HopsTheme.primary, fontWeight: FontWeight.bold)),
-              onPressed: () => _pageController.animateToPage(0, duration: const Duration(milliseconds: 400), curve: Curves.ease),
+              icon: Icon(Icons.arrow_back, size: 16, color: colors.primary),
+              label: Text("View info",
+                  style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis),
+              onPressed: () => _pageController.animateToPage(0,
+                  duration: const Duration(milliseconds: 400), curve: Curves.ease),
             ),
           ),
           const SizedBox(height: 10),
@@ -210,11 +229,6 @@ class _AuthScreenState extends State<AuthScreen> {
               children: [
                 _buildFormSwitcherToggle(),
                 const SizedBox(height: 24),
-                Text(
-                  "Engine: ${widget.currentStatus}",
-                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HopsTheme.primary),
-                ),
-                const SizedBox(height: 16),
                 isJoinMeshMode ? _buildJoinMeshForm() : _buildSignInForm(),
               ],
             ),
@@ -225,6 +239,7 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Widget _buildJoinMeshForm() {
+    final colors = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -234,7 +249,7 @@ class _AuthScreenState extends State<AuthScreen> {
         const SizedBox(height: 16),
         _buildCapsuleInput(
           label: "PASSWORD",
-          hint: "••••••••",
+          hint: "",
           icon: Icons.lock_outline,
           controller: _passwordController,
           obscure: _obscurePassword,
@@ -244,7 +259,7 @@ class _AuthScreenState extends State<AuthScreen> {
         const SizedBox(height: 16),
         _buildCapsuleInput(
           label: "CONFIRM PASSWORD",
-          hint: "••••••••",
+          hint: "",
           icon: Icons.lock_outline,
           controller: _confirmPasswordController,
           obscure: _obscureConfirmPassword,
@@ -257,7 +272,7 @@ class _AuthScreenState extends State<AuthScreen> {
           height: 56,
           child: ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: HopsTheme.tertiaryContainer,
+              backgroundColor: colors.tertiaryContainer,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
             ),
@@ -284,13 +299,14 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Widget _buildSignInForm() {
+    final colors = Theme.of(context).colorScheme;
     return Column(
       children: [
         _buildCapsuleInput(label: "EMAIL OR USERNAME", hint: "your@email.edu or handle", icon: Icons.person_outline, controller: _emailController),
         const SizedBox(height: 16),
         _buildCapsuleInput(
           label: "PASSWORD",
-          hint: "••••••••",
+          hint: "",
           icon: Icons.lock_outline,
           controller: _passwordController,
           obscure: _obscurePassword,
@@ -303,7 +319,7 @@ class _AuthScreenState extends State<AuthScreen> {
           height: 56,
           child: Container(
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [HopsTheme.primary, HopsTheme.primaryContainer]),
+              gradient: LinearGradient(colors: [colors.primary, colors.primaryContainer]),
               borderRadius: BorderRadius.circular(100),
             ),
             child: ElevatedButton(
@@ -336,24 +352,30 @@ class _AuthScreenState extends State<AuthScreen> {
     VoidCallback? onPasswordToggle,
     TextInputType type = TextInputType.text,
   }) {
+    final colors = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 16.0, bottom: 4.0),
-          child: Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: HopsTheme.primary, letterSpacing: 1.2)),
+          child: Text(
+            label,
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: colors.primary, letterSpacing: 1.2),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         TextField(
           controller: controller,
           obscureText: obscure,
           keyboardType: type,
-          style: const TextStyle(fontSize: 14, color: HopsTheme.onBackground),
+          style: TextStyle(fontSize: 14, color: colors.onSurface),
           decoration: InputDecoration(
             hintText: hint,
-            prefixIcon: Icon(icon, color: HopsTheme.primary.withOpacity(0.6), size: 20),
+            prefixIcon: Icon(icon, color: colors.primary.withOpacity(0.6), size: 20),
             suffixIcon: isPasswordField
                 ? IconButton(
-              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: HopsTheme.primary.withOpacity(0.6), size: 20),
+              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: colors.primary.withOpacity(0.6), size: 20),
               onPressed: onPasswordToggle,
             )
                 : (controller.text.isNotEmpty
@@ -363,7 +385,7 @@ class _AuthScreenState extends State<AuthScreen> {
             )
                 : null),
             filled: true,
-            fillColor: HopsTheme.surfaceContainerHighest,
+            fillColor: colors.surfaceContainerHighest,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
             contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           ),
@@ -373,6 +395,7 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Widget _buildBentoInfoCard({required String title, required String subtitle, required IconData icon, required Color bgColor, required Color avatarBg, required Color avatarFg}) {
+    final colors = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(16)),
@@ -384,9 +407,14 @@ class _AuthScreenState extends State<AuthScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary, fontSize: 14)),
+                Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary, fontSize: 14)),
                 const SizedBox(height: 4),
-                Text(subtitle, style: const TextStyle(fontSize: 12, color: Colors.black54, height: 1.4)),
+                Text(
+                  subtitle,
+                  style: const TextStyle(fontSize: 12, color: Colors.black54, height: 1.4),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           )
@@ -396,6 +424,7 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Widget _buildSquareBentoCard({required String title, required IconData icon, required Color bgColor, required Color textColor}) {
+    final colors = Theme.of(context).colorScheme;
     return AspectRatio(
       aspectRatio: 1.0,
       child: Container(
@@ -405,9 +434,14 @@ class _AuthScreenState extends State<AuthScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            Icon(icon, color: HopsTheme.primary, size: 28),
+            Icon(icon, color: colors.primary, size: 28),
             const SizedBox(height: 12),
-            Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: textColor, height: 1.2)),
+            Text(
+              title,
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: textColor, height: 1.2),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
         ),
       ),
@@ -415,9 +449,10 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Widget _buildFormSwitcherToggle() {
+    final colors = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(color: HopsTheme.surfaceContainer, borderRadius: BorderRadius.circular(100)),
+      decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(100)),
       child: Row(
         children: [
           Expanded(
@@ -426,10 +461,13 @@ class _AuthScreenState extends State<AuthScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: !isJoinMeshMode ? HopsTheme.surfaceContainerHighest : Colors.transparent,
+                  color: !isJoinMeshMode ? colors.surfaceContainerHighest : Colors.transparent,
                   borderRadius: BorderRadius.circular(100),
                 ),
-                child: const Center(child: Text("Mesh-In", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+                child: const Center(
+                    child: Text("Login",
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        overflow: TextOverflow.ellipsis)),
               ),
             ),
           ),
@@ -439,10 +477,14 @@ class _AuthScreenState extends State<AuthScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: isJoinMeshMode ? HopsTheme.tertiaryContainer : Colors.transparent,
+                  color: isJoinMeshMode ? colors.tertiaryContainer : Colors.transparent,
                   borderRadius: BorderRadius.circular(100),
                 ),
-                child: Center(child: Text("Join Mesh", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: isJoinMeshMode ? Colors.white : HopsTheme.tertiaryContainer))),
+                child: Center(
+                    child: Text("Join Hops",
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13,
+                            color: isJoinMeshMode ? Colors.white : colors.tertiaryContainer),
+                        overflow: TextOverflow.ellipsis)),
               ),
             ),
           ),

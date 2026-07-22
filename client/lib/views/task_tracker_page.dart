@@ -15,8 +15,8 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   List<Map<String, dynamic>> _tasks = [];
   DateTime _selectedDate = DateTime.now();
   DateTime _displayMonth = DateTime.now();
-  Map<String, Color> _taskDates = {};               // tasks in displayed month
-  final Set<String> _outsideMonthTaskDates = {};    // tasks in adjacent months
+  Map<String, Color> _taskDates = {};
+  final Set<String> _outsideMonthTaskDates = {};
   Timer? _reminderTimer;
 
   @override
@@ -41,20 +41,15 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   Color _dotColorForDate(DateTime dueDate) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final startOfWeek = today.subtract(Duration(days: today.weekday - 1)); // Monday
+    final startOfWeek = today.subtract(Duration(days: today.weekday - 1));
     final endOfWeek = startOfWeek.add(const Duration(days: 6));
 
-    // red = this week (any month)
     if (!dueDate.isAfter(endOfWeek) && !dueDate.isBefore(startOfWeek)) {
       return Colors.red;
     }
-
-    // yellow = this real current month (not this week)
     if (dueDate.month == now.month && dueDate.year == now.year) {
       return Colors.amber;
     }
-
-    // green = any other month (past or future)
     return Colors.green;
   }
 
@@ -65,7 +60,6 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
     final tasksPrev = await DatabaseHelper.instance.getTasksForMonth(prevMonth);
     final tasksNext = await DatabaseHelper.instance.getTasksForMonth(nextMonth);
 
-    // Tasks inside the displayed month
     final dates = <String, Color>{};
     for (final t in tasksThisMonth) {
       if (t[DatabaseHelper.taskColDueDate] != null) {
@@ -76,7 +70,6 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
       }
     }
 
-    // Tasks in the adjacent months (for green edge dots)
     final outside = <String>{};
     for (final list in [tasksPrev, tasksNext]) {
       for (final t in list) {
@@ -258,7 +251,6 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   }
 
   DateTime _firstDayOfGrid(DateTime month) {
-    // first Monday on or before the 1st of the month
     final first = DateTime(month.year, month.month, 1);
     return first.subtract(Duration(days: first.weekday - 1));
   }
@@ -279,7 +271,8 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
 
   Widget _buildCalendar() {
     final start = _firstDayOfGrid(_displayMonth);
-    final totalDays = 42; // 6 weeks * 7 days
+    final colors = Theme.of(context).colorScheme;
+    final totalDays = 42;
     final today = DateTime.now();
 
     return Column(
@@ -289,9 +282,13 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             IconButton(icon: const Icon(Icons.chevron_left), onPressed: _previousMonth),
-            Text(
-              "${_displayMonth.month}/${_displayMonth.year}",
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: HopsTheme.primary),
+            Flexible(
+              child: Text(
+                "${_displayMonth.month}/${_displayMonth.year}",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             IconButton(icon: const Icon(Icons.chevron_right), onPressed: _nextMonth),
           ],
@@ -302,13 +299,18 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
           children: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
               .map((d) => Expanded(
             child: Center(
-              child: Text(d, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
+              child: Text(
+                d,
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ))
               .toList(),
         ),
         const SizedBox(height: 4),
-        // Day grid (6 rows = 42 cells)
+        // Day grid
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -328,7 +330,6 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             return GestureDetector(
               onTap: () {
                 if (!isCurrentMonth) {
-                  // Navigate to that month
                   setState(() {
                     _displayMonth = DateTime(date.year, date.month, 1);
                   });
@@ -341,12 +342,12 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                 margin: const EdgeInsets.all(2),
                 decoration: BoxDecoration(
                   color: isSelected
-                      ? HopsTheme.primary
+                      ? colors.primary
                       : isCurrentMonth
                       ? Colors.white.withOpacity(0.4)
                       : Colors.grey.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(8),
-                  border: isToday ? Border.all(color: HopsTheme.primary, width: 2) : null,
+                  border: isToday ? Border.all(color: colors.primary, width: 2) : null,
                 ),
                 child: Stack(
                   children: [
@@ -363,7 +364,6 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                         ),
                       ),
                     ),
-                    // Main dot (for tasks in the displayed month)
                     if (isCurrentMonth && _taskDates.containsKey(dateKey))
                       Positioned(
                         top: 2,
@@ -377,7 +377,6 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                           ),
                         ),
                       ),
-                    // Tiny green dot for tasks in adjacent months
                     if (_outsideMonthTaskDates.contains(dateKey))
                       Positioned(
                         bottom: 1,
@@ -442,17 +441,32 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             decoration: isComplete ? TextDecoration.lineThrough : null,
             fontWeight: isOverdue ? FontWeight.bold : null,
           ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
         ),
         subtitle: timeStr.isNotEmpty
-            ? Text(timeStr, style: const TextStyle(fontSize: 12))
+            ? Text(
+          timeStr,
+          style: const TextStyle(fontSize: 12),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        )
             : (dueDateMs != null
-            ? Text(DateTime.fromMillisecondsSinceEpoch(dueDateMs).toString().substring(0, 10))
+            ? Text(
+          DateTime.fromMillisecondsSinceEpoch(dueDateMs).toString().substring(0, 10),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        )
             : null),
         children: [
           if (task[DatabaseHelper.taskColDescription] != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Text(task[DatabaseHelper.taskColDescription]),
+              child: Text(
+                task[DatabaseHelper.taskColDescription],
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           const SizedBox(height: 8),
           Row(
@@ -481,9 +495,17 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
 
   @override
   Widget build(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Task Tracker", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+        title: Flexible(
+          child: Text(
+            "Task Tracker",
+            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         elevation: 0,
         backgroundColor: Colors.transparent,
       ),
@@ -496,7 +518,14 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
           const Divider(),
           Expanded(
             child: _tasks.isEmpty
-                ? const Center(child: Text("No tasks for this day", style: TextStyle(color: Colors.grey)))
+                ? const Center(
+              child: Text(
+                "No tasks for this day",
+                style: TextStyle(color: Colors.grey),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            )
                 : ListView.builder(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               itemCount: _tasks.length,
@@ -506,7 +535,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: HopsTheme.primary,
+        backgroundColor: colors.primary,
         foregroundColor: Colors.white,
         shape: const CircleBorder(),
         onPressed: () => _openTaskForm(),

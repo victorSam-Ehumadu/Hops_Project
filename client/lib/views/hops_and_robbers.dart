@@ -119,12 +119,10 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
   void _startLobbyAd() {
     _lobbyAdTimer?.cancel();
 
-    // Sanitise lobby name – remove characters that break parsing
     final safeName = '${widget.myUsername}\'s Lobby'
         .replaceAll(';', '')
         .replaceAll('=', '');
 
-    // Send immediately
     widget.onSendGameAction('LOBBY_AD', {
       'lobby_id': _myLobbyId!,
       'host': widget.myUsername,
@@ -132,7 +130,6 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
     });
     print("📢 Broadcasting lobby: $safeName");
 
-    // Then repeat every 5 seconds
     _lobbyAdTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       widget.onSendGameAction('LOBBY_AD', {
         'lobby_id': _myLobbyId!,
@@ -280,61 +277,161 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
   // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     // ---- GAME OVER ----
     if (_gameActive && _allRobbers) {
       return Scaffold(
-        appBar: AppBar(title: const Text("Hops & Robbers", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)), elevation: 0, backgroundColor: Colors.transparent),
-        body: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.emoji_events, size: 80, color: Colors.amber),
-          const Text("Game Over! All players are Robbers.", style: TextStyle(fontSize: 20)),
-          const SizedBox(height: 24),
-          ElevatedButton(onPressed: _leaveLobby, child: const Text("Back to Lobbies")),
-        ])),
+        appBar: AppBar(
+          title: Flexible(
+            child: Text(
+              "Hops & Robbers",
+              style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.emoji_events, size: 80, color: Colors.amber),
+              const Text(
+                "Game Over! All players are Robbers.",
+                style: TextStyle(fontSize: 20),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _leaveLobby,
+                child: const Text("Back to Lobbies"),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
     // ---- ACTIVE GAME ----
     if (_gameActive) {
       return Scaffold(
-        appBar: AppBar(title: const Text("Hops & Robbers", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)), elevation: 0, backgroundColor: Colors.transparent),
-        body: Column(children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: _myRole == GameRole.robber ? Colors.red.withOpacity(0.2) : Colors.green.withOpacity(0.2),
-            child: Row(children: [
-              Icon(_myRole == GameRole.robber ? Icons.person_off : Icons.directions_run, size: 36),
-              const SizedBox(width: 12),
-              Text(_myRole == GameRole.robber ? "You are a Robber" : "You are a Runner",
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _myRole == GameRole.robber ? Colors.red : Colors.green)),
-            ]),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: _playerRoles.entries.map((entry) => ListTile(
-                leading: CircleAvatar(backgroundColor: entry.value == GameRole.robber ? Colors.red : Colors.green,
-                    child: Icon(entry.value == GameRole.robber ? Icons.person_off : Icons.directions_run, color: Colors.white)),
-                title: Text(entry.key),
-                subtitle: Text(entry.value == GameRole.robber ? "Robber" : "Runner"),
-              )).toList(),
+        appBar: AppBar(
+          title: Flexible(
+            child: Text(
+              "Hops & Robbers",
+              style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (_myRole == GameRole.robber && _nearbyRunners.isNotEmpty)
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+        ),
+        body: Column(
+          children: [
             Container(
-              padding: const EdgeInsets.all(12),
-              color: Colors.red.withOpacity(0.1),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text("Nearby Runners:", style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                Wrap(spacing: 8, children: _nearbyRunners.entries.map((e) => ElevatedButton.icon(
-                  icon: const Icon(Icons.sports_kabaddi, size: 18),
-                  label: Text("Tag ${e.key}"),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                  onPressed: () => _tagRunner(e.key),
-                )).toList()),
-              ]),
+              padding: const EdgeInsets.all(16),
+              color: _myRole == GameRole.robber
+                  ? Colors.red.withOpacity(0.2)
+                  : Colors.green.withOpacity(0.2),
+              child: Row(
+                children: [
+                  Icon(
+                    _myRole == GameRole.robber
+                        ? Icons.person_off
+                        : Icons.directions_run,
+                    size: 36,
+                  ),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Text(
+                      _myRole == GameRole.robber
+                          ? "You are a Robber"
+                          : "You are a Runner",
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: _myRole == GameRole.robber
+                            ? Colors.red
+                            : Colors.green,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
             ),
-        ]),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: _playerRoles.entries
+                    .map((entry) => ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor:
+                    entry.value == GameRole.robber
+                        ? Colors.red
+                        : Colors.green,
+                    child: Icon(
+                      entry.value == GameRole.robber
+                          ? Icons.person_off
+                          : Icons.directions_run,
+                      color: Colors.white,
+                    ),
+                  ),
+                  title: Text(
+                    entry.key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    entry.value == GameRole.robber
+                        ? "Robber"
+                        : "Runner",
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ))
+                    .toList(),
+              ),
+            ),
+            if (_myRole == GameRole.robber && _nearbyRunners.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(12),
+                color: Colors.red.withOpacity(0.1),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("Nearby Runners:",
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: _nearbyRunners.entries.map((e) {
+                        return ElevatedButton.icon(
+                          icon: const Icon(Icons.sports_kabaddi, size: 18),
+                          label: Flexible(
+                            child: Text(
+                              "Tag ${e.key}",
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () => _tagRunner(e.key),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       );
     }
 
@@ -344,62 +441,135 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
       final players = lobby?.players ?? [];
       return Scaffold(
         appBar: AppBar(
-          title: const Text("Lobby", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
-          elevation: 0, backgroundColor: Colors.transparent,
-          leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: _leaveLobby),
+          title: Flexible(
+            child: Text(
+              "Lobby",
+              style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _leaveLobby,
+          ),
         ),
-        body: Column(children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: _isHost ? Colors.blue.withOpacity(0.1) : Colors.green.withOpacity(0.1),
-            child: Row(children: [
-              Icon(_isHost ? Icons.star : Icons.person, size: 36),
-              const SizedBox(width: 12),
-              Text(_isHost ? "You are the host" : "Waiting for host to start...",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ]),
-          ),
-          Expanded(
-            child: ListView(padding: const EdgeInsets.all(16), children: [
-              ListTile(
-                leading: CircleAvatar(backgroundColor: Colors.blue, child: Icon(Icons.star, color: Colors.white)),
-                title: Text(lobby?.host ?? ''),
-                subtitle: const Text("Host"),
-              ),
-              ...players.map((p) => ListTile(
-                leading: CircleAvatar(backgroundColor: Colors.green, child: Icon(Icons.person, color: Colors.white)),
-                title: Text(p),
-                subtitle: const Text("Player"),
-              )),
-            ]),
-          ),
-          if (_isHost)
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.play_arrow),
-                label: const Text("Start Game"),
-                style: ElevatedButton.styleFrom(backgroundColor: HopsTheme.primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16)),
-                onPressed: _startGameAsHost,
+        body: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              color: _isHost
+                  ? Colors.blue.withOpacity(0.1)
+                  : Colors.green.withOpacity(0.1),
+              child: Row(
+                children: [
+                  Icon(
+                    _isHost ? Icons.star : Icons.person,
+                    size: 36,
+                  ),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Text(
+                      _isHost
+                          ? "You are the host"
+                          : "Waiting for host to start...",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
             ),
-        ]),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Colors.blue,
+                      child: Icon(Icons.star, color: Colors.white),
+                    ),
+                    title: Text(
+                      lobby?.host ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: const Text("Host"),
+                  ),
+                  ...players.map((p) => ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Colors.green,
+                      child: Icon(Icons.person, color: Colors.white),
+                    ),
+                    title: Text(
+                      p,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: const Text("Player"),
+                  )),
+                ],
+              ),
+            ),
+            if (_isHost)
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text("Start Game"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 32, vertical: 16),
+                  ),
+                  onPressed: _startGameAsHost,
+                ),
+              ),
+          ],
+        ),
       );
     }
 
     // ---- LOBBY BROWSER ----
-    final availableLobbies = _lobbies.values.where((l) => l.host != widget.myUsername).toList();
+    final availableLobbies = _lobbies.values
+        .where((l) => l.host != widget.myUsername)
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Hops & Robbers", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
-        elevation: 0, backgroundColor: Colors.transparent,
+        title: Flexible(
+          child: Text(
+            "Hops & Robbers",
+            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
         actions: [
-          IconButton(icon: const Icon(Icons.add_circle_outline), onPressed: _createLobby, tooltip: "Create Lobby"),
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline),
+            onPressed: _createLobby,
+            tooltip: "Create Lobby",
+          ),
         ],
       ),
       body: availableLobbies.isEmpty
-          ? const Center(child: Text("No lobbies found.\nCreate one with the + button.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
+          ? const Center(
+        child: Text(
+          "No lobbies found.\nCreate one with the + button.",
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+      )
           : ListView.builder(
         padding: const EdgeInsets.all(16),
         itemCount: availableLobbies.length,
@@ -407,13 +577,30 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
           final lobby = availableLobbies[index];
           return Card(
             margin: const EdgeInsets.only(bottom: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
             child: ListTile(
-              leading: CircleAvatar(backgroundColor: HopsTheme.primary.withOpacity(0.1), child: Icon(Icons.person, color: HopsTheme.primary)),
-              title: Text(lobby.name),
-              subtitle: Text("${lobby.players.length} player(s)"),
+              leading: CircleAvatar(
+                backgroundColor:
+                colors.primary.withOpacity(0.1),
+                child: Icon(Icons.person,
+                    color: colors.primary),
+              ),
+              title: Text(
+                lobby.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                "${lobby.players.length} player(s)",
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               trailing: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: HopsTheme.primary, foregroundColor: Colors.white),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colors.primary,
+                  foregroundColor: Colors.white,
+                ),
                 onPressed: () => _joinLobby(lobby.id),
                 child: const Text("Join"),
               ),

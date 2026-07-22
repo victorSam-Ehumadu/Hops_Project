@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
-import 'package:client/theme/hops_theme.dart';
 
 class IndividualChatTerminalView extends StatefulWidget {
   final String peerName;
@@ -14,10 +13,12 @@ class IndividualChatTerminalView extends StatefulWidget {
     required this.onSendMessage,
   });
   @override
-  State<IndividualChatTerminalView> createState() => _IndividualChatTerminalViewState();
+  State<IndividualChatTerminalView> createState() =>
+      _IndividualChatTerminalViewState();
 }
 
-class _IndividualChatTerminalViewState extends State<IndividualChatTerminalView> {
+class _IndividualChatTerminalViewState
+    extends State<IndividualChatTerminalView> {
   List<Map<String, dynamic>> messageThreadsList = [];
   final TextEditingController _msgInputController = TextEditingController();
   String myPersonalUsernameLabel = "User_Vic";
@@ -28,7 +29,8 @@ class _IndividualChatTerminalViewState extends State<IndividualChatTerminalView>
     super.initState();
     _loadDeviceOwnerLabel();
     _loadPeerMessageLogs();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) => _loadPeerMessageLogs());
+    _refreshTimer = Timer.periodic(
+        const Duration(seconds: 2), (_) => _loadPeerMessageLogs());
   }
 
   @override
@@ -49,46 +51,81 @@ class _IndividualChatTerminalViewState extends State<IndividualChatTerminalView>
     final db = await DatabaseHelper.instance.database;
     final data = await db.query(
       DatabaseHelper.table,
-      where: '${DatabaseHelper.columnSenderId} = ? OR ${DatabaseHelper.columnSenderId} = ?',
+      where:
+      '${DatabaseHelper.columnSenderId} = ? OR ${DatabaseHelper.columnSenderId} = ?',
       whereArgs: [widget.peerName, myPersonalUsernameLabel],
       orderBy: '${DatabaseHelper.columnTimestamp} ASC',
     );
-    setState(() { messageThreadsList = data; });
+    setState(() {
+      messageThreadsList = data;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.peerName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)), elevation: 0),
+      appBar: AppBar(
+        title: Flexible(
+          child: Text(
+            widget.peerName,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        elevation: 0,
+      ),
       body: Column(
         children: [
           Expanded(
             child: messageThreadsList.isEmpty
-                ? const Center(child: Text("No messages yet.", style: TextStyle(color: Colors.grey)))
+                ? const Center(
+                child: Text("No messages yet.",
+                    style: TextStyle(color: Colors.grey)))
                 : ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: messageThreadsList.length,
               itemBuilder: (context, index) {
                 final msg = messageThreadsList[index];
-                bool isMe = msg[DatabaseHelper.columnSenderId] == myPersonalUsernameLabel;
+                bool isMe = msg[DatabaseHelper.columnSenderId] ==
+                    myPersonalUsernameLabel;
                 return Align(
-                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  alignment: isMe
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
                   child: Container(
                     margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    constraints: BoxConstraints(
+                      maxWidth:
+                      MediaQuery.of(context).size.width * 0.75,
+                    ),
                     decoration: BoxDecoration(
-                      color: isMe ? HopsTheme.primary : HopsTheme.surfaceContainerHighest,
+                      color: isMe
+                          ? colors.primary
+                          : colors.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: Text(msg[DatabaseHelper.columnMessage], style: TextStyle(color: isMe ? Colors.white : Colors.black87)),
+                    child: Text(
+                      msg[DatabaseHelper.columnMessage],
+                      style: TextStyle(
+                          color: isMe ? Colors.white : Colors.black87),
+                      maxLines: 10,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
+                    ),
                   ),
                 );
               },
             ),
           ),
           Container(
-            padding: const EdgeInsets.only(left: 16, right: 8, top: 10, bottom: 24),
-            decoration: BoxDecoration(color: HopsTheme.surfaceContainer.withOpacity(0.4)),
+            padding: const EdgeInsets.only(
+                left: 16, right: 8, top: 10, bottom: 24),
+            decoration: BoxDecoration(
+                color: colors.surface.withOpacity(0.4)),
             child: Row(
               children: [
                 Expanded(
@@ -99,27 +136,36 @@ class _IndividualChatTerminalViewState extends State<IndividualChatTerminalView>
                       hintText: "Type a message...",
                       filled: true,
                       fillColor: Colors.white.withOpacity(0.6),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(100),
+                          borderSide: BorderSide.none),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 12),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.arrow_upward, color: Colors.white, size: 20),
-                  style: IconButton.styleFrom(backgroundColor: HopsTheme.primary, padding: const EdgeInsets.all(12)),
+                  icon: const Icon(Icons.arrow_upward,
+                      color: Colors.white, size: 20),
+                  style: IconButton.styleFrom(
+                      backgroundColor: colors.primary,
+                      padding: const EdgeInsets.all(12)),
                   onPressed: () async {
                     if (_msgInputController.text.isNotEmpty) {
                       final text = _msgInputController.text.trim();
                       final outgoingPayload = {
                         DatabaseHelper.columnId: const Uuid().v4(),
                         DatabaseHelper.columnMessage: text,
-                        DatabaseHelper.columnSenderId: myPersonalUsernameLabel,
+                        DatabaseHelper.columnSenderId:
+                        myPersonalUsernameLabel,
                         DatabaseHelper.columnIsForMe: 0,
                         DatabaseHelper.columnNeedsRelay: 1,
-                        DatabaseHelper.columnTimestamp: DateTime.now().millisecondsSinceEpoch,
+                        DatabaseHelper.columnTimestamp:
+                        DateTime.now().millisecondsSinceEpoch,
                       };
-                      await DatabaseHelper.instance.insertMessage(outgoingPayload);
+                      await DatabaseHelper.instance
+                          .insertMessage(outgoingPayload);
                       await widget.onSendMessage(widget.peerName, text);
                       _msgInputController.clear();
                       _loadPeerMessageLogs();

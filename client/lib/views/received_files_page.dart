@@ -47,14 +47,28 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
 
   @override
   Widget build(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Received Files", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+        title: Flexible(
+          child: Text(
+            "Received Files",
+            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         elevation: 0,
         backgroundColor: Colors.transparent,
       ),
       body: _records.isEmpty
-          ? const Center(child: Text("No files received yet."))
+          ? const Center(
+        child: Text(
+          "No files received yet.",
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      )
           : ListView.builder(
         padding: const EdgeInsets.all(16),
         itemCount: _records.length,
@@ -76,11 +90,19 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: ListTile(
               leading: CircleAvatar(
-                backgroundColor: HopsTheme.primary.withOpacity(0.1),
-                child: Icon(icon, color: HopsTheme.primary),
+                backgroundColor: colors.primary.withOpacity(0.1),
+                child: Icon(icon, color: colors.primary),
               ),
-              title: Text(fileName),
-              subtitle: Text("From: $sender · ${date.toString().substring(0, 19)}"),
+              title: Text(
+                fileName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                "From: $sender · ${date.toString().substring(0, 19)}",
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               trailing: IconButton(
                 icon: const Icon(Icons.open_in_new),
                 onPressed: () => _openFile(fileName.toString()),

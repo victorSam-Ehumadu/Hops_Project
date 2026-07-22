@@ -36,7 +36,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
   void initState() {
     super.initState();
 
-    // Listen to the radar stream to catch community VBT advertisements
     _streamSub = widget.radarStream.listen((results) {
       print("📡 VibeCheck stream received ${results.length} results");
       for (final r in results) {
@@ -98,7 +97,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     final level = _selectedCrowdLevel;
     final approxCount = _levelToApproxCount(level);
 
-    // Save locally
     final record = {
       DatabaseHelper.vibeColId: const Uuid().v4(),
       DatabaseHelper.vibeColLocation: location,
@@ -108,7 +106,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     };
     await DatabaseHelper.instance.insertVibeRecord(record);
 
-    // Advertise to other Hops users
     await widget.onAdvertiseVibeTag(location, level);
 
     _locationController.clear();
@@ -155,16 +152,24 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
 
   @override
   Widget build(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     final communityList = _communityReports.values.toList()
       ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: HopsTheme.primary),
+          icon: Icon(Icons.arrow_back, color: colors.primary),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text("Vibe Check", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+        title: Flexible(
+          child: Text(
+            "Vibe Check",
+            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         elevation: 0,
         backgroundColor: Colors.transparent,
       ),
@@ -173,59 +178,59 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Manual Crowd Level Selection
-            const Text(
+            Text(
               "How crowded is your spot?",
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: HopsTheme.primary,
+                color: colors.primary,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: List.generate(4, (i) {
                 final isSelected = _selectedCrowdLevel == i;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedCrowdLevel = i),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? _levelColors[i].withOpacity(0.2)
-                          : Colors.white.withOpacity(0.4),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color:
-                        isSelected ? _levelColors[i] : Colors.grey.shade300,
-                        width: 2,
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        Icon(_levelIcons[i],
-                            color: _levelColors[i], size: 28),
-                        const SizedBox(height: 4),
-                        Text(
-                          _levelNames[i],
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color:
-                            isSelected ? _levelColors[i] : Colors.black54,
-                          ),
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selectedCrowdLevel = i),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),  // slightly reduced horizontal padding
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? _levelColors[i].withOpacity(0.2)
+                            : Colors.white.withOpacity(0.4),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isSelected ? _levelColors[i] : Colors.grey.shade300,
+                          width: 2,
                         ),
-                      ],
+                      ),
+                      child: Column(
+                        children: [
+                          Icon(_levelIcons[i], color: _levelColors[i], size: 28),
+                          const SizedBox(height: 4),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              _levelNames[i],
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: isSelected ? _levelColors[i] : Colors.black54,
+                              ),
+                              maxLines: 1,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 );
               }),
             ),
             const SizedBox(height: 24),
-
-            // Tag Location
             Row(
               children: [
                 Expanded(
@@ -247,7 +252,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                   icon: const Icon(Icons.save),
                   label: const Text("Share"),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: HopsTheme.primary,
+                    backgroundColor: colors.primary,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -261,33 +266,39 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
             const Text(
               "Your report will be visible to nearby Hops users.",
               style: TextStyle(fontSize: 11, color: Colors.grey),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-
             const SizedBox(height: 24),
-
-            // Community Reports
-            const Text(
+            Text(
               "📡 Community Reports",
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
-                color: HopsTheme.primary,
+                color: colors.primary,
               ),
             ),
             const SizedBox(height: 4),
             const Text(
               "Reports from other students near you appear here.",
               style: TextStyle(fontSize: 12, color: Colors.grey),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
             if (communityList.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 16),
                 child: Center(
-                  child: Text(
-                    "No reports yet. Walk around to see what others have shared!",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Text(
+                      "No reports yet. Walk around to see what others have shared!",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
               )
@@ -303,20 +314,26 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                       child: Icon(_levelIcons[report.level],
                           color: Colors.white),
                     ),
-                    title: Text(report.location),
-                    subtitle: Text(_levelNames[report.level]),
+                    title: Text(
+                      report.location,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      _levelNames[report.level],
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 );
               }),
-
             const SizedBox(height: 24),
-            // Your Saved History
-            const Text(
+            Text(
               "Your Saved History",
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
-                color: HopsTheme.primary,
+                color: colors.primary,
               ),
             ),
             const SizedBox(height: 8),
@@ -326,6 +343,8 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                 child: Text(
                   "No records yet.",
                   style: TextStyle(color: Colors.grey),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               )
             else
@@ -345,10 +364,16 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                       backgroundColor: _levelColors[level],
                       child: Icon(_levelIcons[level], color: Colors.white),
                     ),
-                    title: Text(loc.toString()),
+                    title: Text(
+                      loc.toString(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     subtitle: Text(
                       _levelNames[level] +
                           " · ${date.hour}:${date.minute.toString().padLeft(2, '0')}",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     trailing: IconButton(
                       icon: const Icon(Icons.delete_outline,

@@ -15,6 +15,8 @@ class HalfWheelPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     if (features.isEmpty) return const SizedBox.shrink();
 
     final screenWidth = MediaQuery.of(context).size.width;
@@ -25,14 +27,14 @@ class HalfWheelPicker extends StatelessWidget {
     return Container(
       height: 260,
       decoration: BoxDecoration(
-        color: HopsTheme.background,
+        color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(32),
           topRight: Radius.circular(32),
         ),
         boxShadow: [
           BoxShadow(
-            color: HopsTheme.primary.withOpacity(0.15),
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
             blurRadius: 20,
             offset: const Offset(0, -5),
           ),
@@ -51,12 +53,12 @@ class HalfWheelPicker extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          const Text(
+          Text(
             "My Features",
             style: TextStyle(
               fontWeight: FontWeight.bold,
               fontSize: 16,
-              color: HopsTheme.primary,
+              color: Theme.of(context).colorScheme.primary,
             ),
           ),
           const SizedBox(height: 8),
@@ -84,7 +86,7 @@ class HalfWheelPicker extends StatelessWidget {
                           color: Colors.white,
                           boxShadow: [
                             BoxShadow(
-                              color: HopsTheme.primary.withOpacity(0.2),
+                              color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
                               blurRadius: 10,
                               offset: const Offset(0, 4),
                             ),
@@ -93,7 +95,7 @@ class HalfWheelPicker extends StatelessWidget {
                         child: Icon(
                           feature.icon,
                           size: 30,
-                          color: HopsTheme.primary,
+                          color: Theme.of(context).colorScheme.primary,
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -102,10 +104,10 @@ class HalfWheelPicker extends StatelessWidget {
                         textAlign: TextAlign.center,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
-                          color: HopsTheme.primary,
+                          color: Theme.of(context).colorScheme.primary,
                         ),
                       ),
                     ],

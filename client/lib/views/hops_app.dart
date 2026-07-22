@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
+import 'package:nearby_connections/nearby_connections.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -11,7 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:client/database/database_helper.dart';
-import 'package:client/theme/hops_theme.dart';
+// No more import of hops_theme.dart
 import 'package:client/utils/hop_id_formatter.dart';
 import 'package:client/views/radar_screen.dart';
 import 'package:client/views/chat_terminal.dart';
@@ -25,6 +26,7 @@ import 'package:client/views/watch_me_page.dart';
 import 'package:client/views/hops_and_robbers.dart';
 import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
+import 'package:client/services/notification_service.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
@@ -37,6 +39,9 @@ class _HopsAppState extends State<HopsApp> {
   String myUsername = "Loading...";
   List<Map<String, dynamic>> localActiveContacts = [];
   final TextEditingController _manualIdController = TextEditingController();
+
+  bool _isFlareActive = false;
+  Timer? _flareCancelTimer;
 
   StreamSubscription<List<ScanResult>>? _bleScanResultsSubscription;
   bool _bleInitialized = false;
@@ -51,15 +56,15 @@ class _HopsAppState extends State<HopsApp> {
   final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
 
-  // Watch request stream (replays current list on listen)
+  // Watch request stream
   late final StreamController<List<String>> _pendingWatchStreamController;
   Stream<List<String>> get pendingWatchStream => _pendingWatchStreamController.stream;
 
-  // Active buddies stream (replays current set on listen)
+  // Active buddies stream
   late final StreamController<Set<String>> _watchingBuddiesStreamController;
   Stream<Set<String>> get watchingBuddiesStream => _watchingBuddiesStreamController.stream;
 
-  // Feature toggles (persisted)
+  // Feature toggles
   Set<int> enabledFeatureIds = {};
 
   // Friend request management
@@ -96,6 +101,7 @@ class _HopsAppState extends State<HopsApp> {
 
   @override
   void dispose() {
+    _flareCancelTimer?.cancel();
     _bleScanResultsSubscription?.cancel();
     FlutterBluePlus.stopScan();
     BlePeripheral.stopAdvertising();
@@ -118,88 +124,6 @@ class _HopsAppState extends State<HopsApp> {
     _notifyWatchingBuddiesChanged();
   }
 
-  // ---- File reception ----
-  Future<void> _handleShareConnection(BluetoothDevice device, Guid serviceUuid) async {
-    try {
-      await device.connect(timeout: const Duration(seconds: 5));
-      // Request maximum MTU
-      await device.requestMtu(512);
-      final services = await device.discoverServices();
-
-      for (final service in services) {
-        if (service.uuid.toString() == serviceUuid.toString()) {
-          for (final char in service.characteristics) {
-            if (char.properties.read) {
-
-              // 1. Read header
-              List<int> headerValue = await char.read();
-              final firstNull = headerValue.indexOf(0);
-              if (firstNull == -1) break;
-              final sender = utf8.decode(headerValue.sublist(0, firstNull));
-              final secondNull = headerValue.indexOf(0, firstNull + 1);
-              if (secondNull == -1) break;
-              final fileName = utf8.decode(headerValue.sublist(firstNull + 1, secondNull));
-              final totalChunksStr = utf8.decode(headerValue.sublist(secondNull + 1, secondNull + 7));
-              final totalChunks = int.parse(totalChunksStr);
-              print("📩 Receiving $fileName from $sender – $totalChunks chunks");
-
-              // 2. Read chunks (with index verification)
-              final receivedData = <int>[];
-              int expectedIndex = 0;
-              int retries = 0;
-              const int maxRetries = 20;   // how many times we try to read the next chunk
-
-              while (expectedIndex < totalChunks && retries < maxRetries) {
-                List<int> chunkValue = await char.read();
-                final chunkNull = chunkValue.indexOf(0);
-                if (chunkNull == -1) break;
-
-                // Parse the chunk index (first 6 bytes)
-                final idxStr = utf8.decode(chunkValue.sublist(0, chunkNull));
-                final int chunkIndex = int.tryParse(idxStr) ?? -1;
-
-                if (chunkIndex == expectedIndex) {
-                  // Correct chunk – keep it
-                  final chunkData = chunkValue.sublist(chunkNull + 1);
-                  receivedData.addAll(chunkData);
-                  print("📩 Received chunk $expectedIndex / $totalChunks");
-                  expectedIndex++;
-                  retries = 0;      // reset retry count
-                } else {
-                  // Wrong chunk (duplicate or future) – wait and retry
-                  retries++;
-                  await Future.delayed(const Duration(milliseconds: 50));
-                }
-              }
-
-              if (expectedIndex < totalChunks) {
-                print("❌ Transfer incomplete – got $expectedIndex / $totalChunks chunks");
-              }
-
-              // Save file
-              final dir = await getApplicationDocumentsDirectory();
-              final filePath = '${dir.path}/$fileName';
-              final file = File(filePath);
-              await file.writeAsBytes(Uint8List.fromList(receivedData));
-              await _addReceivedFileRecord(sender, fileName, receivedData.length);
-
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text("Received $fileName (${receivedData.length} bytes)")),
-              );
-
-              await device.disconnect();
-              return;
-            }
-          }
-        }
-      }
-      await device.disconnect();
-    } catch (e) {
-      print("Share receive error: $e");
-      try { await device.disconnect(); } catch (_) {}
-    }
-  }
-
   Future<void> _addReceivedFileRecord(String sender, String fileName, int size) async {
     final dir = await getApplicationDocumentsDirectory();
     final recordFile = File('${dir.path}/received_files.json');
@@ -219,6 +143,26 @@ class _HopsAppState extends State<HopsApp> {
     await recordFile.writeAsString(json.encode(records));
   }
 
+  void _cancelEmergencyFlare({bool silent = false}) {
+    _flareCancelTimer?.cancel();
+    _flareCancelTimer = null;
+
+    BlePeripheral.stopAdvertising();
+    BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+
+    setState(() => _isFlareActive = false);
+
+    if (!silent && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Emergency flare cancelled"),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   Future<void> _sendGameAction(String action, Map<String, String> data) async {
     final advName = "GAME_$action:${data.entries.map((e) => '${e.key}=${e.value}').join(';')}";
     await BlePeripheral.stopAdvertising();
@@ -227,6 +171,47 @@ class _HopsAppState extends State<HopsApp> {
       BlePeripheral.stopAdvertising();
       BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
     });
+  }
+
+  Future<void> _broadcastEmergencyFlare(String reason) async {
+    _cancelEmergencyFlare(silent: true);
+
+    final maxSenderLen = 8;
+    final maxReasonLen = 14;
+    final sender = myUsername.length > maxSenderLen
+        ? myUsername.substring(0, maxSenderLen)
+        : myUsername;
+    final shortReason = reason.length > maxReasonLen
+        ? reason.substring(0, maxReasonLen)
+        : reason;
+
+    final advName = "EMG:$sender:$shortReason";
+    await BlePeripheral.stopAdvertising();
+    await BlePeripheral.startAdvertising(localName: advName, services: []);
+    print("🚨 Broadcasting emergency: $advName");
+
+    setState(() => _isFlareActive = true);
+
+    _flareCancelTimer = Timer(const Duration(seconds: 30), () {
+      _cancelEmergencyFlare(silent: true);
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text("Emergency flare active for 30 seconds"),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 30),
+          action: SnackBarAction(
+            label: "CANCEL",
+            textColor: Colors.white,
+            onPressed: () {
+              _cancelEmergencyFlare();
+            },
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _saveWatchState() async {
@@ -313,15 +298,11 @@ class _HopsAppState extends State<HopsApp> {
     _processingWatchAccepts.add(sender);
     setState(() => pendingWatchRequests.remove(sender));
     _notifyWatchRequestsChanged();
-
-    // Accepter adds sender to its monitoring list
     _watchingBuddies.add(sender);
     _saveWatchState();
     _notifyWatchingBuddiesChanged();
-
     _acceptWatchRequestBle(sender);
-    _addRecentWatchSender(sender);   // reset cooldown
-
+    _addRecentWatchSender(sender);
     Future.delayed(const Duration(seconds: 2), () => _processingWatchAccepts.remove(sender));
   }
 
@@ -416,7 +397,7 @@ class _HopsAppState extends State<HopsApp> {
       _radarStreamController.add(results);
       for (final r in results) {
         final name = r.advertisementData.advName;
-        // ACK (existing pairing)
+        // ACK
         if (name.startsWith("ACK:") && _activePairingCode != null) {
           final parts = name.substring(4).split(":");
           if (parts.length == 2 && parts[0] == _activePairingCode) {
@@ -445,7 +426,7 @@ class _HopsAppState extends State<HopsApp> {
             await _writeContactLogToDatabase(parts[1], "Friend added via radar");
           }
         }
-        // Watch request – check cooldown, then add to cooldown immediately
+        // Watch request
         if (name.startsWith("WATCH_REQ:")) {
           final parts = name.substring(10).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
@@ -453,13 +434,13 @@ class _HopsAppState extends State<HopsApp> {
             if (!_recentWatchSenders.contains(sender) &&
                 !pendingWatchRequests.contains(sender) &&
                 !_processingWatchAccepts.contains(sender)) {
-              _addRecentWatchSender(sender);          // 🔥 ADDED HERE
+              _addRecentWatchSender(sender);
               setState(() => pendingWatchRequests.add(sender));
               _notifyWatchRequestsChanged();
             }
           }
         }
-        // Watch ACK – add cooldown before snackbar
+        // Watch ACK
         if (name.startsWith("WATCH_ACK:")) {
           final parts = name.substring(10).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
@@ -470,36 +451,11 @@ class _HopsAppState extends State<HopsApp> {
             }
           }
         }
-
-        // Hops Share receiver
-        // Hops Share receiver
-        if (r.advertisementData.advName == "SHARE") {
-          print("📡 Detected SHARE advertisement from ${r.device.remoteId}");
-          final serviceUuid = r.advertisementData.serviceUuids.isNotEmpty
-              ? r.advertisementData.serviceUuids.first
-              : null;
-          final device = r.device;
-          if (device != null && serviceUuid != null) {
-            // Temporarily stop advertising so the radio can connect
-            await BlePeripheral.stopAdvertising();
-            try {
-              await _handleShareConnection(device, serviceUuid);
-            } finally {
-              // Restart advertising when done
-              await BlePeripheral.startAdvertising(
-                localName: "HPS:$myUsername",
-                services: [],
-              );
-            }
-          }
-        }
-
         // Tag game
         if (name.startsWith("TAG:")) {
           final parts = name.substring(4).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
             final tagger = parts[1];
-            // Show a big dialog that you've been tagged
             showDialog(
               context: context,
               barrierDismissible: false,
@@ -516,7 +472,6 @@ class _HopsAppState extends State<HopsApp> {
             );
           }
         }
-
         // Hops & Robbers game actions
         if (name.startsWith("GAME_")) {
           final parts = name.substring(5).split(":");
@@ -529,6 +484,17 @@ class _HopsAppState extends State<HopsApp> {
             }
             _gameEventStreamController.add({'action': action, 'data': data});
           }
+        }
+        // Emergency Flare (with reason parsing)
+        if (name.startsWith("EMG:")) {
+          final payload = name.substring(4);
+          final parts = payload.split(':');
+          final sender = parts.isNotEmpty ? parts[0] : 'Unknown';
+          final reason = parts.length > 1 ? parts.sublist(1).join(':') : 'Emergency';
+          await NotificationService.showEmergencyNotification(
+            sender: sender,
+            reason: reason,
+          );
         }
       }
     });
@@ -646,9 +612,10 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   void _showToastFeedbackAlert(String alertMessage) {
+    final theme = Theme.of(context);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: HopsTheme.primary,
+        backgroundColor: theme.colorScheme.primary,
         behavior: SnackBarBehavior.floating,
         content: Text(alertMessage, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
       ),
@@ -681,7 +648,6 @@ class _HopsAppState extends State<HopsApp> {
     _saveEnabledFeatures();
   }
 
-  // ---------- Persist features ----------
   Future<void> _loadEnabledFeatures() async {
     final prefs = await SharedPreferences.getInstance();
     final ids = prefs.getStringList('enabledFeatureIds') ?? [];
@@ -690,41 +656,67 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _saveEnabledFeatures() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-        'enabledFeatureIds', enabledFeatureIds.map((id) => id.toString()).toList());
+    await prefs.setStringList('enabledFeatureIds', enabledFeatureIds.map((id) => id.toString()).toList());
   }
 
-  // ---------- UI ----------
+  // ---------- UI (fully dynamic theme) ----------
   PreferredSizeWidget _buildSharedCustomAppBar(String title) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return AppBar(
       elevation: 0,
       scrolledUnderElevation: 0,
-      backgroundColor: HopsTheme.background.withOpacity(0.8),
+      backgroundColor: theme.scaffoldBackgroundColor.withOpacity(0.8),
       title: Row(
         children: [
-          const Icon(Icons.bluetooth_audio, color: HopsTheme.primary),
+          Icon(Icons.bluetooth_audio, color: colors.primary),
           const SizedBox(width: 8),
-          Text(title, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontSize: 20)),
+          Flexible(
+            child: Text(
+              title,
+              style: theme.textTheme.headlineMedium?.copyWith(fontSize: 20),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
       actions: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(color: HopsTheme.tertiaryContainer.withOpacity(0.2), borderRadius: BorderRadius.circular(100)),
-          child: const Row(
-            children: [
-              Icon(Icons.radar, size: 12, color: HopsTheme.tertiaryContainer),
-              SizedBox(width: 6),
-              Text("BLE Mesh Active", style: TextStyle(color: HopsTheme.tertiaryContainer, fontSize: 11, fontWeight: FontWeight.bold)),
-            ],
+        Flexible(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+                color: colors.tertiaryContainer.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(100)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.radar, size: 10, color: colors.tertiaryContainer),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    "BLE Mesh Active",
+                    style: TextStyle(
+                        color: colors.tertiaryContainer,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(width: 8),
         GestureDetector(
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (context) => const HopsProfileScreen())).then((_) => _refreshContactsTrayList()),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (context) => const HopsProfileScreen()),
+          ).then((_) => _refreshContactsTrayList()),
           child: Container(
             margin: const EdgeInsets.only(right: 16),
-            child: const CircleAvatar(radius: 16, backgroundColor: HopsTheme.primary, child: Icon(Icons.person, size: 18, color: Colors.white)),
+            child: CircleAvatar(
+                radius: 16,
+                backgroundColor: colors.primary,
+                child: const Icon(Icons.person, size: 18, color: Colors.white)),
           ),
         ),
       ],
@@ -733,6 +725,8 @@ class _HopsAppState extends State<HopsApp> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);      // ← here
+    final colors = theme.colorScheme;     // ← here
     final List<Widget> tabs = [
       RadarScreen(
         radarStream: radarStream,
@@ -741,6 +735,7 @@ class _HopsAppState extends State<HopsApp> {
         onAcceptRequest: acceptRequest,
         onDeclineRequest: declineRequest,
         friendUsernames: friendUsernames,
+        onActivateFlare: (String reason) => _broadcastEmergencyFlare(reason),
       ),
       _buildContactsTab(),
       _buildFeaturesTab(),
@@ -753,7 +748,7 @@ class _HopsAppState extends State<HopsApp> {
           ? Padding(
         padding: const EdgeInsets.only(bottom: 12.0),
         child: FloatingActionButton(
-          backgroundColor: HopsTheme.primary,
+          backgroundColor: colors.primary,
           foregroundColor: Colors.white,
           shape: const CircleBorder(),
           onPressed: () => _showAddContactModalSheet(context),
@@ -763,12 +758,12 @@ class _HopsAppState extends State<HopsApp> {
           : null,
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: HopsTheme.surfaceContainer.withOpacity(0.8),
+          color: colors.surface.withOpacity(0.8),
           borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
         ),
         child: SafeArea(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
@@ -786,21 +781,35 @@ class _HopsAppState extends State<HopsApp> {
 
   Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label) {
     bool isSelected = _currentIndex == index;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return GestureDetector(
       onTap: () => setState(() => _currentIndex = index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? HopsTheme.primaryContainer : Colors.transparent,
+          color: isSelected ? colors.primaryContainer : Colors.transparent,
           borderRadius: BorderRadius.circular(100),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(isSelected ? activeIcon : icon, color: isSelected ? Colors.white : HopsTheme.primary.withOpacity(0.6)),
+            Icon(isSelected ? activeIcon : icon,
+                color: isSelected ? Colors.white : colors.primary.withOpacity(0.6)),
             const SizedBox(height: 2),
-            Text(label, style: TextStyle(fontSize: 9, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500, color: isSelected ? Colors.white : HopsTheme.primary.withOpacity(0.6))),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                  color: isSelected ? Colors.white : colors.primary.withOpacity(0.6),
+                ),
+                maxLines: 1,
+              ),
+            ),
           ],
         ),
       ),
@@ -808,10 +817,18 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   Widget _buildContactsTab() {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return Scaffold(
       appBar: _buildSharedCustomAppBar("Contacts"),
       body: Container(
-        decoration: const BoxDecoration(gradient: RadialGradient(center: Alignment(1.0, -1.0), radius: 1.5, colors: [HopsTheme.surfaceContainerLow, HopsTheme.background])),
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(1.0, -1.0),
+            radius: 1.5,
+            colors: [colors.surface, theme.scaffoldBackgroundColor],
+          ),
+        ),
         child: localActiveContacts.isEmpty
             ? const Center(child: Text("No contacts yet.\nEnter a pairing code to connect.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey, height: 1.4)))
             : ListView.builder(
@@ -826,19 +843,34 @@ class _HopsAppState extends State<HopsApp> {
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 leading: CircleAvatar(
                   radius: 24,
-                  backgroundColor: HopsTheme.primary.withOpacity(0.1),
-                  child: Text(contact['username'] as String, style: const TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+                  backgroundColor: colors.primary.withOpacity(0.1),
+                  child: Text(contact['username'] as String, style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary)),
                 ),
                 title: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(contact['username'] as String, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                    Text(contact['time'] as String, style: const TextStyle(fontSize: 11, color: Colors.black38)),
+                    Flexible(
+                      child: Text(
+                        contact['username'] as String,
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: colors.primary),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      contact['time'] as String,
+                      style: const TextStyle(fontSize: 11, color: Colors.black38),
+                    ),
                   ],
                 ),
                 subtitle: Padding(
                   padding: const EdgeInsets.only(top: 4.0),
-                  child: Text(contact['lastMsg'] as String, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Colors.black54)),
+                  child: Text(
+                    contact['lastMsg'] as String,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13, color: Colors.black54),
+                  ),
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
@@ -863,6 +895,8 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   void _showAddContactModalSheet(BuildContext context) {
+    final theme = Theme.of(context);      // ← here
+    final colors = theme.colorScheme;     // ← here
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -878,11 +912,11 @@ class _HopsAppState extends State<HopsApp> {
               children: [
                 Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(100)))),
                 const SizedBox(height: 20),
-                const Text("Add Peer Node", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+                Text("Add Peer Node", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: colors.primary)),
                 const SizedBox(height: 6),
                 const Text("Enter the 6‑character pairing code shown on your classmate's device.", style: TextStyle(fontSize: 13, color: Colors.black54)),
                 const SizedBox(height: 24),
-                const Text("ENTER PAIRING CODE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: HopsTheme.primary, letterSpacing: 1.2)),
+                Text("ENTER PAIRING CODE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: colors.primary, letterSpacing: 1.2)),
                 const SizedBox(height: 6),
                 TextField(
                   controller: _manualIdController,
@@ -893,7 +927,7 @@ class _HopsAppState extends State<HopsApp> {
                     hintText: "HPS-XXX-YYY",
                     prefixIcon: const Icon(Icons.vpn_key_outlined, size: 18),
                     filled: true,
-                    fillColor: HopsTheme.surfaceContainerHighest,
+                    fillColor: colors.surfaceContainerHighest,
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(100), borderSide: BorderSide.none),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   ),
@@ -903,7 +937,7 @@ class _HopsAppState extends State<HopsApp> {
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: HopsTheme.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100))),
+                    style: ElevatedButton.styleFrom(backgroundColor: colors.primary, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100))),
                     onPressed: () {
                       if (_manualIdController.text.length == 11) {
                         _executeActiveHandshakeVerification(_manualIdController.text.trim());
@@ -919,12 +953,12 @@ class _HopsAppState extends State<HopsApp> {
                 const SizedBox(height: 12),
                 _buildExpandableOptionTree(context),
                 const SizedBox(height: 12),
-                const Divider(color: HopsTheme.surfaceContainerHighest),
+                Divider(color: colors.surfaceContainerHighest),
                 const SizedBox(height: 8),
                 Center(
                   child: TextButton.icon(
-                    icon: const Icon(Icons.qr_code_scanner, size: 18, color: HopsTheme.tertiaryContainer),
-                    label: const Text("Generate My Pairing Code", style: TextStyle(color: HopsTheme.tertiaryContainer, fontWeight: FontWeight.bold, fontSize: 13)),
+                    icon: Icon(Icons.qr_code_scanner, size: 18, color: colors.tertiaryContainer),
+                    label: Text("Generate My Pairing Code", style: TextStyle(color: colors.tertiaryContainer, fontWeight: FontWeight.bold, fontSize: 13)),
                     onPressed: () {
                       Navigator.pop(context);
                       _showTokenGeneratorDialog(context);
@@ -940,6 +974,8 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   Widget _buildExpandableOptionTree(BuildContext context) {
+    final theme = Theme.of(context);      // ← here
+    final colors = theme.colorScheme;     // ← here
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
@@ -950,7 +986,7 @@ class _HopsAppState extends State<HopsApp> {
             width: double.infinity,
             margin: const EdgeInsets.only(top: 4, bottom: 8),
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: HopsTheme.surfaceContainerLow, borderRadius: BorderRadius.circular(16)),
+            decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(16)),
             child: InkWell(
               onTap: () {
                 Navigator.pop(context);
@@ -962,20 +998,20 @@ class _HopsAppState extends State<HopsApp> {
                   ),
                 ));
               },
-              child: const Row(
+              child: Row(
                 children: [
-                  Icon(Icons.camera_alt_outlined, color: HopsTheme.primary, size: 20),
-                  SizedBox(width: 12),
+                  Icon(Icons.camera_alt_outlined, color: colors.primary, size: 20),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text("Scan to Add", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                        Text("Open camera viewfinder to decode transient QR matrix map signatures.", style: TextStyle(fontSize: 11, color: Colors.black54)),
+                        const Text("Open camera viewfinder to decode transient QR matrix map signatures.", style: TextStyle(fontSize: 11, color: Colors.black54)),
                       ],
                     ),
                   ),
-                  Icon(Icons.chevron_right, size: 16, color: Colors.black26),
+                  const Icon(Icons.chevron_right, size: 16, color: Colors.black26),
                 ],
               ),
             ),
@@ -986,6 +1022,8 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   void _showTokenGeneratorDialog(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     showDialog(context: context, builder: (context) => TokenGeneratorWorkspace(
       onCodeGenerated: (code) {
         _startPairingServer(code);
@@ -1009,20 +1047,28 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   Widget _buildFeatureCard(FeatureItem feature, bool isEnabled) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      color: HopsTheme.surfaceContainerLow,
+      color: colors.surfaceContainerHighest.withOpacity(0.4),
       elevation: 0,
       child: ExpansionTile(
-        leading: Icon(feature.icon, color: HopsTheme.primary, size: 28),
+        leading: Icon(feature.icon, color: colors.primary, size: 28),
         title: Text(
           feature.name,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+            color: colors.primary,   // ★ use the theme primary colour
+          ),
         ),
         subtitle: Text(
           feature.shortDesc,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 12, color: Colors.black54),
+          maxLines: 1,
         ),
         children: [
           Padding(
@@ -1044,9 +1090,9 @@ class _HopsAppState extends State<HopsApp> {
                 label: Text(isEnabled ? "Added" : "Add"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: isEnabled
-                      ? HopsTheme.tertiaryContainer.withOpacity(0.3)
-                      : HopsTheme.primary,
-                  foregroundColor: isEnabled ? HopsTheme.primary : Colors.white,
+                      ? colors.tertiaryContainer.withOpacity(0.3)
+                      : colors.primary,
+                  foregroundColor: isEnabled ? colors.primary : Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(100),
                   ),
@@ -1062,31 +1108,33 @@ class _HopsAppState extends State<HopsApp> {
 
   // --------------- My Features tab ---------------
   Widget _buildMyFeaturesTab() {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     final enabledFeatures = allFeatures
         .where((f) => enabledFeatureIds.contains(f.id))
         .toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("My Features",
-            style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)),
+        title: Text("My Features",
+            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary)),
         elevation: 0,
-        backgroundColor: HopsTheme.background.withOpacity(0.8),
+        backgroundColor: theme.scaffoldBackgroundColor.withOpacity(0.8),
         actions: [
           TextButton.icon(
-            icon: const Icon(Icons.add_circle_outline, size: 18),
-            label: const Text("Manage", style: TextStyle(color: HopsTheme.primary)),
+            icon: Icon(Icons.add_circle_outline, size: 18, color: colors.primary),
+            label: Text("Manage", style: TextStyle(color: colors.primary)),
             onPressed: () => setState(() => _currentIndex = 2),
           ),
           const SizedBox(width: 8),
         ],
       ),
       body: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: RadialGradient(
             center: Alignment(1.0, -1.0),
             radius: 1.5,
-            colors: [HopsTheme.surfaceContainerLow, HopsTheme.background],
+            colors: [colors.surface, theme.scaffoldBackgroundColor],
           ),
         ),
         child: enabledFeatures.isEmpty
@@ -1157,7 +1205,6 @@ class _HopsAppState extends State<HopsApp> {
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => HopsSharePage(
-                        friendUsernames: friendUsernames,
                         myUsername: myUsername,
                       ),
                     ),
@@ -1178,12 +1225,20 @@ class _HopsAppState extends State<HopsApp> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(feature.icon, size: 36, color: HopsTheme.primary),
+                    Icon(feature.icon, size: 36, color: colors.primary),
                     const SizedBox(height: 8),
-                    Text(
-                      feature.name,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        feature.name,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                          color: colors.primary,   // ★ now follows the theme primary
+                        ),
+                        maxLines: 2,
+                      ),
                     ),
                   ],
                 ),

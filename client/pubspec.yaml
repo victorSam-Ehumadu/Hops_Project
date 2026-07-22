@@ -27,6 +27,12 @@ dependencies:
   crypto: ^3.0.3
   file_picker: ^8.0.0
   open_filex: ^4.3.4
+  flutter_bluetooth_serial_plus: ^0.5.4
+  nearby_connections: ^4.0.12
+  flutter_local_notifications: ^17.0.0
+  flutter_foreground_task: ^6.0.0
+  audio_session: ^0.1.21
+  just_audio: ^0.9.38
 
 dev_dependencies:
   flutter_test:
@@ -38,3 +44,4 @@ flutter:
   uses-material-design: true
   assets:
     - .env
+    - assets/sounds/alert.wav

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:client/theme/hops_theme.dart';
 
 class WatchMePage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
@@ -56,7 +55,8 @@ class _WatchMePageState extends State<WatchMePage> {
   void initState() {
     super.initState();
     _watchingBuddies = Set<String>.from(widget.watchingBuddies);
-    _pendingSub = widget.pendingWatchStream.listen((requests) => setState(() => _pendingRequests = requests));
+    _pendingSub = widget.pendingWatchStream
+        .listen((requests) => setState(() => _pendingRequests = requests));
     _watchingSub = widget.watchingBuddiesStream.listen((buddies) {
       setState(() {
         _watchingBuddies = buddies;
@@ -114,15 +114,21 @@ class _WatchMePageState extends State<WatchMePage> {
     _checkTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
       if (!mounted) return;
       final now = DateTime.now();
-      if (_lastSeen == null && _monitoringStartTime != null &&
+      if (_lastSeen == null &&
+          _monitoringStartTime != null &&
           now.difference(_monitoringStartTime!).inSeconds >= 15 &&
-          !_alertCooldown && !_alertActive) {
+          !_alertCooldown &&
+          !_alertActive) {
         _triggerAlert("Buddy not found – may be out of range or Bluetooth off");
         return;
       }
       if (_lastSeen != null && now.difference(_lastSeen!).inSeconds >= 10) {
-        if (!_alertCooldown && !_alertActive) _triggerAlert("Buddy disappeared!");
-      } else if (_lastRssi < -80 && !_alertActive && !_alertCooldown && _lastSeen != null) {
+        if (!_alertCooldown && !_alertActive)
+          _triggerAlert("Buddy disappeared!");
+      } else if (_lastRssi < -80 &&
+          !_alertActive &&
+          !_alertCooldown &&
+          _lastSeen != null) {
         _triggerAlert("Signal too weak! RSSI: $_lastRssi dBm");
       }
     });
@@ -145,71 +151,239 @@ class _WatchMePageState extends State<WatchMePage> {
       builder: (ctx) => AlertDialog(
         title: const Text("Watch Me Alert"),
         content: Text(message),
-        actions: [ElevatedButton(onPressed: () { Navigator.of(ctx).pop(); if (mounted) setState(() => _alertActive = false); }, child: const Text("OK"))],
+        actions: [
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              if (mounted) setState(() => _alertActive = false);
+            },
+            child: const Text("OK"),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildSignalBar(int rssi) {
     final ratio = ((rssi + 100) / 70.0).clamp(0.0, 1.0);
-    final color = ratio > 0.6 ? Colors.green : ratio > 0.3 ? Colors.orange : Colors.red;
+    final color = ratio > 0.6
+        ? Colors.green
+        : ratio > 0.3
+        ? Colors.orange
+        : Colors.red;
     return Column(
       children: [
-        Text("Signal: $rssi dBm", style: const TextStyle(fontWeight: FontWeight.w600)),
+        Text(
+          "Signal: $rssi dBm",
+          style: const TextStyle(fontWeight: FontWeight.w600),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         const SizedBox(height: 8),
-        LinearProgressIndicator(value: ratio, color: color, backgroundColor: Colors.grey.shade300, minHeight: 12),
+        LinearProgressIndicator(
+          value: ratio,
+          color: color,
+          backgroundColor: Colors.grey.shade300,
+          minHeight: 12,
+        ),
         const SizedBox(height: 8),
-        Text(_lastSeen != null ? "Last seen: ${_lastSeen!.hour}:${_lastSeen!.minute.toString().padLeft(2, '0')}" : "Not seen yet"),
+        Text(
+          _lastSeen != null
+              ? "Last seen: ${_lastSeen!.hour}:${_lastSeen!.minute.toString().padLeft(2, '0')}"
+              : "Not seen yet",
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     return Scaffold(
-      appBar: AppBar(title: const Text("Watch Me", style: TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary)), elevation: 0, backgroundColor: Colors.transparent,
-          actions: [IconButton(icon: const Icon(Icons.delete_sweep), onPressed: widget.onClearAll, tooltip: "Clear all watch history")]),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (_monitoredBuddy != null) ...[
-          Text("Monitoring: $_monitoredBuddy", style: const TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8), _buildSignalBar(_lastRssi), const Divider(height: 24),
+      appBar: AppBar(
+        title: Flexible(
+          child: Text(
+            "Watch Me",
+            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_sweep),
+            onPressed: widget.onClearAll,
+            tooltip: "Clear all watch history",
+          ),
         ],
-        const Text("Watch Requests", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: HopsTheme.primary)),
-        const SizedBox(height: 8),
-        if (_pendingRequests.isEmpty)
-          const Padding(padding: EdgeInsets.only(left: 16, top: 4), child: Text("No pending requests", style: TextStyle(color: Colors.grey, fontSize: 13)))
-        else ..._pendingRequests.map((sender) => Card(
-          margin: const EdgeInsets.only(bottom: 8), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              CircleAvatar(radius: 16, backgroundColor: HopsTheme.primary.withOpacity(0.1), child: Text(sender[0], style: const TextStyle(fontWeight: FontWeight.bold, color: HopsTheme.primary))),
-              const SizedBox(width: 10), Expanded(child: Text("$sender wants to watch you")),
-            ]),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_monitoredBuddy != null) ...[
+              Text(
+                "Monitoring: $_monitoredBuddy",
+                style: const TextStyle(fontWeight: FontWeight.w600),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              _buildSignalBar(_lastRssi),
+              const Divider(height: 24),
+            ],
+            Text(
+              "Watch Requests",
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                color: colors.primary,
+              ),
+            ),
             const SizedBox(height: 8),
-            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              TextButton(onPressed: () => widget.onDeclineWatchRequest(sender), child: const Text("Decline", style: TextStyle(color: Colors.redAccent, fontSize: 12))),
-              const SizedBox(width: 8),
-              ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: HopsTheme.primary, foregroundColor: Colors.white), onPressed: () => widget.onAcceptWatchRequest(sender), child: const Text("Accept")),
-            ]),
-          ])),
-        )),
-        const SizedBox(height: 16),
-        if (_watchingBuddies.isNotEmpty) ...[
-          const Text("Currently watching:", style: TextStyle(fontWeight: FontWeight.w600)),
-          ..._watchingBuddies.map((b) => ListTile(title: Text(b), trailing: ElevatedButton(onPressed: () => _stopWatching(b), child: const Text("Stop")))),
-          const Divider(),
-        ],
-        const Text("Send watch request to:", style: TextStyle(fontWeight: FontWeight.w600)), const SizedBox(height: 8),
-        DropdownButton<String>(value: _selectedBuddy, isExpanded: true, hint: const Text("Choose a friend"),
-            items: widget.friendUsernames.where((f) => !_watchingBuddies.contains(f)).map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
-            onChanged: (v) => setState(() => _selectedBuddy = v)),
-        const SizedBox(height: 16),
-        ElevatedButton.icon(icon: const Icon(Icons.send), label: const Text("Send Request"),
-            style: ElevatedButton.styleFrom(backgroundColor: HopsTheme.primary, foregroundColor: Colors.white),
-            onPressed: _selectedBuddy != null && !_isRequesting
-                ? () async { setState(() => _isRequesting = true); await widget.onSendWatchRequest(_selectedBuddy!); setState(() => _isRequesting = false);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Request sent to $_selectedBuddy"))); } : null),
-      ])),
+            if (_pendingRequests.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(left: 16, top: 4),
+                child: Text(
+                  "No pending requests",
+                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              )
+            else
+              ..._pendingRequests.map((sender) => Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 16,
+                            backgroundColor:
+                            colors.primary.withOpacity(0.1),
+                            child: Text(sender[0],
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: colors.primary)),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "$sender wants to watch you",
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () =>
+                                widget.onDeclineWatchRequest(sender),
+                            child: const Text("Decline",
+                                style: TextStyle(
+                                    color: Colors.redAccent,
+                                    fontSize: 12)),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: colors.primary,
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () =>
+                                widget.onAcceptWatchRequest(sender),
+                            child: const Text("Accept"),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              )),
+            const SizedBox(height: 16),
+            if (_watchingBuddies.isNotEmpty) ...[
+              const Text(
+                "Currently watching:",
+                style: TextStyle(fontWeight: FontWeight.w600),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              ..._watchingBuddies.map((b) => ListTile(
+                title: Text(
+                  b,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: ElevatedButton(
+                  onPressed: () => _stopWatching(b),
+                  child: const Text("Stop"),
+                ),
+              )),
+              const Divider(),
+            ],
+            const Text(
+              "Send watch request to:",
+              style: TextStyle(fontWeight: FontWeight.w600),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 8),
+            DropdownButton<String>(
+              value: _selectedBuddy,
+              isExpanded: true,
+              hint: const Text("Choose a friend"),
+              items: widget.friendUsernames
+                  .where((f) => !_watchingBuddies.contains(f))
+                  .map((f) => DropdownMenuItem(
+                value: f,
+                child: Text(
+                  f,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ))
+                  .toList(),
+              onChanged: (v) => setState(() => _selectedBuddy = v),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.send),
+              label: const Text("Send Request"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: colors.primary,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: _selectedBuddy != null && !_isRequesting
+                  ? () async {
+                setState(() => _isRequesting = true);
+                await widget.onSendWatchRequest(_selectedBuddy!);
+                setState(() => _isRequesting = false);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                      content:
+                      Text("Request sent to $_selectedBuddy")),
+                );
+              }
+                  : null,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

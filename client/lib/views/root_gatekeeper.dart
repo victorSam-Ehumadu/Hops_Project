@@ -145,27 +145,28 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
   }
 
   void _showSuccessConfirmationDialog(BuildContext context, String message) {
+    final colors = Theme.of(context).colorScheme;
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.check_circle, color: HopsTheme.tertiaryContainer),
-            SizedBox(width: 8),
-            Text("Success", style: TextStyle(color: HopsTheme.primary, fontWeight: FontWeight.bold)),
+            Icon(Icons.check_circle, color: colors.tertiaryContainer),
+            const SizedBox(width: 8),
+            Text("Success", style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold)),
           ],
         ),
-        content: Text(message, style: const TextStyle(color: HopsTheme.onBackground)),
+        content: Text(message, style: TextStyle(color: colors.onSurface)),
         actions: [
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
               Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (context) => const HopsApp()));
             },
-            child: const Text("Enter Dashboard", style: TextStyle(color: HopsTheme.primary, fontWeight: FontWeight.bold)),
+            child: Text("Enter Dashboard", style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold)),
           )
         ],
       ),
@@ -174,6 +175,8 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
 
   @override
   Widget build(BuildContext context) {
+  final theme = Theme.of(context);      // ← here
+  final colors = theme.colorScheme;     // ← here
     return AuthScreen(
       currentStatus: authEngineStatus,
       onSignUpTrigger: handleMeshSignUp,
