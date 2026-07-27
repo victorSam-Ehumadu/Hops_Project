@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:client/database/database_helper.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/theme_picker_screen.dart';
+import 'package:client/views/terms_screen.dart';
 
 class HopsProfileScreen extends StatefulWidget {
   const HopsProfileScreen({super.key});
@@ -111,8 +112,33 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                         builder: (_) => const ThemePickerScreen()));
               },
             ),
-
             const SizedBox(height: 24),
+
+            // Terms and Conditions button
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.description_outlined, color: colors.primary),
+              title: Text(
+                'Terms and Conditions',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.onBackground),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onBackground),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const TermsScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
             Card(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16)),

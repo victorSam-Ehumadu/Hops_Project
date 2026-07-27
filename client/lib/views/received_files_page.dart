@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:client/theme/hops_theme.dart';
+import 'package:share_plus/share_plus.dart';
 
 class ReceivedFilesPage extends StatefulWidget {
   const ReceivedFilesPage({super.key});
@@ -45,10 +45,22 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
     }
   }
 
+  void _shareFile(String fileName) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final path = '${dir.path}/$fileName';
+    final file = File(path);
+    if (await file.exists()) {
+      await Share.shareXFiles([XFile(path)], text: 'Received via Hops');
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("File not found")),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
+    final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: Flexible(
@@ -76,7 +88,6 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
           final rec = _records[index];
           final sender = rec['sender'] ?? 'Unknown';
           final fileName = rec['fileName'] ?? 'unknown';
-          final size = rec['size'] ?? 0;
           final ts = rec['timestamp'] ?? 0;
           final date = DateTime.fromMillisecondsSinceEpoch(ts as int);
           final icon = fileName.toString().endsWith('.pdf')
@@ -103,9 +114,18 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              trailing: IconButton(
-                icon: const Icon(Icons.open_in_new),
-                onPressed: () => _openFile(fileName.toString()),
+              trailing: PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'open') {
+                    _openFile(fileName.toString());
+                  } else if (value == 'share') {
+                    _shareFile(fileName.toString());
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(value: 'open', child: Text('Open')),
+                  PopupMenuItem(value: 'share', child: Text('Share / Save')),
+                ],
               ),
             ),
           );

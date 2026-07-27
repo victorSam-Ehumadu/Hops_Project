@@ -33,6 +33,7 @@ dependencies:
   flutter_foreground_task: ^6.0.0
   audio_session: ^0.1.21
   just_audio: ^0.9.38
+  share_plus: ^10.1.4
 
 dev_dependencies:
   flutter_test:

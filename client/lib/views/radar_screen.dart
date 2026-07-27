@@ -34,6 +34,15 @@ class _RadarScreenState extends State<RadarScreen>
   StreamSubscription<List<ScanResult>>? _sub;
   late AnimationController _radarController;
 
+  // Timers for cleanup
+  Timer? _cleanupTimer;
+
+  // Track last seen time per advertisement name (key = "HPS:username")
+  final Map<String, DateTime> _lastSeen = {};
+
+  // Map remote ID → current advertisement name
+  final Map<String, String> _remoteToName = {};
+
   @override
   void initState() {
     super.initState();
@@ -44,12 +53,46 @@ class _RadarScreenState extends State<RadarScreen>
 
     _sub = widget.radarStream.listen((results) {
       setState(() {
+        final now = DateTime.now();
         for (var r in results) {
           String name = r.advertisementData.advName;
           if (name.startsWith("HPS:")) {
+            final remoteId = r.device.remoteId.toString();
+
+            // If this remote ID was already seen with a different name,
+            // remove the old entry to avoid duplicate dots.
+            final previousName = _remoteToName[remoteId];
+            if (previousName != null && previousName != name) {
+              _devices.remove(previousName);
+              _lastSeen.remove(previousName);
+            }
+
+            // Update current mapping
             _devices[name] = r;
+            _lastSeen[name] = now;
+            _remoteToName[remoteId] = name;
           }
         }
+      });
+    });
+
+    // Periodically remove devices not seen for 10 seconds
+    _cleanupTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      final now = DateTime.now();
+      setState(() {
+        _devices.removeWhere((name, result) {
+          final last = _lastSeen[name];
+          if (last == null) return true;
+          final stale = now.difference(last).inSeconds > 10;
+          if (stale) {
+            final remoteId = result.device.remoteId.toString();
+            _remoteToName.remove(remoteId);
+            _lastSeen.remove(name);
+            return true;
+          }
+          return false;
+        });
       });
     });
   }
@@ -57,6 +100,7 @@ class _RadarScreenState extends State<RadarScreen>
   @override
   void dispose() {
     _sub?.cancel();
+    _cleanupTimer?.cancel();
     _radarController.dispose();
     super.dispose();
   }
@@ -144,7 +188,10 @@ class _RadarScreenState extends State<RadarScreen>
             Flexible(
               child: Text(
                 "Radar",
-                style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary, fontSize: 20),
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: colors.primary,
+                    fontSize: 20),
                 overflow: TextOverflow.ellipsis,
               ),
             ),

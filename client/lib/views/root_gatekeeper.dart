@@ -8,7 +8,7 @@ import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/views/auth_screen.dart';
 import 'package:client/views/hops_app.dart';
-import 'package:client/theme/hops_theme.dart';
+import 'package:client/views/terms_screen.dart';
 import 'dart:convert';
 
 class HopsRootGatekeeper extends StatefulWidget {
@@ -22,6 +22,22 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
   String authEngineStatus = "System Ready";
   final _secureStorage = const FlutterSecureStorage();
 
+  // ---------- Text styles for Terms (mirroring TermsScreen) ----------
+  static const TextStyle _titleStyle = TextStyle(
+    fontSize: 22,
+    fontWeight: FontWeight.bold,
+    height: 1.4,
+  );
+  static const TextStyle _headingStyle = TextStyle(
+    fontSize: 18,
+    fontWeight: FontWeight.bold,
+    height: 1.4,
+  );
+  static const TextStyle _bodyStyle = TextStyle(
+    fontSize: 14,
+    height: 1.5,
+  );
+
   Future<bool> _requestMeshPermissionsGate() async {
     setState(() => authEngineStatus = "Awaiting System Permissions...");
 
@@ -33,7 +49,8 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       Permission.camera,
     ].request();
 
-    if (statuses[Permission.location]!.isGranted && statuses[Permission.bluetoothScan]!.isGranted) {
+    if (statuses[Permission.location]!.isGranted &&
+        statuses[Permission.bluetoothScan]!.isGranted) {
       return true;
     } else {
       setState(() => authEngineStatus = "Err: Permissions Denied");
@@ -43,7 +60,10 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
 
   Map<String, String> _generateLocalMeshKeys() {
     RSAKeypair keypair = RSAKeypair.fromRandom();
-    return {'public': keypair.publicKey.toString(), 'private': keypair.privateKey.toString()};
+    return {
+      'public': keypair.publicKey.toString(),
+      'private': keypair.privateKey.toString(),
+    };
   }
 
   String _hashPassword(String password) {
@@ -52,7 +72,11 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     return digest.toString();
   }
 
-  Future<void> handleMeshSignUp({required String email, required String password, required String username}) async {
+  Future<void> handleMeshSignUp({
+    required String email,
+    required String password,
+    required String username,
+  }) async {
     try {
       bool permissionsGranted = await _requestMeshPermissionsGate();
       if (!permissionsGranted) return;
@@ -73,7 +97,9 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         'public_key': meshKeys['public'],
         'password_hash': passwordHash,
         'hops_token': rollingToken,
-        'token_expires_at': DateTime.now().add(const Duration(hours: 24)).toIso8601String(),
+        'token_expires_at': DateTime.now()
+            .add(const Duration(hours: 24))
+            .toIso8601String(),
       });
 
       final SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -84,7 +110,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       setState(() => authEngineStatus = "Registration Complete!");
 
       if (mounted) {
-        _showSuccessConfirmationDialog(context, "Welcome to the Mesh, $username!");
+        _showTermsAcceptanceDialog(username);
       }
     } catch (e) {
       print("❌ SIGNUP EXCEPTION: $e");
@@ -92,13 +118,17 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     }
   }
 
-  Future<void> handleMeshSignIn({required String email, required String password}) async {
+  Future<void> handleMeshSignIn({
+    required String email,
+    required String password,
+  }) async {
     try {
       bool permissionsGranted = await _requestMeshPermissionsGate();
       if (!permissionsGranted) return;
 
       setState(() => authEngineStatus = "Verifying Credentials...");
-      final String targetedUsername = email.contains('@') ? email.split('@').first : email;
+      final String targetedUsername =
+      email.contains('@') ? email.split('@').first : email;
 
       final response = await Supabase.instance.client
           .from('profiles')
@@ -120,7 +150,9 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       String rollingToken = const Uuid().v4();
       await Supabase.instance.client.from('profiles').update({
         'hops_token': rollingToken,
-        'token_expires_at': DateTime.now().add(const Duration(hours: 24)).toIso8601String(),
+        'token_expires_at': DateTime.now()
+            .add(const Duration(hours: 24))
+            .toIso8601String(),
       }).eq('id', response['id']);
 
       final SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -137,46 +169,133 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       setState(() => authEngineStatus = "Session Secured!");
 
       if (mounted) {
-        _showSuccessConfirmationDialog(context, "Welcome back, ${response['username']}!");
+        _showTermsAcceptanceDialog(response['username']);
       }
     } catch (e) {
       setState(() => authEngineStatus = "Err: Authentication Aborted");
     }
   }
 
-  void _showSuccessConfirmationDialog(BuildContext context, String message) {
-    final colors = Theme.of(context).colorScheme;
+  // Terms acceptance dialog with rich-text styled terms
+  void _showTermsAcceptanceDialog(String username) async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasAccepted = prefs.getBool('terms_accepted') ?? false;
+
+    if (hasAccepted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const HopsApp()),
+      );
+      return;
+    }
+
+    bool agreed = false;
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Row(
-          children: [
-            Icon(Icons.check_circle, color: colors.tertiaryContainer),
-            const SizedBox(width: 8),
-            Text("Success", style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold)),
-          ],
-        ),
-        content: Text(message, style: TextStyle(color: colors.onSurface)),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (context) => const HopsApp()));
-            },
-            child: Text("Enter Dashboard", style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold)),
-          )
-        ],
-      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final colors = Theme.of(context).colorScheme;
+
+            // Build rich-text spans from the raw terms text
+            final lines = TermsScreen.termsText.split('\n');
+            final spans = <TextSpan>[];
+            for (int i = 0; i < lines.length; i++) {
+              final line = lines[i];
+              if (line.trim().isEmpty) {
+                spans.add(const TextSpan(text: '\n'));
+                continue;
+              }
+              if (i == 0) {
+                // Main title
+                spans.add(TextSpan(
+                  text: line.trim(),
+                  style: _titleStyle.copyWith(color: colors.primary),
+                ));
+                spans.add(const TextSpan(text: '\n\n'));
+                continue;
+              }
+              final headingPattern = RegExp(r'^\d+\.\s');
+              if (headingPattern.hasMatch(line.trim())) {
+                // Section heading
+                spans.add(const TextSpan(text: '\n\n'));
+                spans.add(TextSpan(
+                  text: line.trim(),
+                  style: _headingStyle.copyWith(color: colors.primary),
+                ));
+                spans.add(const TextSpan(text: '\n\n'));
+                continue;
+              }
+              // Body text – keep inside dialog black for readability on white bg
+              spans.add(TextSpan(
+                text: line.trim().isEmpty ? '\n' : '${line.trim()} ',
+                style: _bodyStyle.copyWith(color: Colors.black87),
+              ));
+            }
+
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              title: Text(
+                "Welcome, $username!",
+                style: TextStyle(
+                    color: colors.primary, fontWeight: FontWeight.bold),
+              ),
+              content: SizedBox(
+                height: 300,
+                child: SingleChildScrollView(
+                  child: RichText(
+                    text: TextSpan(children: spans),
+                  ),
+                ),
+              ),
+              actions: [
+                Row(
+                  children: [
+                    Checkbox(
+                      value: agreed,
+                      onChanged: (val) {
+                        setDialogState(() => agreed = val ?? false);
+                      },
+                      activeColor: colors.primary,
+                    ),
+                    const Expanded(
+                      child: Text(
+                        "I agree to the Terms and Conditions",
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: agreed ? colors.primary : Colors.grey,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: agreed
+                      ? () async {
+                    await prefs.setBool('terms_accepted', true);
+                    Navigator.of(context).pop();
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                          builder: (_) => const HopsApp()),
+                    );
+                  }
+                      : null,
+                  child: const Text("Proceed to Hops"),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
     return AuthScreen(
       currentStatus: authEngineStatus,
       onSignUpTrigger: handleMeshSignUp,

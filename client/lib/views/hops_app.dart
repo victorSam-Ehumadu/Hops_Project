@@ -53,6 +53,9 @@ class _HopsAppState extends State<HopsApp> {
   final _radarStreamController = StreamController<List<ScanResult>>.broadcast();
   Stream<List<ScanResult>> get radarStream => _radarStreamController.stream;
 
+  // At the top, next to the other sets
+  final Set<String> _handledWatchAcks = {};
+
   final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
 
@@ -239,6 +242,7 @@ class _HopsAppState extends State<HopsApp> {
       _saveWatchState();
       _notifyWatchingBuddiesChanged();
       _notifyWatchRequestsChanged();
+      _handledWatchAcks.clear();
     });
   }
 
@@ -440,17 +444,19 @@ class _HopsAppState extends State<HopsApp> {
             }
           }
         }
-        // Watch ACK
+
+        // Watch ACK – permanent one‑time snackbar
         if (name.startsWith("WATCH_ACK:")) {
           final parts = name.substring(10).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
             final sender = parts[1];
-            if (!_recentWatchSenders.contains(sender)) {
-              _addRecentWatchSender(sender);
+            if (!_handledWatchAcks.contains(sender)) {
+              _handledWatchAcks.add(sender);
               _onWatchRequestAccepted(sender);
             }
           }
         }
+
         // Tag game
         if (name.startsWith("TAG:")) {
           final parts = name.substring(4).split(":");
@@ -1235,7 +1241,7 @@ class _HopsAppState extends State<HopsApp> {
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 12,
-                          color: colors.primary,   // ★ now follows the theme primary
+                          color: colors.primary,
                         ),
                         maxLines: 2,
                       ),

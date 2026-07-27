@@ -37,6 +37,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  bool _isLoading = false;   // new
 
   @override
   void initState() {
@@ -276,22 +277,29 @@ class _AuthScreenState extends State<AuthScreen> {
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
             ),
-            onPressed: () {
+            onPressed: _isLoading ? null : () async {
               if (_usernameController.text.isEmpty || _emailController.text.isEmpty || _passwordController.text.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill in all registration fields!")));
                 return;
               }
               if (_passwordController.text == _confirmPasswordController.text) {
-                widget.onSignUpTrigger(
-                  email: _emailController.text.trim(),
-                  password: _passwordController.text.trim(),
-                  username: _usernameController.text.trim(),
-                );
+                setState(() => _isLoading = true);
+                try {
+                  await widget.onSignUpTrigger(
+                    email: _emailController.text.trim(),
+                    password: _passwordController.text.trim(),
+                    username: _usernameController.text.trim(),
+                  );
+                } finally {
+                  setState(() => _isLoading = false);
+                }
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Passwords do not match!")));
               }
             },
-            child: const Text("Join Mesh", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            child: _isLoading
+                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Text("Join Mesh", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           ),
         )
       ],
@@ -324,17 +332,24 @@ class _AuthScreenState extends State<AuthScreen> {
             ),
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent, foregroundColor: Colors.white),
-              onPressed: () {
+              onPressed: _isLoading ? null : () async {
                 if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please supply authentication metrics!")));
                   return;
                 }
-                widget.onSignInTrigger(
-                  email: _emailController.text.trim(),
-                  password: _passwordController.text.trim(),
-                );
+                setState(() => _isLoading = true);
+                try {
+                  await widget.onSignInTrigger(
+                    email: _emailController.text.trim(),
+                    password: _passwordController.text.trim(),
+                  );
+                } finally {
+                  setState(() => _isLoading = false);
+                }
               },
-              child: const Text("Sign In", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              child: _isLoading
+                  ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text("Sign In", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
           ),
         )
@@ -342,6 +357,7 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
+  // ... rest of the methods (_buildCapsuleInput, _buildBentoInfoCard, etc.) remain unchanged
   Widget _buildCapsuleInput({
     required String label,
     required String hint,

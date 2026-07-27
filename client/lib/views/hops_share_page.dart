@@ -45,7 +45,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
   void _startNearbyDiscoveryAndAdvertising() {
     Nearby().startAdvertising(
       widget.myUsername,
-      Strategy.P2P_STAR,
+      Strategy.P2P_CLUSTER,
       onConnectionInitiated: (id, info) {
         Nearby().acceptConnection(id, onPayLoadRecieved: (endpointId, payload) {
           _onPayloadReceived(endpointId, payload);
@@ -78,7 +78,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
 
     Nearby().startDiscovery(
       widget.myUsername,
-      Strategy.P2P_STAR,
+      Strategy.P2P_CLUSTER,
       onEndpointFound: (id, name, serviceId) {
         setState(() {
           _discoveredDevices.removeWhere((d) => d.id == id);
@@ -142,16 +142,24 @@ class _HopsSharePageState extends State<HopsSharePage> {
     final dir = await getApplicationDocumentsDirectory();
     final filePath = '${dir.path}/$fileName';
     final file = File(filePath);
-    await file.writeAsBytes(data);
-    _updateReceivedFilesRecord(sender, fileName, data.length);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Received $fileName from $sender (${data.length} bytes)")),
-    );
+
+    // Write asynchronously
+    await file.writeAsBytes(data, flush: true);   // flush ensures the data hits disk
+
+    // Update the records JSON
+    await _updateReceivedFilesRecord(sender, fileName, data.length);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Received $fileName from $sender (${data.length} bytes)")),
+      );
+    }
   }
 
   Future<void> _updateReceivedFilesRecord(String sender, String fileName, int size) async {
     final dir = await getApplicationDocumentsDirectory();
     final recordFile = File('${dir.path}/received_files.json');
+
     List<Map<String, dynamic>> records = [];
     if (await recordFile.exists()) {
       final content = await recordFile.readAsString();
@@ -159,13 +167,15 @@ class _HopsSharePageState extends State<HopsSharePage> {
         records = List<Map<String, dynamic>>.from(json.decode(content));
       }
     }
+
     records.add({
       'sender': sender,
       'fileName': fileName,
       'size': size,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
-    await recordFile.writeAsString(json.encode(records));
+
+    await recordFile.writeAsString(json.encode(records), flush: true);
   }
 
   void _pickFile() async {
