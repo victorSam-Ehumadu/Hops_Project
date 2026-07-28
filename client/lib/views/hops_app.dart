@@ -411,6 +411,7 @@ class _HopsAppState extends State<HopsApp> {
             }
           }
         }
+
         // Friend request
         if (name.startsWith("FRIEND_REQ:")) {
           final parts = name.substring(11).split(":");
@@ -423,6 +424,7 @@ class _HopsAppState extends State<HopsApp> {
             }
           }
         }
+
         // Friend ACK
         if (name.startsWith("FRIEND_ACK:")) {
           final parts = name.substring(11).split(":");
@@ -430,6 +432,7 @@ class _HopsAppState extends State<HopsApp> {
             await _writeContactLogToDatabase(parts[1], "Friend added via radar");
           }
         }
+
         // Watch request
         if (name.startsWith("WATCH_REQ:")) {
           final parts = name.substring(10).split(":");
