@@ -27,6 +27,7 @@ import 'package:client/views/hops_and_robbers.dart';
 import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
 import 'package:client/services/notification_service.dart';
+import 'package:client/services/chat_connection_service.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
@@ -78,6 +79,7 @@ class _HopsAppState extends State<HopsApp> {
 
   // Watch Me state
   Set<String> _watchingBuddies = {};
+  Set<String> _addedFriends = {};
   final List<String> pendingWatchRequests = [];
   final Set<String> _processingWatchAccepts = {};
 
@@ -125,25 +127,6 @@ class _HopsAppState extends State<HopsApp> {
     final watching = prefs.getStringList('watchingBuddies') ?? [];
     setState(() => _watchingBuddies = watching.toSet());
     _notifyWatchingBuddiesChanged();
-  }
-
-  Future<void> _addReceivedFileRecord(String sender, String fileName, int size) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final recordFile = File('${dir.path}/received_files.json');
-    List<Map<String, dynamic>> records = [];
-    if (await recordFile.exists()) {
-      final content = await recordFile.readAsString();
-      if (content.isNotEmpty) {
-        records = List<Map<String, dynamic>>.from(json.decode(content));
-      }
-    }
-    records.add({
-      'sender': sender,
-      'fileName': fileName,
-      'size': size,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-    });
-    await recordFile.writeAsString(json.encode(records));
   }
 
   void _cancelEmergencyFlare({bool silent = false}) {
@@ -278,7 +261,10 @@ class _HopsAppState extends State<HopsApp> {
   Future<void> acceptFriendRequest(String sender) async {
     await BlePeripheral.stopAdvertising();
     await BlePeripheral.startAdvertising(localName: "FRIEND_ACK:$sender:$myUsername", services: []);
-    await _writeContactLogToDatabase(sender, "Friend added via radar");
+    if (!_addedFriends.contains(sender)) {
+      _addedFriends.add(sender);
+      await _refreshContactsTrayList();
+    }
     Future.delayed(const Duration(seconds: 5), () {
       BlePeripheral.stopAdvertising();
       BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
@@ -392,6 +378,51 @@ class _HopsAppState extends State<HopsApp> {
     setState(() => myUsername = prefs.getString('my_username') ?? 'Unknown_User');
   }
 
+  Future<void> _startChatConnection(String friendUsername) async {
+    // Show a loading indicator while we discover and connect
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final chatService = ChatConnectionService(myUsername: myUsername);
+    final endpointId = await chatService.connectToFriend(friendUsername);
+
+    // Close the loading dialog
+    if (mounted) Navigator.of(context).pop();
+
+    if (endpointId != null && mounted) {
+      // Connection successful → open chat with the live service
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => IndividualChatTerminalView(
+            peerName: friendUsername,
+            chatService: chatService,
+          ),
+        ),
+      ).then((_) {
+        chatService.disconnect();
+        _refreshContactsTrayList();
+      });
+    } else {
+      // Connection failed → open chat in offline mode (local only)
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Friend not nearby. Chat will be local.")),
+        );
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => IndividualChatTerminalView(
+              peerName: friendUsername,
+              chatService: null,
+            ),
+          ),
+        ).then((_) => _refreshContactsTrayList());
+      }
+    }
+  }
+
   void _initializeParallelBleTransceiverEngine() async {
     if (_bleInitialized) return;
     _bleInitialized = true;
@@ -427,9 +458,14 @@ class _HopsAppState extends State<HopsApp> {
         if (name.startsWith("FRIEND_ACK:")) {
           final parts = name.substring(11).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
-            await _writeContactLogToDatabase(parts[1], "Friend added via radar");
+            // Register the friend without a chat message
+            if (!_addedFriends.contains(parts[1])) {
+              _addedFriends.add(parts[1]);
+              await _refreshContactsTrayList();
+            }
           }
         }
+
         // Watch request
         if (name.startsWith("WATCH_REQ:")) {
           final parts = name.substring(10).split(":");
@@ -584,6 +620,8 @@ class _HopsAppState extends State<HopsApp> {
     final db = await DatabaseHelper.instance.database;
     final maps = await db.query(DatabaseHelper.table);
     Map<String, Map<String, dynamic>> contactThreads = {};
+
+    // Existing contacts from messages
     for (var row in maps) {
       String sender = row[DatabaseHelper.columnSenderId] as String;
       if (sender != myUsername) {
@@ -594,6 +632,18 @@ class _HopsAppState extends State<HopsApp> {
         };
       }
     }
+
+    // Ensure every added friend appears, even with no messages
+    for (final friend in _addedFriends) {
+      if (!contactThreads.containsKey(friend)) {
+        contactThreads[friend] = {
+          'username': friend,
+          'lastMsg': 'Connected',
+          'time': ''
+        };
+      }
+    }
+
     setState(() => localActiveContacts = contactThreads.values.toList());
   }
 
@@ -878,20 +928,20 @@ class _HopsAppState extends State<HopsApp> {
                     style: const TextStyle(fontSize: 13, color: Colors.black54),
                   ),
                 ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                  onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
-                ),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => IndividualChatTerminalView(
-                        peerName: contact['username'] as String,
-                        onSendMessage: (recipient, message) async {},
-                      ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.chat_bubble_outline, color: colors.primary),
+                      onPressed: () => _startChatConnection(contact['username'] as String),
                     ),
-                  ).then((_) => _refreshContactsTrayList());
-                },
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                      onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
+                    ),
+                  ],
+                ),
+                onTap: null,  // Remove the old onTap that opened the chat directly
               ),
             );
           },
