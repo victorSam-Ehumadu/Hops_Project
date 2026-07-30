@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "837243217396",
+    "project_id": "hops-4ef1c",
+    "storage_bucket": "hops-4ef1c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:837243217396:android:a796467bf7ce46f1de05a1",
+        "android_client_info": {
+          "package_name": "com.example.client"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBV2LtCl65hNomWUAvTs0C3fAuIK1tWzCc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

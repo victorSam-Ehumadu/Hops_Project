@@ -12,6 +12,7 @@ class RadarScreen extends StatefulWidget {
   final void Function(String sender) onDeclineRequest;
   final Set<String> friendUsernames;
   final ValueChanged<String>? onActivateFlare;
+  final VoidCallback? onRescan;
 
   const RadarScreen({
     super.key,
@@ -22,6 +23,7 @@ class RadarScreen extends StatefulWidget {
     required this.onDeclineRequest,
     required this.friendUsernames,
     this.onActivateFlare,
+    this.onRescan,
   });
 
   @override
@@ -272,51 +274,70 @@ class _RadarScreenState extends State<RadarScreen>
           SizedBox(
             height: radarSize,
             width: double.infinity,
-            child: GestureDetector(
-              onTapUp: (details) {
-                final center = Offset(radarSize / 2, radarSize / 2);
-                final tapPos = details.localPosition - center;
-                const hitThreshold = 30.0;
+            child: Stack(
+              children: [
+                // Radar painting + tap detection (unchanged)
+                GestureDetector(
+                  onTapUp: (details) {
+                    final center = Offset(radarSize / 2, radarSize / 2);
+                    final tapPos = details.localPosition - center;
+                    const hitThreshold = 30.0;
 
-                _DeviceBlip? closest;
-                double minDist = double.infinity;
-                for (final blip in blips) {
-                  final blipPos = Offset(
-                    blip.radius * (radarSize / 2) * math.cos(blip.angle),
-                    blip.radius * (radarSize / 2) * math.sin(blip.angle),
-                  );
-                  final dist = (tapPos - blipPos).distance;
-                  if (dist < hitThreshold && dist < minDist) {
-                    closest = blip;
-                    minDist = dist;
-                  }
-                }
-                if (closest != null) {
-                  if (widget.friendUsernames.contains(closest.username)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("${closest.username} is already your friend")),
-                    );
-                  } else {
-                    widget.onSendFriendRequest(closest.username);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("Friend request sent to ${closest.username}!")),
-                    );
-                  }
-                }
-              },
-              child: AnimatedBuilder(
-                animation: _radarController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    painter: RadarPainter(
-                      rotation: _radarController.value * 2 * math.pi,
-                      primaryColor: colors.primary,
-                      blips: blips,
+                    _DeviceBlip? closest;
+                    double minDist = double.infinity;
+                    for (final blip in blips) {
+                      final blipPos = Offset(
+                        blip.radius * (radarSize / 2) * math.cos(blip.angle),
+                        blip.radius * (radarSize / 2) * math.sin(blip.angle),
+                      );
+                      final dist = (tapPos - blipPos).distance;
+                      if (dist < hitThreshold && dist < minDist) {
+                        closest = blip;
+                        minDist = dist;
+                      }
+                    }
+                    if (closest != null) {
+                      if (widget.friendUsernames.contains(closest.username)) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("${closest.username} is already your friend")),
+                        );
+                      } else {
+                        widget.onSendFriendRequest(closest.username);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("Friend request sent to ${closest.username}!")),
+                        );
+                      }
+                    }
+                  },
+                  child: AnimatedBuilder(
+                    animation: _radarController,
+                    builder: (context, child) {
+                      return CustomPaint(
+                        painter: RadarPainter(
+                          rotation: _radarController.value * 2 * math.pi,
+                          primaryColor: colors.primary,
+                          blips: blips,
+                        ),
+                        size: Size(radarSize, radarSize),
+                      );
+                    },
+                  ),
+                ),
+                // Rescan button – top‑left inside the radar area
+                Positioned(
+                  top: 4,
+                  left: 4,
+                  child: IconButton(
+                    icon: Icon(Icons.refresh, color: colors.primary, size: 20),
+                    onPressed: widget.onRescan,
+                    tooltip: 'Rescan',
+                    style: IconButton.styleFrom(
+                      backgroundColor: colors.surface.withOpacity(0.6),
+                      padding: const EdgeInsets.all(6),
                     ),
-                    size: Size(radarSize, radarSize),
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
           const Divider(height: 1),

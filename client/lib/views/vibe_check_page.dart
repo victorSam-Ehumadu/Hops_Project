@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
-import 'package:client/theme/hops_theme.dart';
 
 class VibeCheckPage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
@@ -22,26 +21,29 @@ class VibeCheckPage extends StatefulWidget {
 class _VibeCheckPageState extends State<VibeCheckPage> {
   StreamSubscription? _streamSub;
 
-  // Manual crowd level selection
-  int _selectedCrowdLevel = 0; // 0=Quiet, 1=Moderate, 2=Busy, 3=Packed
+  int _selectedCrowdLevel = 0;
 
   final TextEditingController _locationController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();     // explicit focus for the text field
 
   List<Map<String, dynamic>> _records = [];
 
-  // Community reports received via BLE
   final Map<String, _CommunityReport> _communityReports = {};
+
+  // Throttle helpers
+  DateTime _lastRebuild = DateTime(2000);
+  bool _pendingRebuild = false;
 
   @override
   void initState() {
     super.initState();
 
     _streamSub = widget.radarStream.listen((results) {
-      print("📡 VibeCheck stream received ${results.length} results");
+      bool updated = false;
+
       for (final r in results) {
         final advName = r.advertisementData.advName;
         if (advName.startsWith("VBT:")) {
-          print("🏷️ Found VBT tag: $advName");
           final parts = advName.substring(4).split(":");
           if (parts.length == 2) {
             final location = parts[0];
@@ -54,15 +56,35 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                 level: level,
                 timestamp: DateTime.now(),
               );
+              updated = true;
             }
           }
         }
       }
-      // Remove old reports after 2 minutes
+
+      // Remove reports older than 2 minutes
       final now = DateTime.now();
       _communityReports.removeWhere(
               (key, report) => now.difference(report.timestamp).inMinutes > 2);
-      if (mounted) setState(() {});
+
+      if (updated) {
+        // Throttle: only schedule a rebuild if at least 2 seconds have passed
+        if (now.difference(_lastRebuild).inSeconds >= 2) {
+          if (mounted) setState(() {});
+          _lastRebuild = now;
+          _pendingRebuild = false;
+        } else if (!_pendingRebuild) {
+          _pendingRebuild = true;
+          // Wait until 2 seconds have elapsed, then rebuild once
+          Future.delayed(const Duration(seconds: 2), () {
+            if (mounted && _pendingRebuild) {
+              setState(() {});
+              _lastRebuild = DateTime.now();
+              _pendingRebuild = false;
+            }
+          });
+        }
+      }
     });
 
     _loadRecords();
@@ -70,10 +92,10 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
 
   int _levelToApproxCount(int level) {
     switch (level) {
-      case 0: return 1; // Quiet
-      case 1: return 4; // Moderate
-      case 2: return 8; // Busy
-      case 3: return 15; // Packed
+      case 0: return 1;
+      case 1: return 4;
+      case 2: return 8;
+      case 3: return 15;
       default: return 0;
     }
   }
@@ -101,14 +123,14 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
       DatabaseHelper.vibeColId: const Uuid().v4(),
       DatabaseHelper.vibeColLocation: location,
       DatabaseHelper.vibeColDeviceCount: approxCount,
-      DatabaseHelper.vibeColTimestamp:
-      DateTime.now().millisecondsSinceEpoch,
+      DatabaseHelper.vibeColTimestamp: DateTime.now().millisecondsSinceEpoch,
     };
     await DatabaseHelper.instance.insertVibeRecord(record);
 
     await widget.onAdvertiseVibeTag(location, level);
 
     _locationController.clear();
+    _focusNode.unfocus();   // dismiss the keyboard after saving
     await _loadRecords();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -147,13 +169,14 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
   void dispose() {
     _streamSub?.cancel();
     _locationController.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     final communityList = _communityReports.values.toList()
       ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
@@ -197,7 +220,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                     onTap: () => setState(() => _selectedCrowdLevel = i),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),  // slightly reduced horizontal padding
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                       decoration: BoxDecoration(
                         color: isSelected
                             ? _levelColors[i].withOpacity(0.2)
@@ -236,6 +259,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                 Expanded(
                   child: TextField(
                     controller: _locationController,
+                    focusNode: _focusNode,          // use the persistent focus node
                     decoration: InputDecoration(
                       hintText: "e.g., Library, Cafeteria",
                       labelText: "Tag this location",
@@ -262,6 +286,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                 ),
               ],
             ),
+            // ... rest of the widget tree unchanged ...
             const SizedBox(height: 8),
             const Text(
               "Your report will be visible to nearby Hops users.",

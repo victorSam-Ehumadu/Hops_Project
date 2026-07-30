@@ -28,6 +28,7 @@ import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/services/chat_connection_service.dart';
+import 'package:client/services/hops_constants.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
@@ -43,12 +44,20 @@ class _HopsAppState extends State<HopsApp> {
 
   bool _isFlareActive = false;
   Timer? _flareCancelTimer;
+  Timer? _scanRestartTimer;
+
+  DateTime _lastRadarPush = DateTime(2000);   // force immediate first push
 
   StreamSubscription<List<ScanResult>>? _bleScanResultsSubscription;
   bool _bleInitialized = false;
 
   String? _activePairingCode;
   Timer? _pairingTimeout;
+
+  // Diagnostic counters
+  int _totalScanResults = 0;
+  final Set<String> _uniqueHopsDevices = {};
+  Timer? _diagTimer;
 
   // Radar stream
   final _radarStreamController = StreamController<List<ScanResult>>.broadcast();
@@ -102,6 +111,13 @@ class _HopsAppState extends State<HopsApp> {
     _loadWatchState();
     _checkPermissionsAndStartBLE();
     _refreshContactsTrayList();
+
+    _diagTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      print('📡 [DIAG] BLE scan: ${_totalScanResults} total packets, '
+          '${_uniqueHopsDevices.length} unique Hops devices in last 5s');
+      _totalScanResults = 0;
+      _uniqueHopsDevices.clear();
+    });
   }
 
   @override
@@ -115,6 +131,8 @@ class _HopsAppState extends State<HopsApp> {
     _pendingWatchStreamController.close();
     _watchingBuddiesStreamController.close();
     _gameEventStreamController.close();
+    _diagTimer?.cancel();
+    _scanRestartTimer?.cancel();
     for (final timer in _recentWatchTimers.values) {
       timer.cancel();
     }
@@ -427,9 +445,31 @@ class _HopsAppState extends State<HopsApp> {
     if (_bleInitialized) return;
     _bleInitialized = true;
     await BlePeripheral.initialize();
-    await BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+    try {
+      await BlePeripheral.startAdvertising(
+        localName: "HPS:$myUsername",
+        services: [],
+      );
+      print('✅ Advertising started successfully');
+    } catch (e) {
+      print('❌ Advertising failed: $e');
+    }
     _bleScanResultsSubscription = FlutterBluePlus.scanResults.listen((results) async {
-      _radarStreamController.add(results);
+      _totalScanResults += results.length;
+
+      for (final r in results) {
+        if (r.advertisementData.advName.startsWith("HPS:")) {
+          _uniqueHopsDevices.add(r.device.remoteId.toString());
+        }
+      }
+
+      // Throttle: only forward results every 500ms when in noise mode
+      const noiseMode = bool.fromEnvironment('NOISE_MODE', defaultValue: false);
+      if (!noiseMode || DateTime.now().difference(_lastRadarPush).inMilliseconds >= 500) {
+        _radarStreamController.add(results);
+        _lastRadarPush = DateTime.now();
+      }
+
       for (final r in results) {
         final name = r.advertisementData.advName;
         // ACK
@@ -545,7 +585,20 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _stopAllAdvertising() async => BlePeripheral.stopAdvertising();
   Future<void> _startContinuousScan() async {
-    await FlutterBluePlus.startScan(androidUsesFineLocation: true, continuousUpdates: true);
+    const noiseMode = bool.fromEnvironment('NOISE_MODE', defaultValue: false);
+
+    if (noiseMode) {
+      await FlutterBluePlus.startScan(
+        androidUsesFineLocation: true,
+        continuousUpdates: true,
+        androidScanMode: AndroidScanMode.lowLatency,   // still faster!
+      );
+    } else {
+      await FlutterBluePlus.startScan(
+        androidUsesFineLocation: true,
+        continuousUpdates: true,
+      );
+    }
   }
 
   // ---------- Pairing ----------
@@ -781,8 +834,8 @@ class _HopsAppState extends State<HopsApp> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);      // ← here
-    final colors = theme.colorScheme;     // ← here
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     final List<Widget> tabs = [
       RadarScreen(
         radarStream: radarStream,
@@ -792,6 +845,13 @@ class _HopsAppState extends State<HopsApp> {
         onDeclineRequest: declineRequest,
         friendUsernames: friendUsernames,
         onActivateFlare: (String reason) => _broadcastEmergencyFlare(reason),
+        onRescan: () {                                 // <-- add this
+          FlutterBluePlus.stopScan();
+          FlutterBluePlus.startScan(
+            androidUsesFineLocation: true,
+            continuousUpdates: true,
+          );
+        },
       ),
       _buildContactsTab(),
       _buildFeaturesTab(),
