@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -8,6 +9,7 @@ import 'package:client/database/database_helper.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/theme_picker_screen.dart';
 import 'package:client/views/terms_screen.dart';
+import 'package:client/views/edit_identity_screen.dart';
 
 class HopsProfileScreen extends StatefulWidget {
   const HopsProfileScreen({super.key});
@@ -17,11 +19,34 @@ class HopsProfileScreen extends StatefulWidget {
 
 class _HopsProfileScreenState extends State<HopsProfileScreen> {
   String dynamicProfileUsername = "Loading Node...";
+  String _nickname = '';
+  String _bio = '';
+  String? _avatarPath;
 
   @override
   void initState() {
     super.initState();
     _loadPersistedIdentityStrings();
+    _loadIdentityData();
+  }
+
+  void _showFullImage() {
+    if (_avatarPath == null) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: GestureDetector(
+          onTap: () => Navigator.pop(ctx),
+          child: InteractiveViewer(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.file(File(_avatarPath!)),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadPersistedIdentityStrings() async {
@@ -32,10 +57,22 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
     });
   }
 
+  Future<void> _loadIdentityData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _nickname = prefs.getString('nickname') ?? '';
+      _bio = prefs.getString('bio') ?? '';
+      _avatarPath = prefs.getString('avatar_path');
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final displayName =
+    _nickname.isNotEmpty ? _nickname : dynamicProfileUsername;
+    final bioText = _bio.isNotEmpty ? _bio : "Proud Hops User";
 
     return Scaffold(
       appBar: AppBar(
@@ -56,15 +93,24 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            CircleAvatar(
+            GestureDetector(
+              onTap: _showFullImage,
+              child: CircleAvatar(
                 radius: 48,
                 backgroundColor: colors.primaryContainer,
-                child: const Icon(Icons.person, size: 48, color: Colors.white)),
+                backgroundImage: _avatarPath != null
+                    ? FileImage(File(_avatarPath!))
+                    : null,
+                child: _avatarPath == null
+                    ? const Icon(Icons.person, size: 48, color: Colors.white)
+                    : null,
+              ),
+            ),
             const SizedBox(height: 16),
             FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(
-                dynamicProfileUsername,
+                displayName,
                 style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
@@ -72,14 +118,41 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
               ),
             ),
             Text(
-              "BScIT Node Operator",
+              bioText,
               style: TextStyle(
                   fontSize: 14,
                   color: colors.onBackground.withOpacity(0.6)),
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 32),
+
+            // Edit Identity button
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.edit, color: colors.primary),
+              title: Text(
+                'Edit Identity',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onBackground),
+              onTap: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const EditIdentityScreen()),
+                );
+                if (result == true) {
+                  _loadIdentityData();
+                  setState(() {}); // force rebuild
+                }
+              },
+            ),
 
             // App Theme button
             ListTile(
@@ -118,7 +191,8 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
             ListTile(
               contentPadding:
               const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              leading: Icon(Icons.description_outlined, color: colors.primary),
+              leading:
+              Icon(Icons.description_outlined, color: colors.primary),
               title: Text(
                 'Terms and Conditions',
                 style: TextStyle(
@@ -145,7 +219,8 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
               color: Colors.red.withOpacity(0.05),
               elevation: 0,
               child: ListTile(
-                leading: const Icon(Icons.logout, color: Colors.redAccent),
+                leading:
+                const Icon(Icons.logout, color: Colors.redAccent),
                 title: const Text(
                   "Log Out / Destroy Identity",
                   style: TextStyle(

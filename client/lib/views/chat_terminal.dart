@@ -3,15 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
+import 'package:client/services/chat_connection_service.dart';
 
 class IndividualChatTerminalView extends StatefulWidget {
   final String peerName;
-  final Future<void> Function(String recipient, String message) onSendMessage;
+  final ChatConnectionService? chatService;   // nullable
+
   const IndividualChatTerminalView({
     super.key,
     required this.peerName,
-    required this.onSendMessage,
+    this.chatService,
   });
+
   @override
   State<IndividualChatTerminalView> createState() =>
       _IndividualChatTerminalViewState();
@@ -29,15 +32,26 @@ class _IndividualChatTerminalViewState
     super.initState();
     _loadDeviceOwnerLabel();
     _loadPeerMessageLogs();
+
+    // Set up listener for incoming messages if we have a live connection
+    if (widget.chatService != null) {
+      widget.chatService!.onMessageReceived = (sender, message) async {
+        final incomingPayload = {
+          DatabaseHelper.columnId: const Uuid().v4(),
+          DatabaseHelper.columnMessage: message,
+          DatabaseHelper.columnSenderId: sender,
+          DatabaseHelper.columnIsForMe: 1,
+          DatabaseHelper.columnNeedsRelay: 0,
+          DatabaseHelper.columnTimestamp:
+          DateTime.now().millisecondsSinceEpoch,
+        };
+        await DatabaseHelper.instance.insertMessage(incomingPayload);
+        _loadPeerMessageLogs();
+      };
+    }
+
     _refreshTimer = Timer.periodic(
         const Duration(seconds: 2), (_) => _loadPeerMessageLogs());
-  }
-
-  @override
-  void dispose() {
-    _refreshTimer?.cancel();
-    _msgInputController.dispose();
-    super.dispose();
   }
 
   Future<void> _loadDeviceOwnerLabel() async {
@@ -62,17 +76,36 @@ class _IndividualChatTerminalViewState
   }
 
   @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _msgInputController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final isConnected = widget.chatService?.isConnected ?? false;
+
     return Scaffold(
       appBar: AppBar(
-        title: Flexible(
-          child: Text(
-            widget.peerName,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            overflow: TextOverflow.ellipsis,
-          ),
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(
+                widget.peerName,
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 18),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (isConnected)
+              const Padding(
+                padding: EdgeInsets.only(left: 8),
+                child: Icon(Icons.circle, size: 10, color: Colors.green),
+              ),
+          ],
         ),
         elevation: 0,
       ),
@@ -166,9 +199,10 @@ class _IndividualChatTerminalViewState
                       };
                       await DatabaseHelper.instance
                           .insertMessage(outgoingPayload);
-                      await widget.onSendMessage(widget.peerName, text);
-                      _msgInputController.clear();
                       _loadPeerMessageLogs();
+                      // Send over Nearby if connected
+                      widget.chatService?.sendMessage(text);
+                      _msgInputController.clear();
                     }
                   },
                 )

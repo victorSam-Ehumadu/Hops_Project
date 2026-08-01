@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/views/profile_screen.dart';
 
 class RadarScreen extends StatefulWidget {
@@ -12,6 +14,7 @@ class RadarScreen extends StatefulWidget {
   final void Function(String sender) onDeclineRequest;
   final Set<String> friendUsernames;
   final ValueChanged<String>? onActivateFlare;
+  final VoidCallback? onRescan;
 
   const RadarScreen({
     super.key,
@@ -22,6 +25,7 @@ class RadarScreen extends StatefulWidget {
     required this.onDeclineRequest,
     required this.friendUsernames,
     this.onActivateFlare,
+    this.onRescan,
   });
 
   @override
@@ -37,6 +41,8 @@ class _RadarScreenState extends State<RadarScreen>
   // Timers for cleanup
   Timer? _cleanupTimer;
 
+  String? _myAvatarPath;
+
   // Track last seen time per advertisement name (key = "HPS:username")
   final Map<String, DateTime> _lastSeen = {};
 
@@ -46,6 +52,7 @@ class _RadarScreenState extends State<RadarScreen>
   @override
   void initState() {
     super.initState();
+    _loadAvatar();                        // load avatar on start
     _radarController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -95,6 +102,15 @@ class _RadarScreenState extends State<RadarScreen>
         });
       });
     });
+  }
+
+  Future<void> _loadAvatar() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _myAvatarPath = prefs.getString('avatar_path');
+      });
+    }
   }
 
   @override
@@ -255,14 +271,25 @@ class _RadarScreenState extends State<RadarScreen>
             ),
           ),
           GestureDetector(
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (context) => const HopsProfileScreen())),
+            onTap: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                    builder: (context) => const HopsProfileScreen()),
+              );
+              _loadAvatar();   // refresh avatar after returning
+            },
             child: Container(
               margin: const EdgeInsets.only(right: 16),
               child: CircleAvatar(
-                  radius: 16,
-                  backgroundColor: colors.primary,
-                  child: const Icon(Icons.person, size: 18, color: Colors.white)),
+                radius: 16,
+                backgroundColor: colors.primary,
+                backgroundImage: _myAvatarPath != null
+                    ? FileImage(File(_myAvatarPath!))
+                    : null,
+                child: _myAvatarPath == null
+                    ? const Icon(Icons.person, size: 18, color: Colors.white)
+                    : null,
+              ),
             ),
           ),
         ],
@@ -272,51 +299,70 @@ class _RadarScreenState extends State<RadarScreen>
           SizedBox(
             height: radarSize,
             width: double.infinity,
-            child: GestureDetector(
-              onTapUp: (details) {
-                final center = Offset(radarSize / 2, radarSize / 2);
-                final tapPos = details.localPosition - center;
-                const hitThreshold = 30.0;
+            child: Stack(
+              children: [
+                // Radar painting + tap detection (unchanged)
+                GestureDetector(
+                  onTapUp: (details) {
+                    final center = Offset(radarSize / 2, radarSize / 2);
+                    final tapPos = details.localPosition - center;
+                    const hitThreshold = 30.0;
 
-                _DeviceBlip? closest;
-                double minDist = double.infinity;
-                for (final blip in blips) {
-                  final blipPos = Offset(
-                    blip.radius * (radarSize / 2) * math.cos(blip.angle),
-                    blip.radius * (radarSize / 2) * math.sin(blip.angle),
-                  );
-                  final dist = (tapPos - blipPos).distance;
-                  if (dist < hitThreshold && dist < minDist) {
-                    closest = blip;
-                    minDist = dist;
-                  }
-                }
-                if (closest != null) {
-                  if (widget.friendUsernames.contains(closest.username)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("${closest.username} is already your friend")),
-                    );
-                  } else {
-                    widget.onSendFriendRequest(closest.username);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("Friend request sent to ${closest.username}!")),
-                    );
-                  }
-                }
-              },
-              child: AnimatedBuilder(
-                animation: _radarController,
-                builder: (context, child) {
-                  return CustomPaint(
-                    painter: RadarPainter(
-                      rotation: _radarController.value * 2 * math.pi,
-                      primaryColor: colors.primary,
-                      blips: blips,
+                    _DeviceBlip? closest;
+                    double minDist = double.infinity;
+                    for (final blip in blips) {
+                      final blipPos = Offset(
+                        blip.radius * (radarSize / 2) * math.cos(blip.angle),
+                        blip.radius * (radarSize / 2) * math.sin(blip.angle),
+                      );
+                      final dist = (tapPos - blipPos).distance;
+                      if (dist < hitThreshold && dist < minDist) {
+                        closest = blip;
+                        minDist = dist;
+                      }
+                    }
+                    if (closest != null) {
+                      if (widget.friendUsernames.contains(closest.username)) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("${closest.username} is already your friend")),
+                        );
+                      } else {
+                        widget.onSendFriendRequest(closest.username);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("Friend request sent to ${closest.username}!")),
+                        );
+                      }
+                    }
+                  },
+                  child: AnimatedBuilder(
+                    animation: _radarController,
+                    builder: (context, child) {
+                      return CustomPaint(
+                        painter: RadarPainter(
+                          rotation: _radarController.value * 2 * math.pi,
+                          primaryColor: colors.primary,
+                          blips: blips,
+                        ),
+                        size: Size(radarSize, radarSize),
+                      );
+                    },
+                  ),
+                ),
+                // Rescan button – top‑left inside the radar area
+                Positioned(
+                  top: 4,
+                  left: 4,
+                  child: IconButton(
+                    icon: Icon(Icons.refresh, color: colors.primary, size: 20),
+                    onPressed: widget.onRescan,
+                    tooltip: 'Rescan',
+                    style: IconButton.styleFrom(
+                      backgroundColor: colors.surface.withOpacity(0.6),
+                      padding: const EdgeInsets.all(6),
                     ),
-                    size: Size(radarSize, radarSize),
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
           const Divider(height: 1),
