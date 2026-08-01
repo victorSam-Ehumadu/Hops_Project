@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/views/profile_screen.dart';
 
 class RadarScreen extends StatefulWidget {
@@ -39,6 +41,8 @@ class _RadarScreenState extends State<RadarScreen>
   // Timers for cleanup
   Timer? _cleanupTimer;
 
+  String? _myAvatarPath;
+
   // Track last seen time per advertisement name (key = "HPS:username")
   final Map<String, DateTime> _lastSeen = {};
 
@@ -48,6 +52,7 @@ class _RadarScreenState extends State<RadarScreen>
   @override
   void initState() {
     super.initState();
+    _loadAvatar();                        // load avatar on start
     _radarController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -97,6 +102,15 @@ class _RadarScreenState extends State<RadarScreen>
         });
       });
     });
+  }
+
+  Future<void> _loadAvatar() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _myAvatarPath = prefs.getString('avatar_path');
+      });
+    }
   }
 
   @override
@@ -257,14 +271,25 @@ class _RadarScreenState extends State<RadarScreen>
             ),
           ),
           GestureDetector(
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (context) => const HopsProfileScreen())),
+            onTap: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                    builder: (context) => const HopsProfileScreen()),
+              );
+              _loadAvatar();   // refresh avatar after returning
+            },
             child: Container(
               margin: const EdgeInsets.only(right: 16),
               child: CircleAvatar(
-                  radius: 16,
-                  backgroundColor: colors.primary,
-                  child: const Icon(Icons.person, size: 18, color: Colors.white)),
+                radius: 16,
+                backgroundColor: colors.primary,
+                backgroundImage: _myAvatarPath != null
+                    ? FileImage(File(_myAvatarPath!))
+                    : null,
+                child: _myAvatarPath == null
+                    ? const Icon(Icons.person, size: 18, color: Colors.white)
+                    : null,
+              ),
             ),
           ),
         ],

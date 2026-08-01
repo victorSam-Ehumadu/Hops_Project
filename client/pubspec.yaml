@@ -34,6 +34,8 @@ dependencies:
   audio_session: ^0.1.21
   just_audio: ^0.9.38
   share_plus: ^10.1.4
+  image_picker: ^1.0.0
+
 
 dev_dependencies:
   flutter_test:

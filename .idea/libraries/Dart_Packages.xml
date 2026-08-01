@@ -198,6 +198,34 @@
             </list>
           </value>
         </entry>
+        <entry key="file_selector_linux">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_linux-0.9.4/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="file_selector_macos">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_macos-0.9.5/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="file_selector_platform_interface">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_platform_interface-2.7.0/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="file_selector_windows">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_windows-0.9.3+5/lib" />
+            </list>
+          </value>
+        </entry>
         <entry key="fixnum">
           <value>
             <list>
@@ -412,6 +440,62 @@
           <value>
             <list>
               <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/http_parser-4.1.2/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker-1.2.3/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker_android">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_android-0.8.13+17/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker_for_web">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_for_web-3.1.1/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker_ios">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_ios-0.8.13+6/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker_linux">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_linux-0.2.2/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker_macos">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_macos-0.2.2+1/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker_platform_interface">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_platform_interface-2.11.1/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="image_picker_windows">
+          <value>
+            <list>
+              <option value="$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_windows-0.2.2/lib" />
             </list>
           </value>
         </entry>
@@ -1104,6 +1188,10 @@
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/ffi-2.2.0/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file-7.0.1/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_picker-8.3.7/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_linux-0.9.4/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_macos-0.9.5/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_platform_interface-2.7.0/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/file_selector_windows-0.9.3+5/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/fixnum-1.1.1/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_blue_plus-1.36.8/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_blue_plus_android-7.0.4/lib" />
@@ -1132,6 +1220,14 @@
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/hooks-2.0.2/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/http-1.6.0/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/http_parser-4.1.2/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker-1.2.3/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_android-0.8.13+17/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_for_web-3.1.1/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_ios-0.8.13+6/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_linux-0.2.2/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_macos-0.2.2+1/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_platform_interface-2.11.1/lib" />
+      <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/image_picker_windows-0.2.2/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/jni-1.0.0/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/jni_flutter-1.0.1/lib" />
       <root url="file://$USER_HOME$/AppData/Local/Pub/Cache/hosted/pub.dev/js-0.6.7/lib" />

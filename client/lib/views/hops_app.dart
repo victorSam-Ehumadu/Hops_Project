@@ -46,6 +46,8 @@ class _HopsAppState extends State<HopsApp> {
   Timer? _flareCancelTimer;
   Timer? _scanRestartTimer;
 
+  String? _myAvatarPath;
+
   DateTime _lastRadarPush = DateTime(2000);   // force immediate first push
 
   StreamSubscription<List<ScanResult>>? _bleScanResultsSubscription;
@@ -393,7 +395,11 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _loadCurrentIdentityMetrics() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() => myUsername = prefs.getString('my_username') ?? 'Unknown_User');
+    final avatarPath = prefs.getString('avatar_path');
+    setState(() {
+      myUsername = prefs.getString('my_username') ?? 'Unknown_User';
+      _myAvatarPath = avatarPath;
+    });
   }
 
   Future<void> _startChatConnection(String friendUsername) async {
@@ -819,13 +825,22 @@ class _HopsAppState extends State<HopsApp> {
         GestureDetector(
           onTap: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (context) => const HopsProfileScreen()),
-          ).then((_) => _refreshContactsTrayList()),
+          ).then((_) {
+            _refreshContactsTrayList();
+            _loadCurrentIdentityMetrics();
+          }),
           child: Container(
             margin: const EdgeInsets.only(right: 16),
             child: CircleAvatar(
-                radius: 16,
-                backgroundColor: colors.primary,
-                child: const Icon(Icons.person, size: 18, color: Colors.white)),
+              radius: 16,
+              backgroundColor: colors.primary,
+              backgroundImage: _myAvatarPath != null
+                  ? FileImage(File(_myAvatarPath!))
+                  : null,
+              child: _myAvatarPath == null
+                  ? const Icon(Icons.person, size: 18, color: Colors.white)
+                  : null,
+            ),
           ),
         ),
       ],
