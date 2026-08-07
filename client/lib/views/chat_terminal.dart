@@ -1,18 +1,19 @@
+// chat_terminal.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
-import 'package:client/services/chat_connection_service.dart';
+import 'package:client/services/rfcomm_chat_service.dart';
 
 class IndividualChatTerminalView extends StatefulWidget {
   final String peerName;
-  final ChatConnectionService? chatService;   // nullable
+  final RfcommChatService? rfcommService; // ← changed to RFCOMM
 
   const IndividualChatTerminalView({
     super.key,
     required this.peerName,
-    this.chatService,
+    this.rfcommService,
   });
 
   @override
@@ -27,27 +28,18 @@ class _IndividualChatTerminalViewState
   String myPersonalUsernameLabel = "User_Vic";
   Timer? _refreshTimer;
 
+  bool _isConnected = false; // tracks RFCOMM connection state
+
   @override
   void initState() {
     super.initState();
     _loadDeviceOwnerLabel();
     _loadPeerMessageLogs();
 
-    // Set up listener for incoming messages if we have a live connection
-    if (widget.chatService != null) {
-      widget.chatService!.onMessageReceived = (sender, message) async {
-        final incomingPayload = {
-          DatabaseHelper.columnId: const Uuid().v4(),
-          DatabaseHelper.columnMessage: message,
-          DatabaseHelper.columnSenderId: sender,
-          DatabaseHelper.columnIsForMe: 1,
-          DatabaseHelper.columnNeedsRelay: 0,
-          DatabaseHelper.columnTimestamp:
-          DateTime.now().millisecondsSinceEpoch,
-        };
-        await DatabaseHelper.instance.insertMessage(incomingPayload);
-        _loadPeerMessageLogs();
-      };
+    // The RFCOMM service is already set up with callbacks in _startChatConnection.
+    // We just mark as connected if a service is provided.
+    if (widget.rfcommService != null) {
+      _isConnected = true;
     }
 
     _refreshTimer = Timer.periodic(
@@ -86,7 +78,6 @@ class _IndividualChatTerminalViewState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isConnected = widget.chatService?.isConnected ?? false;
 
     return Scaffold(
       appBar: AppBar(
@@ -100,7 +91,7 @@ class _IndividualChatTerminalViewState
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            if (isConnected)
+            if (_isConnected)
               const Padding(
                 padding: EdgeInsets.only(left: 8),
                 child: Icon(Icons.circle, size: 10, color: Colors.green),
@@ -200,8 +191,8 @@ class _IndividualChatTerminalViewState
                       await DatabaseHelper.instance
                           .insertMessage(outgoingPayload);
                       _loadPeerMessageLogs();
-                      // Send over Nearby if connected
-                      widget.chatService?.sendMessage(text);
+                      // Send via RFCOMM
+                      widget.rfcommService?.sendMessage(text);
                       _msgInputController.clear();
                     }
                   },

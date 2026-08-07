@@ -259,10 +259,21 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                 Expanded(
                   child: TextField(
                     controller: _locationController,
-                    focusNode: _focusNode,          // use the persistent focus node
+                    focusNode: _focusNode,
+                    style: TextStyle(color: colors.onSurface),  // typed text visible
                     decoration: InputDecoration(
                       hintText: "e.g., Library, Cafeteria",
+                      hintStyle: TextStyle(color: colors.onSurface.withOpacity(0.5)),
                       labelText: "Tag this location",
+                      labelStyle: TextStyle(color: colors.onSurface.withOpacity(0.7)),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: colors.primary, width: 1.5),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: colors.primary, width: 2),
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -286,7 +297,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                 ),
               ],
             ),
-            // ... rest of the widget tree unchanged ...
             const SizedBox(height: 8),
             const Text(
               "Your report will be visible to nearby Hops users.",

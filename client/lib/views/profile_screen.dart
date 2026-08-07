@@ -30,6 +30,23 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
     _loadIdentityData();
   }
 
+  Future<void> _loadPersistedIdentityStrings() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      dynamicProfileUsername =
+          prefs.getString('my_username') ?? 'Mesh_Operator';
+    });
+  }
+
+  Future<void> _loadIdentityData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _nickname = prefs.getString('nickname') ?? '';
+      _bio = prefs.getString('bio') ?? '';
+      _avatarPath = prefs.getString('avatar_path');
+    });
+  }
+
   void _showFullImage() {
     if (_avatarPath == null) return;
     showDialog(
@@ -49,30 +66,13 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
     );
   }
 
-  Future<void> _loadPersistedIdentityStrings() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    setState(() {
-      dynamicProfileUsername =
-          prefs.getString('my_username') ?? 'Mesh_Operator';
-    });
-  }
-
-  Future<void> _loadIdentityData() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _nickname = prefs.getString('nickname') ?? '';
-      _bio = prefs.getString('bio') ?? '';
-      _avatarPath = prefs.getString('avatar_path');
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final displayName =
     _nickname.isNotEmpty ? _nickname : dynamicProfileUsername;
-    final bioText = _bio.isNotEmpty ? _bio : "Proud Hops User";
+    final bioText = _bio.isNotEmpty ? _bio : "Average Hopper";
 
     return Scaffold(
       appBar: AppBar(
@@ -81,7 +81,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
             "Profile Identity",
             style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: colors.onBackground),
+                color: colors.primary),
             overflow: TextOverflow.ellipsis,
           ),
         ),
@@ -149,7 +149,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 );
                 if (result == true) {
                   _loadIdentityData();
-                  setState(() {}); // force rebuild
+                  setState(() {});
                 }
               },
             ),
@@ -198,7 +198,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 14,
-                    color: colors.onBackground),
+                    color: colors.primary),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),

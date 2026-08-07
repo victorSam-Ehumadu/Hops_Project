@@ -7,6 +7,7 @@ import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:client/views/received_files_page.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class HopsSharePage extends StatefulWidget {
   final String myUsername;
@@ -21,52 +22,94 @@ class _HopsSharePageState extends State<HopsSharePage> {
   bool _isConnected = false;
   PlatformFile? _pickedFile;
   bool _isSending = false;
+  bool _hasPermissions = false;
+  bool _checkingPermissions = true;
+
   final TextEditingController _textNoteController = TextEditingController();
+
+  // Service ID must be passed explicitly — the package default is unrelated.
   static const String _serviceId = "com.hops.share";
+
+  // Must match the UUID used everywhere else in hops_app.dart so the radar
+  // scan filter sees us again after we restore advertising in dispose().
+  static const String _hopsServiceUuid = '0000FA57-0000-1000-8000-00805F9B34FB';
 
   @override
   void initState() {
     super.initState();
+    // Stop BLE advertising while Nearby Connections is active — both compete
+    // for Bluetooth Classic resources.
     BlePeripheral.stopAdvertising();
-    _startNearbyDiscoveryAndAdvertising();
+    _requestPermissionsAndStart();
   }
 
   @override
   void dispose() {
     _cleanupNearby();
+    // Restore Hops BLE advertising WITH the service UUID so the radar
+    // hardware filter picks us up again immediately.
     BlePeripheral.startAdvertising(
       localName: "HPS:${widget.myUsername}",
-      services: [],
+      services: [_hopsServiceUuid],
     );
     _textNoteController.dispose();
     super.dispose();
   }
 
+  // ── Permissions ────────────────────────────────────────────────────────────
+  // Nearby Connections on Android 13+ requires NEARBY_WIFI_DEVICES in addition
+  // to the Bluetooth permissions. Without it, discovery silently finds nothing.
+  Future<void> _requestPermissionsAndStart() async {
+    final statuses = await [
+      Permission.location,
+      Permission.bluetoothScan,
+      Permission.bluetoothAdvertise,
+      Permission.bluetoothConnect,
+      Permission.nearbyWifiDevices,   // ← the missing permission
+    ].request();
+
+    final granted = statuses.values.every(
+          (s) => s == PermissionStatus.granted || s == PermissionStatus.limited,
+    );
+
+    setState(() {
+      _hasPermissions = granted;
+      _checkingPermissions = false;
+    });
+
+    if (granted) {
+      _startNearbyDiscoveryAndAdvertising();
+    }
+  }
+
+  // ── Nearby Connections ─────────────────────────────────────────────────────
   void _startNearbyDiscoveryAndAdvertising() {
+    // Both advertise AND discover simultaneously — P2P_CLUSTER supports this.
     Nearby().startAdvertising(
       widget.myUsername,
       Strategy.P2P_CLUSTER,
+      serviceId: _serviceId,           // ← was missing; used the package default before
       onConnectionInitiated: (id, info) {
-        Nearby().acceptConnection(id, onPayLoadRecieved: (endpointId, payload) {
-          _onPayloadReceived(endpointId, payload);
-        });
+        Nearby().acceptConnection(
+          id,
+          onPayLoadRecieved: (endpointId, payload) =>
+              _onPayloadReceived(endpointId, payload),
+        );
         setState(() {
           _connectedEndpointId = id;
           _isConnected = true;
         });
       },
       onConnectionResult: (id, status) {
-        if (status == Status.CONNECTED) {
-          setState(() {
+        setState(() {
+          if (status == Status.CONNECTED) {
             _connectedEndpointId = id;
             _isConnected = true;
-          });
-        } else {
-          setState(() {
+          } else {
             _connectedEndpointId = null;
             _isConnected = false;
-          });
-        }
+          }
+        });
       },
       onDisconnected: (id) {
         setState(() {
@@ -79,6 +122,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
     Nearby().startDiscovery(
       widget.myUsername,
       Strategy.P2P_CLUSTER,
+      serviceId: _serviceId,           // ← was missing
       onEndpointFound: (id, name, serviceId) {
         setState(() {
           _discoveredDevices.removeWhere((d) => d.id == id);
@@ -86,9 +130,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
         });
       },
       onEndpointLost: (id) {
-        setState(() {
-          _discoveredDevices.removeWhere((d) => d.id == id);
-        });
+        setState(() => _discoveredDevices.removeWhere((d) => d.id == id));
       },
     );
   }
@@ -104,17 +146,19 @@ class _HopsSharePageState extends State<HopsSharePage> {
       widget.myUsername,
       endpointId,
       onConnectionInitiated: (id, info) {
-        Nearby().acceptConnection(id, onPayLoadRecieved: (endpointId, payload) {
-          _onPayloadReceived(endpointId, payload);
-        });
+        Nearby().acceptConnection(
+          id,
+          onPayLoadRecieved: (endpointId, payload) =>
+              _onPayloadReceived(endpointId, payload),
+        );
       },
       onConnectionResult: (id, status) {
-        if (status == Status.CONNECTED) {
-          setState(() {
+        setState(() {
+          if (status == Status.CONNECTED) {
             _connectedEndpointId = id;
             _isConnected = true;
-          });
-        }
+          }
+        });
       },
       onDisconnected: (id) {
         setState(() {
@@ -125,6 +169,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
     );
   }
 
+  // ── Payload handling ───────────────────────────────────────────────────────
   void _onPayloadReceived(String endpointId, Payload payload) {
     if (payload.type != PayloadType.BYTES) return;
     final data = payload.bytes!;
@@ -138,28 +183,26 @@ class _HopsSharePageState extends State<HopsSharePage> {
     _saveReceivedFile(sender, fileName, fileData);
   }
 
-  Future<void> _saveReceivedFile(String sender, String fileName, Uint8List data) async {
+  Future<void> _saveReceivedFile(
+      String sender, String fileName, Uint8List data) async {
     final dir = await getApplicationDocumentsDirectory();
-    final filePath = '${dir.path}/$fileName';
-    final file = File(filePath);
-
-    // Write asynchronously
-    await file.writeAsBytes(data, flush: true);   // flush ensures the data hits disk
-
-    // Update the records JSON
+    final file = File('${dir.path}/$fileName');
+    await file.writeAsBytes(data, flush: true);
     await _updateReceivedFilesRecord(sender, fileName, data.length);
-
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Received $fileName from $sender (${data.length} bytes)")),
+        SnackBar(
+          content: Text(
+              "Received $fileName from $sender (${data.length} bytes)"),
+        ),
       );
     }
   }
 
-  Future<void> _updateReceivedFilesRecord(String sender, String fileName, int size) async {
+  Future<void> _updateReceivedFilesRecord(
+      String sender, String fileName, int size) async {
     final dir = await getApplicationDocumentsDirectory();
     final recordFile = File('${dir.path}/received_files.json');
-
     List<Map<String, dynamic>> records = [];
     if (await recordFile.exists()) {
       final content = await recordFile.readAsString();
@@ -167,17 +210,16 @@ class _HopsSharePageState extends State<HopsSharePage> {
         records = List<Map<String, dynamic>>.from(json.decode(content));
       }
     }
-
     records.add({
       'sender': sender,
       'fileName': fileName,
       'size': size,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
-
     await recordFile.writeAsString(json.encode(records), flush: true);
   }
 
+  // ── File picking & sending ─────────────────────────────────────────────────
   void _pickFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -199,12 +241,12 @@ class _HopsSharePageState extends State<HopsSharePage> {
         ..._pickedFile!.bytes!,
       ]);
       await Nearby().sendBytesPayload(_connectedEndpointId!, payload);
-      print("📤 File sent via Nearby");
     } catch (e) {
-      print("❌ Send error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Transfer failed: $e")),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Transfer failed: $e")),
+        );
+      }
     } finally {
       setState(() {
         _isSending = false;
@@ -224,20 +266,21 @@ class _HopsSharePageState extends State<HopsSharePage> {
     ]);
     Nearby().sendBytesPayload(_connectedEndpointId!, payload);
     _textNoteController.clear();
+    setState(() {});
   }
 
+  // ── UI ─────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+
     return Scaffold(
       appBar: AppBar(
-        title: Flexible(
-          child: Text(
-            "Hops Share",
-            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
-            overflow: TextOverflow.ellipsis,
-          ),
+        title: Text(
+          "Hops Share",
+          style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+          overflow: TextOverflow.ellipsis,
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,
@@ -251,7 +294,50 @@ class _HopsSharePageState extends State<HopsSharePage> {
           ),
         ],
       ),
-      body: _isConnected ? _buildConnectedView() : _buildDiscoveryView(),
+      body: _checkingPermissions
+          ? const Center(child: CircularProgressIndicator())
+          : !_hasPermissions
+          ? _buildPermissionDeniedView(colors)
+          : _isConnected
+          ? _buildConnectedView()
+          : _buildDiscoveryView(),
+    );
+  }
+
+  Widget _buildPermissionDeniedView(ColorScheme colors) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.wifi_off, size: 48, color: colors.primary.withOpacity(0.4)),
+            const SizedBox(height: 16),
+            const Text(
+              "Permissions required",
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              "Hops Share needs Nearby Devices, Location, and Bluetooth "
+                  "permissions to find nearby peers. Please grant them in "
+                  "Settings → Apps → Hops → Permissions.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.black54, fontSize: 13, height: 1.5),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () {
+                setState(() => _checkingPermissions = true);
+                _requestPermissionsAndStart();
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text("Try Again"),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -264,17 +350,22 @@ class _HopsSharePageState extends State<HopsSharePage> {
           child: Text(
             "Nearby Devices",
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
         ),
         Expanded(
           child: _discoveredDevices.isEmpty
               ? const Center(
-            child: Text(
-              "Searching for devices...",
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text(
+                  "Searching for nearby Hops users…",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ],
             ),
           )
               : ListView.builder(
@@ -296,6 +387,10 @@ class _HopsSharePageState extends State<HopsSharePage> {
                 ),
                 trailing: ElevatedButton(
                   onPressed: () => _connectToDevice(device.id),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.primary,
+                    foregroundColor: Colors.white,
+                  ),
                   child: const Text("Connect"),
                 ),
               );
@@ -312,10 +407,19 @@ class _HopsSharePageState extends State<HopsSharePage> {
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
-          Text(
-            "Connected to ${_connectedEndpointId ?? ''}",
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.circle, size: 10, color: Colors.green),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  "Connected to ${_connectedEndpointId ?? ''}",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
           ElevatedButton.icon(
@@ -324,19 +428,22 @@ class _HopsSharePageState extends State<HopsSharePage> {
             style: ElevatedButton.styleFrom(
               backgroundColor: colors.primary,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             ),
             onPressed: _pickFile,
           ),
           if (_pickedFile != null) ...[
             const SizedBox(height: 16),
             Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
-                    Icon(Icons.insert_drive_file, size: 36, color: colors.primary),
+                    Icon(Icons.insert_drive_file,
+                        size: 36, color: colors.primary),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -344,14 +451,13 @@ class _HopsSharePageState extends State<HopsSharePage> {
                         children: [
                           Text(
                             _pickedFile!.name,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
+                            style:
+                            const TextStyle(fontWeight: FontWeight.w600),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                           Text(
                             "${(_pickedFile!.size / 1024).toStringAsFixed(1)} kB",
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
@@ -363,8 +469,12 @@ class _HopsSharePageState extends State<HopsSharePage> {
                         foregroundColor: Colors.white,
                       ),
                       child: _isSending
-                          ? const SizedBox(width: 20, height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
                           : const Text("Send"),
                     ),
                   ],
@@ -377,8 +487,6 @@ class _HopsSharePageState extends State<HopsSharePage> {
           const Text(
             "Or send a quick text note:",
             style: TextStyle(fontSize: 14),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 8),
           Row(
@@ -396,11 +504,14 @@ class _HopsSharePageState extends State<HopsSharePage> {
               ),
               const SizedBox(width: 12),
               ElevatedButton(
-                onPressed: _textNoteController.text.isNotEmpty ? _sendTextNote : null,
+                onPressed: _textNoteController.text.isNotEmpty
+                    ? _sendTextNote
+                    : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: colors.primary,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 24, vertical: 16),
                 ),
                 child: const Text("Send"),
               ),

@@ -1,3 +1,4 @@
+// hops_app.dart
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:convert';
@@ -12,7 +13,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:client/database/database_helper.dart';
-// No more import of hops_theme.dart
 import 'package:client/utils/hop_id_formatter.dart';
 import 'package:client/views/radar_screen.dart';
 import 'package:client/views/chat_terminal.dart';
@@ -27,8 +27,12 @@ import 'package:client/views/hops_and_robbers.dart';
 import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
 import 'package:client/services/notification_service.dart';
-import 'package:client/services/chat_connection_service.dart';
-import 'package:client/services/hops_constants.dart';
+//import 'package:client/services/chat_connection_service.dart';
+import 'dart:async';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:client/services/rfcomm_chat_service.dart';
+import 'package:flutter/services.dart';
+import 'package:client/views/community_chat.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
@@ -42,11 +46,18 @@ class _HopsAppState extends State<HopsApp> {
   List<Map<String, dynamic>> localActiveContacts = [];
   final TextEditingController _manualIdController = TextEditingController();
 
+  static const _metaChannel = MethodChannel('com.example.client/rfcomm/meta');
+
   bool _isFlareActive = false;
   Timer? _flareCancelTimer;
   Timer? _scanRestartTimer;
 
   String? _myAvatarPath;
+
+  String _adUser(String username) =>
+      username.length > 9 ? username.substring(0, 9) : username;
+
+  String? _originalBluetoothName;
 
   DateTime _lastRadarPush = DateTime(2000);   // force immediate first push
 
@@ -98,6 +109,8 @@ class _HopsAppState extends State<HopsApp> {
   final Set<String> _recentWatchSenders = {};
   final Map<String, Timer> _recentWatchTimers = {};
 
+  static const _hopsServiceUuid = '0000FA57-0000-1000-8000-00805F9B34FB';
+
   @override
   void initState() {
     super.initState();
@@ -109,6 +122,7 @@ class _HopsAppState extends State<HopsApp> {
     );
 
     _loadCurrentIdentityMetrics();
+    _captureOriginalBluetoothName();
     _loadEnabledFeatures();
     _loadWatchState();
     _checkPermissionsAndStartBLE();
@@ -149,12 +163,53 @@ class _HopsAppState extends State<HopsApp> {
     _notifyWatchingBuddiesChanged();
   }
 
+  Future<void> _advertiseCommunityMessage(String message) async {
+    // Truncate to 16 chars — must fit in "CM:user9:message" within 29-char limit
+    final short = message.length > 16 ? message.substring(0, 16) : message;
+    final advName = "CM:${_adUser(myUsername)}:$short";
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 8), () {
+      BlePeripheral.stopAdvertising();
+      _advertiseWithName("HPS:$myUsername", []);
+    });
+  }
+
+  Future<void> _captureOriginalBluetoothName() async {
+    try {
+      final name = await _metaChannel.invokeMethod<String>('getAdapterName');
+      if (mounted && name != null && name.isNotEmpty) {
+        _originalBluetoothName = name;
+      }
+    } catch (_) {
+      // If unavailable, we simply won't restore — no crash.
+    }
+  }
+
+  Future<void> _advertiseWithName(String localName, List<String> services) async {
+    await BlePeripheral.stopAdvertising();
+    await BlePeripheral.startAdvertising(
+      localName: localName,
+      services: [_hopsServiceUuid, ...services], // ← always include Hops UUID
+    );
+    if (_originalBluetoothName != null) {
+      Future.delayed(const Duration(milliseconds: 500), () async {
+        if (!mounted) return;
+        try {
+          await _metaChannel.invokeMethod(
+            'setAdapterName',
+            {'name': _originalBluetoothName!},
+          );
+        } catch (_) {}
+      });
+    }
+  }
+
   void _cancelEmergencyFlare({bool silent = false}) {
     _flareCancelTimer?.cancel();
     _flareCancelTimer = null;
 
     BlePeripheral.stopAdvertising();
-    BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+    _advertiseWithName("HPS:$myUsername", []);
 
     setState(() => _isFlareActive = false);
 
@@ -193,7 +248,7 @@ class _HopsAppState extends State<HopsApp> {
 
     final advName = "EMG:$sender:$shortReason";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: advName, services: []);
+    await _advertiseWithName(advName, []);
     print("🚨 Broadcasting emergency: $advName");
 
     setState(() => _isFlareActive = true);
@@ -255,14 +310,12 @@ class _HopsAppState extends State<HopsApp> {
       _showToastFeedbackAlert("$targetUsername is already your friend");
       return;
     }
+    final advName = "FR:${_adUser(targetUsername)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "FRIEND_REQ:$targetUsername:$myUsername",
-      services: [],
-    );
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 10), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -270,24 +323,25 @@ class _HopsAppState extends State<HopsApp> {
     final advName = "VBT:$location:$level";
     if (advName.length > 29) { _showToastFeedbackAlert("Location name too long"); return; }
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: advName, services: []);
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 30), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
       _startContinuousScan();
     });
   }
 
   Future<void> acceptFriendRequest(String sender) async {
+    final advName = "FA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: "FRIEND_ACK:$sender:$myUsername", services: []);
+    await _advertiseWithName(advName, []);
     if (!_addedFriends.contains(sender)) {
       _addedFriends.add(sender);
       await _refreshContactsTrayList();
     }
     Future.delayed(const Duration(seconds: 5), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -334,11 +388,12 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   Future<void> _acceptWatchRequestBle(String sender) async {
+    final advName = "WA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: "WATCH_ACK:$sender:$myUsername", services: []);
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -353,14 +408,12 @@ class _HopsAppState extends State<HopsApp> {
       _showToastFeedbackAlert("Already watching $targetUsername");
       return;
     }
+    final advName = "WR:${_adUser(targetUsername)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "WATCH_REQ:$targetUsername:$myUsername",
-      services: [],
-    );
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 10), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -402,60 +455,12 @@ class _HopsAppState extends State<HopsApp> {
     });
   }
 
-  Future<void> _startChatConnection(String friendUsername) async {
-    // Show a loading indicator while we discover and connect
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator()),
-    );
-
-    final chatService = ChatConnectionService(myUsername: myUsername);
-    final endpointId = await chatService.connectToFriend(friendUsername);
-
-    // Close the loading dialog
-    if (mounted) Navigator.of(context).pop();
-
-    if (endpointId != null && mounted) {
-      // Connection successful → open chat with the live service
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => IndividualChatTerminalView(
-            peerName: friendUsername,
-            chatService: chatService,
-          ),
-        ),
-      ).then((_) {
-        chatService.disconnect();
-        _refreshContactsTrayList();
-      });
-    } else {
-      // Connection failed → open chat in offline mode (local only)
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Friend not nearby. Chat will be local.")),
-        );
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => IndividualChatTerminalView(
-              peerName: friendUsername,
-              chatService: null,
-            ),
-          ),
-        ).then((_) => _refreshContactsTrayList());
-      }
-    }
-  }
-
   void _initializeParallelBleTransceiverEngine() async {
     if (_bleInitialized) return;
     _bleInitialized = true;
     await BlePeripheral.initialize();
     try {
-      await BlePeripheral.startAdvertising(
-        localName: "HPS:$myUsername",
-        services: [],
-      );
+      await _advertiseWithName("HPS:$myUsername", []);
       print('✅ Advertising started successfully');
     } catch (e) {
       print('❌ Advertising failed: $e');
@@ -470,8 +475,7 @@ class _HopsAppState extends State<HopsApp> {
       }
 
       // Throttle: only forward results every 500ms when in noise mode
-      const noiseMode = bool.fromEnvironment('NOISE_MODE', defaultValue: false);
-      if (!noiseMode || DateTime.now().difference(_lastRadarPush).inMilliseconds >= 500) {
+      if (DateTime.now().difference(_lastRadarPush).inMilliseconds >= 500) {
         _radarStreamController.add(results);
         _lastRadarPush = DateTime.now();
       }
@@ -489,9 +493,9 @@ class _HopsAppState extends State<HopsApp> {
           }
         }
         // Friend request
-        if (name.startsWith("FRIEND_REQ:")) {
-          final parts = name.substring(11).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
+        if (name.startsWith("FR:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
             if (!friendUsernames.contains(sender) &&
                 !pendingRequests.contains(sender) &&
@@ -501,10 +505,9 @@ class _HopsAppState extends State<HopsApp> {
           }
         }
         // Friend ACK
-        if (name.startsWith("FRIEND_ACK:")) {
-          final parts = name.substring(11).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
-            // Register the friend without a chat message
+        if (name.startsWith("FA:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             if (!_addedFriends.contains(parts[1])) {
               _addedFriends.add(parts[1]);
               await _refreshContactsTrayList();
@@ -513,9 +516,9 @@ class _HopsAppState extends State<HopsApp> {
         }
 
         // Watch request
-        if (name.startsWith("WATCH_REQ:")) {
-          final parts = name.substring(10).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
+        if (name.startsWith("WR:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
             if (!_recentWatchSenders.contains(sender) &&
                 !pendingWatchRequests.contains(sender) &&
@@ -528,9 +531,9 @@ class _HopsAppState extends State<HopsApp> {
         }
 
         // Watch ACK – permanent one‑time snackbar
-        if (name.startsWith("WATCH_ACK:")) {
-          final parts = name.substring(10).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
+        if (name.startsWith("WA:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
             if (!_handledWatchAcks.contains(sender)) {
               _handledWatchAcks.add(sender);
@@ -591,30 +594,18 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _stopAllAdvertising() async => BlePeripheral.stopAdvertising();
   Future<void> _startContinuousScan() async {
-    const noiseMode = bool.fromEnvironment('NOISE_MODE', defaultValue: false);
-
-    if (noiseMode) {
-      await FlutterBluePlus.startScan(
-        androidUsesFineLocation: true,
-        continuousUpdates: true,
-        androidScanMode: AndroidScanMode.lowLatency,   // still faster!
-      );
-    } else {
-      await FlutterBluePlus.startScan(
-        androidUsesFineLocation: true,
-        continuousUpdates: true,
-      );
-    }
+    await FlutterBluePlus.startScan(
+      androidUsesFineLocation: true,
+      continuousUpdates: true,
+      withServices: [Guid(_hopsServiceUuid)], // ← hardware filter
+    );
   }
 
   // ---------- Pairing ----------
   void _startPairingServer(String code) {
     _activePairingCode = code;
     BlePeripheral.stopAdvertising().then((_) {
-      BlePeripheral.startAdvertising(
-        localName: "HOP:$code:$myUsername",
-        services: [],
-      );
+      _advertiseWithName("HOP:$code:$myUsername", []);
     });
     _pairingTimeout?.cancel();
     _pairingTimeout = Timer(const Duration(seconds: 180), () {
@@ -632,29 +623,40 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _startPairingClient(String code) async {
     await FlutterBluePlus.stopScan();
-    Completer<String?> completer = Completer<String?>();
-    StreamSubscription<List<ScanResult>> sub;
+
+    final completer = Completer<String?>();
+    StreamSubscription<List<ScanResult>>? sub;
+
     sub = FlutterBluePlus.scanResults.listen((results) {
-      for (ScanResult r in results) {
-        String name = r.advertisementData.advName;
+      for (final r in results) {
+        final name = r.advertisementData.advName;
         if (name.startsWith("HOP:$code:")) {
-          String remoteUsername = name.substring(("HOP:$code:").length);
-          completer.complete(remoteUsername);
+          final remoteUsername = name.substring("HOP:$code:".length);
+          if (!completer.isCompleted) completer.complete(remoteUsername);
         }
       }
     });
-    await FlutterBluePlus.startScan(androidUsesFineLocation: true);
+
+    await FlutterBluePlus.startScan(
+      androidUsesFineLocation: true,
+      withServices: [Guid(_hopsServiceUuid)], // ← hardware filter
+    );
+
     String? remoteUsername;
     try {
-      remoteUsername = await completer.future.timeout(const Duration(seconds: 30));
+      remoteUsername =
+      await completer.future.timeout(const Duration(seconds: 30));
     } catch (_) {}
+
     await sub.cancel();
     await FlutterBluePlus.stopScan();
 
     if (remoteUsername == null) {
-      _showToastFeedbackAlert("Device not found. Ensure the code is active on the other device.");
+      _showToastFeedbackAlert(
+          "Device not found. Ensure the code is active on the other device.");
       return;
     }
+
     await _writeContactLogToDatabase(remoteUsername, "Mutual pairing via code");
     await _sendAck(code);
     _showToastFeedbackAlert("Connected with $remoteUsername!");
@@ -663,10 +665,7 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _sendAck(String code) async {
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "ACK:$code:$myUsername",
-      services: [],
-    );
+    await _advertiseWithName("ACK:$code:$myUsername", []);
     Future.delayed(const Duration(seconds: 5), () {
       if (_activePairingCode == null) {
         _stopAllAdvertising();
@@ -789,7 +788,10 @@ class _HopsAppState extends State<HopsApp> {
           Flexible(
             child: Text(
               title,
-              style: theme.textTheme.headlineMedium?.copyWith(fontSize: 20),
+              style: theme.textTheme.headlineMedium?.copyWith(
+                fontSize: 20,
+                color: colors.primary,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -851,6 +853,8 @@ class _HopsAppState extends State<HopsApp> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+
+    // Messages tab is self-contained — owns its own BT discovery and session mgmt.
     final List<Widget> tabs = [
       RadarScreen(
         radarStream: radarStream,
@@ -860,17 +864,19 @@ class _HopsAppState extends State<HopsApp> {
         onDeclineRequest: declineRequest,
         friendUsernames: friendUsernames,
         onActivateFlare: (String reason) => _broadcastEmergencyFlare(reason),
-        onRescan: () {                                 // <-- add this
+        onRescan: () {
           FlutterBluePlus.stopScan();
-          FlutterBluePlus.startScan(
-            androidUsesFineLocation: true,
-            continuousUpdates: true,
-          );
+          _startContinuousScan();
         },
       ),
-      _buildContactsTab(),
-      _buildFeaturesTab(),
-      _buildMyFeaturesTab(),
+      _buildContactsTab(),             // index 1 — unchanged radar contacts
+      CommunityChat(
+        radarStream: radarStream,
+        onSendMessage: _advertiseCommunityMessage,
+        myUsername: myUsername,
+      ), // index 2 — NEW: BT peer chat
+      _buildFeaturesTab(),             // index 3
+      _buildMyFeaturesTab(),           // index 4
     ];
 
     return Scaffold(
@@ -890,7 +896,10 @@ class _HopsAppState extends State<HopsApp> {
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: colors.surface.withOpacity(0.8),
-          borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(24),
+            topRight: Radius.circular(24),
+          ),
         ),
         child: SafeArea(
           child: Padding(
@@ -898,10 +907,11 @@ class _HopsAppState extends State<HopsApp> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildNavItem(0, Icons.radar, Icons.radar, "Radar"),
-                _buildNavItem(1, Icons.people_outline, Icons.people, "Contacts"),
-                _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, "Features"),
-                _buildNavItem(3, Icons.star_outline, Icons.star, "My Features"),
+                _buildNavItem(0, Icons.radar,           Icons.radar,     "Radar"),
+                _buildNavItem(1, Icons.people_outline,  Icons.people,    "Contacts"),
+                _buildNavItem(2, Icons.campaign_outlined, Icons.campaign, "Community"),
+                _buildNavItem(3, Icons.grid_view_outlined, Icons.grid_view, "Features"),
+                _buildNavItem(4, Icons.star_outline,    Icons.star,      "My Features"),
               ],
             ),
           ),
@@ -1003,20 +1013,10 @@ class _HopsAppState extends State<HopsApp> {
                     style: const TextStyle(fontSize: 13, color: Colors.black54),
                   ),
                 ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: Icon(Icons.chat_bubble_outline, color: colors.primary),
-                      onPressed: () => _startChatConnection(contact['username'] as String),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                      onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
-                    ),
-                  ],
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                  onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
                 ),
-                onTap: null,  // Remove the old onTap that opened the chat directly
               ),
             );
           },
@@ -1255,7 +1255,7 @@ class _HopsAppState extends State<HopsApp> {
           TextButton.icon(
             icon: Icon(Icons.add_circle_outline, size: 18, color: colors.primary),
             label: Text("Manage", style: TextStyle(color: colors.primary)),
-            onPressed: () => setState(() => _currentIndex = 2),
+            onPressed: () => setState(() => _currentIndex = 3),
           ),
           const SizedBox(width: 8),
         ],

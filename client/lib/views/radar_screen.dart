@@ -1,3 +1,4 @@
+// radar_screen.dart
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -424,9 +425,13 @@ class _RadarScreenState extends State<RadarScreen>
                                   Expanded(
                                     child: Text(
                                       "$sender wants to add you",
-                                      style: const TextStyle(fontSize: 13),
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.grey
+                                      ),
                                       overflow: TextOverflow.ellipsis,
                                       maxLines: 2,
+
                                     ),
                                   ),
                                 ],

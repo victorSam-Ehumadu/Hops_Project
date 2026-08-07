@@ -36,9 +36,16 @@ class _ThemePickerScreenState extends State<ThemePickerScreen> {
   final colors = theme.colorScheme;     // ← here
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Choose a Theme'),
+        title: Text(
+          'Choose a Theme',
+          style: TextStyle(
+            color: colors.primary,          // always visible
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        foregroundColor: colors.primary,         // back button visible
       ),
       body: GridView.builder(
         padding: const EdgeInsets.all(16),

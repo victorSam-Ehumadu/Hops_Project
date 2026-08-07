@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
-import 'package:client/theme/hops_theme.dart';
 
 class TaskTrackerPage extends StatefulWidget {
   const TaskTrackerPage({super.key});
@@ -121,6 +120,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
 
   // ---------- Add / Edit task form ----------
   Future<void> _openTaskForm({Map<String, dynamic>? existing}) async {
+    final colors = Theme.of(context).colorScheme;
     final titleCtrl = TextEditingController(text: existing?[DatabaseHelper.taskColTitle] ?? '');
     final descCtrl = TextEditingController(text: existing?[DatabaseHelper.taskColDescription] ?? '');
     DateTime? dueDate = existing?[DatabaseHelper.taskColDueDate] != null
@@ -151,20 +151,47 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
           children: [
             TextField(
               controller: titleCtrl,
-              decoration: const InputDecoration(labelText: "Title", border: OutlineInputBorder()),
+              style: TextStyle(color: colors.onSurface),
+              decoration: InputDecoration(
+                labelText: "Title",
+                labelStyle: TextStyle(color: colors.primary),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 2),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: descCtrl,
               maxLines: 3,
-              decoration: const InputDecoration(labelText: "Description (optional)", border: OutlineInputBorder()),
+              style: TextStyle(color: colors.onSurface),
+              decoration: InputDecoration(
+                labelText: "Description (optional)",
+                labelStyle: TextStyle(color: colors.primary),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 2),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             Row(
               children: [
                 TextButton.icon(
-                  icon: const Icon(Icons.calendar_today),
-                  label: Text(dueDate != null ? dueDate.toString().substring(0, 10) : "Pick date"),
+                  icon: Icon(Icons.calendar_today, color: colors.primary),
+                  label: Text(
+                    dueDate != null ? dueDate.toString().substring(0, 10) : "Pick date",
+                    style: TextStyle(color: colors.primary),
+                  ),
                   onPressed: () async {
                     final picked = await showDatePicker(
                       context: context,
@@ -181,8 +208,11 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             Row(
               children: [
                 TextButton.icon(
-                  icon: const Icon(Icons.access_time),
-                  label: Text(startTime != null ? startTime!.format(context) : "Start time"),
+                  icon: Icon(Icons.access_time, color: colors.primary),
+                  label: Text(
+                    startTime != null ? startTime!.format(context) : "Start time",
+                    style: TextStyle(color: colors.primary),
+                  ),
                   onPressed: () async {
                     final picked = await showTimePicker(
                       context: context,
@@ -193,8 +223,11 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                 ),
                 const SizedBox(width: 8),
                 TextButton.icon(
-                  icon: const Icon(Icons.access_time),
-                  label: Text(endTime != null ? endTime!.format(context) : "End time"),
+                  icon: Icon(Icons.access_time, color: colors.primary),
+                  label: Text(
+                    endTime != null ? endTime!.format(context) : "End time",
+                    style: TextStyle(color: colors.primary),
+                  ),
                   onPressed: () async {
                     final picked = await showTimePicker(
                       context: context,
@@ -210,6 +243,10 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.primary,
+                    foregroundColor: Colors.white,
+                  ),
                   onPressed: () async {
                     final title = titleCtrl.text.trim();
                     if (title.isEmpty) return;
@@ -270,8 +307,8 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   }
 
   Widget _buildCalendar() {
-    final start = _firstDayOfGrid(_displayMonth);
     final colors = Theme.of(context).colorScheme;
+    final start = _firstDayOfGrid(_displayMonth);
     final totalDays = 42;
     final today = DateTime.now();
 
@@ -281,7 +318,10 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            IconButton(icon: const Icon(Icons.chevron_left), onPressed: _previousMonth),
+            IconButton(
+              icon: Icon(Icons.chevron_left, color: colors.primary),
+              onPressed: _previousMonth,
+            ),
             Flexible(
               child: Text(
                 "${_displayMonth.month}/${_displayMonth.year}",
@@ -290,7 +330,10 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            IconButton(icon: const Icon(Icons.chevron_right), onPressed: _nextMonth),
+            IconButton(
+              icon: Icon(Icons.chevron_right, color: colors.primary),
+              onPressed: _nextMonth,
+            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -301,7 +344,11 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             child: Center(
               child: Text(
                 d,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                  color: colors.primary,
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -344,8 +391,8 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                   color: isSelected
                       ? colors.primary
                       : isCurrentMonth
-                      ? Colors.white.withOpacity(0.4)
-                      : Colors.grey.withOpacity(0.2),
+                      ? colors.surface.withOpacity(0.4)
+                      : colors.surface.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                   border: isToday ? Border.all(color: colors.primary, width: 2) : null,
                 ),
@@ -359,8 +406,8 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                           color: isSelected
                               ? Colors.white
                               : isCurrentMonth
-                              ? Colors.black87
-                              : Colors.black38,
+                              ? colors.onSurface
+                              : colors.onSurface.withOpacity(0.4),
                         ),
                       ),
                     ),
@@ -402,6 +449,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
 
   // ---------- Task card ----------
   Widget _buildTaskCard(Map<String, dynamic> task) {
+    final colors = Theme.of(context).colorScheme;
     final isComplete = task[DatabaseHelper.taskColCompleted] == 1;
     final dueDateMs = task[DatabaseHelper.taskColDueDate];
     final isOverdue = dueDateMs != null &&
@@ -423,7 +471,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color: isOverdue ? Colors.red.withOpacity(0.1) : Colors.white.withOpacity(0.6),
+      color: isOverdue ? Colors.red.withOpacity(0.1) : colors.surface.withOpacity(0.6),
       child: ExpansionTile(
         leading: Checkbox(
           value: isComplete,
@@ -434,12 +482,14 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             );
             _loadTasks();
           },
+          activeColor: colors.primary,
         ),
         title: Text(
           task[DatabaseHelper.taskColTitle],
           style: TextStyle(
             decoration: isComplete ? TextDecoration.lineThrough : null,
             fontWeight: isOverdue ? FontWeight.bold : null,
+            color: colors.onSurface,
           ),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -447,13 +497,14 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
         subtitle: timeStr.isNotEmpty
             ? Text(
           timeStr,
-          style: const TextStyle(fontSize: 12),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         )
             : (dueDateMs != null
             ? Text(
           DateTime.fromMillisecondsSinceEpoch(dueDateMs).toString().substring(0, 10),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         )
@@ -464,6 +515,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
                 task[DatabaseHelper.taskColDescription],
+                style: TextStyle(color: colors.onSurface),
                 maxLines: 4,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -473,8 +525,8 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton.icon(
-                icon: const Icon(Icons.edit, size: 18),
-                label: const Text("Edit"),
+                icon: Icon(Icons.edit, size: 18, color: colors.primary),
+                label: Text("Edit", style: TextStyle(color: colors.primary)),
                 onPressed: () => _openTaskForm(existing: task),
               ),
               const SizedBox(width: 8),
@@ -495,8 +547,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
 
   @override
   Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
+    final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: Flexible(
@@ -515,13 +566,13 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             padding: const EdgeInsets.all(8.0),
             child: _buildCalendar(),
           ),
-          const Divider(),
+          Divider(color: colors.primary),
           Expanded(
             child: _tasks.isEmpty
-                ? const Center(
+                ? Center(
               child: Text(
                 "No tasks for this day",
-                style: TextStyle(color: Colors.grey),
+                style: TextStyle(color: colors.onSurface.withOpacity(0.6)),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),

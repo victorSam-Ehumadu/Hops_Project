@@ -213,9 +213,13 @@ class _WatchMePageState extends State<WatchMePage> {
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,
+        foregroundColor: colors.primary,
         actions: [
           IconButton(
-            icon: const Icon(Icons.delete_sweep),
+            icon: Icon(
+              Icons.delete_sweep,
+              color: colors.primary,
+            ),
             onPressed: widget.onClearAll,
             tooltip: "Clear all watch history",
           ),
@@ -336,9 +340,12 @@ class _WatchMePageState extends State<WatchMePage> {
               )),
               const Divider(),
             ],
-            const Text(
+            Text(
               "Send watch request to:",
-              style: TextStyle(fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: colors.primary
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -353,6 +360,7 @@ class _WatchMePageState extends State<WatchMePage> {
                 value: f,
                 child: Text(
                   f,
+                  style: TextStyle(color: colors.primary),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
