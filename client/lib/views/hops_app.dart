@@ -1,3 +1,4 @@
+// hops_app.dart
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:convert';
@@ -12,7 +13,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:client/database/database_helper.dart';
-// No more import of hops_theme.dart
 import 'package:client/utils/hop_id_formatter.dart';
 import 'package:client/views/radar_screen.dart';
 import 'package:client/views/chat_terminal.dart';
@@ -27,8 +27,12 @@ import 'package:client/views/hops_and_robbers.dart';
 import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
 import 'package:client/services/notification_service.dart';
-import 'package:client/services/chat_connection_service.dart';
-import 'package:client/services/hops_constants.dart';
+//import 'package:client/services/chat_connection_service.dart';
+import 'dart:async';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:client/services/rfcomm_chat_service.dart';
+import 'package:flutter/services.dart';
+import 'package:client/views/community_chat.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
@@ -42,11 +46,18 @@ class _HopsAppState extends State<HopsApp> {
   List<Map<String, dynamic>> localActiveContacts = [];
   final TextEditingController _manualIdController = TextEditingController();
 
+  static const _metaChannel = MethodChannel('com.example.client/rfcomm/meta');
+
   bool _isFlareActive = false;
   Timer? _flareCancelTimer;
   Timer? _scanRestartTimer;
 
   String? _myAvatarPath;
+
+  String _adUser(String username) =>
+      username.length > 9 ? username.substring(0, 9) : username;
+
+  String? _originalBluetoothName;
 
   DateTime _lastRadarPush = DateTime(2000);   // force immediate first push
 
@@ -55,6 +66,16 @@ class _HopsAppState extends State<HopsApp> {
 
   String? _activePairingCode;
   Timer? _pairingTimeout;
+
+  int _nearbyBleCount = 0;
+  Timer? _bleCountTimer;
+
+  Color _bleMeshColor(int count) {
+    if (count >= 50) return Colors.green;
+    if (count >= 20) return const Color(0xFFF9A825); // amber/yellow
+    if (count >= 5)  return Colors.orange;
+    return Colors.red;
+  }
 
   // Diagnostic counters
   int _totalScanResults = 0;
@@ -67,6 +88,8 @@ class _HopsAppState extends State<HopsApp> {
 
   // At the top, next to the other sets
   final Set<String> _handledWatchAcks = {};
+  final Set<String> _handledEmgNames = {};    // dedup for incoming EMG: alerts
+  final Set<String> _handledEmgOffNames = {}; // dedup for incoming EMG_OFF: cancels_cance
 
   final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
@@ -98,6 +121,8 @@ class _HopsAppState extends State<HopsApp> {
   final Set<String> _recentWatchSenders = {};
   final Map<String, Timer> _recentWatchTimers = {};
 
+  static const _hopsServiceUuid = '0000FA57-0000-1000-8000-00805F9B34FB';
+
   @override
   void initState() {
     super.initState();
@@ -109,6 +134,7 @@ class _HopsAppState extends State<HopsApp> {
     );
 
     _loadCurrentIdentityMetrics();
+    _captureOriginalBluetoothName();
     _loadEnabledFeatures();
     _loadWatchState();
     _checkPermissionsAndStartBLE();
@@ -135,6 +161,7 @@ class _HopsAppState extends State<HopsApp> {
     _gameEventStreamController.close();
     _diagTimer?.cancel();
     _scanRestartTimer?.cancel();
+    _bleCountTimer?.cancel();
     for (final timer in _recentWatchTimers.values) {
       timer.cancel();
     }
@@ -149,12 +176,96 @@ class _HopsAppState extends State<HopsApp> {
     _notifyWatchingBuddiesChanged();
   }
 
+  Future<void> _updateBleDeviceCount() async {
+    // Don't interrupt an active pairing handshake
+    if (_activePairingCode != null) return;
+
+    await FlutterBluePlus.stopScan();
+
+    final Set<String> uniqueIds = {};
+    StreamSubscription<List<ScanResult>>? countSub;
+
+    // Temporary listener on the raw scan stream — counts every visible device
+    countSub = FlutterBluePlus.scanResults.listen((results) {
+      for (final r in results) {
+        uniqueIds.add(r.device.remoteId.toString());
+      }
+    });
+
+    // Unfiltered 3-second scan — sees ALL BLE devices, not just Hops ones
+    await FlutterBluePlus.startScan(
+      androidUsesFineLocation: true,
+      continuousUpdates: true,
+    );
+
+    await Future.delayed(const Duration(seconds: 3));
+    await countSub.cancel();
+    await FlutterBluePlus.stopScan();
+
+    if (mounted) {
+      setState(() => _nearbyBleCount = uniqueIds.length);
+    }
+
+    // Restart the filtered Hops scan
+    await _startContinuousScan();
+  }
+
+  Future<void> _advertiseCommunityMessage(String message) async {
+    // Truncate to 16 chars — must fit in "CM:user9:message" within 29-char limit
+    final short = message.length > 16 ? message.substring(0, 16) : message;
+    final advName = "CM:${_adUser(myUsername)}:$short";
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 8), () {
+      BlePeripheral.stopAdvertising();
+      _advertiseWithName("HPS:$myUsername", []);
+    });
+  }
+
+  Future<void> _captureOriginalBluetoothName() async {
+    try {
+      final name = await _metaChannel.invokeMethod<String>('getAdapterName');
+      if (mounted && name != null && name.isNotEmpty) {
+        _originalBluetoothName = name;
+      }
+    } catch (_) {
+      // If unavailable, we simply won't restore — no crash.
+    }
+  }
+
+  Future<void> _advertiseWithName(String localName, List<String> services) async {
+    await BlePeripheral.stopAdvertising();
+    await BlePeripheral.startAdvertising(
+      localName: localName,
+      services: [_hopsServiceUuid, ...services], // ← always include Hops UUID
+    );
+    if (_originalBluetoothName != null) {
+      Future.delayed(const Duration(milliseconds: 500), () async {
+        if (!mounted) return;
+        try {
+          await _metaChannel.invokeMethod(
+            'setAdapterName',
+            {'name': _originalBluetoothName!},
+          );
+        } catch (_) {}
+      });
+    }
+  }
+
   void _cancelEmergencyFlare({bool silent = false}) {
     _flareCancelTimer?.cancel();
     _flareCancelTimer = null;
 
-    BlePeripheral.stopAdvertising();
-    BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+    // Broadcast the cancel signal — receivers listen for EMG_OFF: and dismiss
+    final sender = myUsername.length > 8
+        ? myUsername.substring(0, 8)
+        : myUsername;
+    _advertiseWithName("EMG_OFF:$sender", []);
+
+    // After 5 seconds of broadcasting EMG_OFF, revert to normal HPS beacon
+    Future.delayed(const Duration(seconds: 5), () {
+      BlePeripheral.stopAdvertising();
+      _advertiseWithName("HPS:$myUsername", []);
+    });
 
     setState(() => _isFlareActive = false);
 
@@ -169,18 +280,11 @@ class _HopsAppState extends State<HopsApp> {
     }
   }
 
-  Future<void> _sendGameAction(String action, Map<String, String> data) async {
-    final advName = "GAME_$action:${data.entries.map((e) => '${e.key}=${e.value}').join(';')}";
-    await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: advName, services: []);
-    Future.delayed(const Duration(seconds: 2), () {
-      BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
-    });
-  }
-
   Future<void> _broadcastEmergencyFlare(String reason) async {
-    _cancelEmergencyFlare(silent: true);
+    // Only cancel the timer — do NOT call _cancelEmergencyFlare here,
+    // which would start an HPS advertisement we'd immediately kill anyway.
+    _flareCancelTimer?.cancel();
+    _flareCancelTimer = null;
 
     final maxSenderLen = 8;
     final maxReasonLen = 14;
@@ -192,12 +296,16 @@ class _HopsAppState extends State<HopsApp> {
         : reason;
 
     final advName = "EMG:$sender:$shortReason";
-    await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: advName, services: []);
+
+    // Single stop + start — no redundant cycles, no delay.
+    // _advertiseWithName already includes _hopsServiceUuid so the campus
+    // hardware filter picks it up the same as HPS:, FR:, VBT:, etc.
+    await _advertiseWithName(advName, []);
     print("🚨 Broadcasting emergency: $advName");
 
     setState(() => _isFlareActive = true);
 
+    // Auto-cancel after 30 seconds
     _flareCancelTimer = Timer(const Duration(seconds: 30), () {
       _cancelEmergencyFlare(silent: true);
     });
@@ -211,9 +319,7 @@ class _HopsAppState extends State<HopsApp> {
           action: SnackBarAction(
             label: "CANCEL",
             textColor: Colors.white,
-            onPressed: () {
-              _cancelEmergencyFlare();
-            },
+            onPressed: _cancelEmergencyFlare,
           ),
         ),
       );
@@ -255,14 +361,12 @@ class _HopsAppState extends State<HopsApp> {
       _showToastFeedbackAlert("$targetUsername is already your friend");
       return;
     }
+    final advName = "FR:${_adUser(targetUsername)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "FRIEND_REQ:$targetUsername:$myUsername",
-      services: [],
-    );
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 10), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -270,24 +374,25 @@ class _HopsAppState extends State<HopsApp> {
     final advName = "VBT:$location:$level";
     if (advName.length > 29) { _showToastFeedbackAlert("Location name too long"); return; }
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: advName, services: []);
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 30), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
       _startContinuousScan();
     });
   }
 
   Future<void> acceptFriendRequest(String sender) async {
+    final advName = "FA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: "FRIEND_ACK:$sender:$myUsername", services: []);
+    await _advertiseWithName(advName, []);
     if (!_addedFriends.contains(sender)) {
       _addedFriends.add(sender);
       await _refreshContactsTrayList();
     }
     Future.delayed(const Duration(seconds: 5), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -334,11 +439,12 @@ class _HopsAppState extends State<HopsApp> {
   }
 
   Future<void> _acceptWatchRequestBle(String sender) async {
+    final advName = "WA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: "WATCH_ACK:$sender:$myUsername", services: []);
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -353,14 +459,12 @@ class _HopsAppState extends State<HopsApp> {
       _showToastFeedbackAlert("Already watching $targetUsername");
       return;
     }
+    final advName = "WR:${_adUser(targetUsername)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "WATCH_REQ:$targetUsername:$myUsername",
-      services: [],
-    );
+    await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 10), () {
       BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
+      _advertiseWithName("HPS:$myUsername", []);
     });
   }
 
@@ -402,60 +506,12 @@ class _HopsAppState extends State<HopsApp> {
     });
   }
 
-  Future<void> _startChatConnection(String friendUsername) async {
-    // Show a loading indicator while we discover and connect
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator()),
-    );
-
-    final chatService = ChatConnectionService(myUsername: myUsername);
-    final endpointId = await chatService.connectToFriend(friendUsername);
-
-    // Close the loading dialog
-    if (mounted) Navigator.of(context).pop();
-
-    if (endpointId != null && mounted) {
-      // Connection successful → open chat with the live service
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => IndividualChatTerminalView(
-            peerName: friendUsername,
-            chatService: chatService,
-          ),
-        ),
-      ).then((_) {
-        chatService.disconnect();
-        _refreshContactsTrayList();
-      });
-    } else {
-      // Connection failed → open chat in offline mode (local only)
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Friend not nearby. Chat will be local.")),
-        );
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => IndividualChatTerminalView(
-              peerName: friendUsername,
-              chatService: null,
-            ),
-          ),
-        ).then((_) => _refreshContactsTrayList());
-      }
-    }
-  }
-
   void _initializeParallelBleTransceiverEngine() async {
     if (_bleInitialized) return;
     _bleInitialized = true;
     await BlePeripheral.initialize();
     try {
-      await BlePeripheral.startAdvertising(
-        localName: "HPS:$myUsername",
-        services: [],
-      );
+      await _advertiseWithName("HPS:$myUsername", []);
       print('✅ Advertising started successfully');
     } catch (e) {
       print('❌ Advertising failed: $e');
@@ -470,8 +526,7 @@ class _HopsAppState extends State<HopsApp> {
       }
 
       // Throttle: only forward results every 500ms when in noise mode
-      const noiseMode = bool.fromEnvironment('NOISE_MODE', defaultValue: false);
-      if (!noiseMode || DateTime.now().difference(_lastRadarPush).inMilliseconds >= 500) {
+      if (DateTime.now().difference(_lastRadarPush).inMilliseconds >= 500) {
         _radarStreamController.add(results);
         _lastRadarPush = DateTime.now();
       }
@@ -490,9 +545,9 @@ class _HopsAppState extends State<HopsApp> {
         }
 
         // Friend request
-        if (name.startsWith("FRIEND_REQ:")) {
-          final parts = name.substring(11).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
+        if (name.startsWith("FR:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
             if (!friendUsernames.contains(sender) &&
                 !pendingRequests.contains(sender) &&
@@ -503,10 +558,9 @@ class _HopsAppState extends State<HopsApp> {
         }
 
         // Friend ACK
-        if (name.startsWith("FRIEND_ACK:")) {
-          final parts = name.substring(11).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
-            // Register the friend without a chat message
+        if (name.startsWith("FA:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             if (!_addedFriends.contains(parts[1])) {
               _addedFriends.add(parts[1]);
               await _refreshContactsTrayList();
@@ -515,9 +569,9 @@ class _HopsAppState extends State<HopsApp> {
         }
 
         // Watch request
-        if (name.startsWith("WATCH_REQ:")) {
-          final parts = name.substring(10).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
+        if (name.startsWith("WR:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
             if (!_recentWatchSenders.contains(sender) &&
                 !pendingWatchRequests.contains(sender) &&
@@ -530,9 +584,9 @@ class _HopsAppState extends State<HopsApp> {
         }
 
         // Watch ACK – permanent one‑time snackbar
-        if (name.startsWith("WATCH_ACK:")) {
-          final parts = name.substring(10).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
+        if (name.startsWith("WA:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
             if (!_handledWatchAcks.contains(sender)) {
               _handledWatchAcks.add(sender);
@@ -577,46 +631,67 @@ class _HopsAppState extends State<HopsApp> {
         }
         // Emergency Flare (with reason parsing)
         if (name.startsWith("EMG:")) {
-          final payload = name.substring(4);
-          final parts = payload.split(':');
-          final sender = parts.isNotEmpty ? parts[0] : 'Unknown';
-          final reason = parts.length > 1 ? parts.sublist(1).join(':') : 'Emergency';
-          await NotificationService.showEmergencyNotification(
-            sender: sender,
-            reason: reason,
-          );
+          // Ignore own flares (we're the sender)
+          if (!name.startsWith("EMG:${myUsername.length > 8 ? myUsername.substring(0, 8) : myUsername}")) {
+            // Set dedup: same advertisement name → processed exactly once
+            if (!_handledEmgNames.contains(name)) {
+              _handledEmgNames.add(name);
+              // Allow the same emergency to alert again after 35 s
+              // (covers the 30 s flare window + 5 s margin)
+              Future.delayed(const Duration(seconds: 35), () {
+                _handledEmgNames.remove(name);
+              });
+
+              final payload = name.substring(4);
+              final parts = payload.split(':');
+              final sender = parts.isNotEmpty ? parts[0] : 'Unknown';
+              final reason =
+              parts.length > 1 ? parts.sublist(1).join(':') : 'Emergency';
+              await NotificationService.showEmergencyNotification(
+                sender: sender,
+                reason: reason,
+              );
+            }
+          }
+        }
+
+        if (name.startsWith("EMG_OFF:")) {
+          if (!_handledEmgOffNames.contains(name)) {
+            _handledEmgOffNames.add(name);
+            Future.delayed(const Duration(seconds: 10), () {
+              _handledEmgOffNames.remove(name);
+            });
+            // Dismiss the emergency notification on this device
+            await NotificationService.cancelEmergencyNotification();
+          }
         }
       }
     });
+
     await _startContinuousScan();
+
+    // Initial count after BLE has had 5 seconds to warm up
+    Future.delayed(const Duration(seconds: 5), _updateBleDeviceCount);
+    // Then refresh every 30 seconds
+    _bleCountTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _updateBleDeviceCount();
+    });
   }
 
   Future<void> _stopAllAdvertising() async => BlePeripheral.stopAdvertising();
   Future<void> _startContinuousScan() async {
-    const noiseMode = bool.fromEnvironment('NOISE_MODE', defaultValue: false);
-
-    if (noiseMode) {
-      await FlutterBluePlus.startScan(
-        androidUsesFineLocation: true,
-        continuousUpdates: true,
-        androidScanMode: AndroidScanMode.lowLatency,   // still faster!
-      );
-    } else {
-      await FlutterBluePlus.startScan(
-        androidUsesFineLocation: true,
-        continuousUpdates: true,
-      );
-    }
+    await FlutterBluePlus.startScan(
+      androidUsesFineLocation: true,
+      continuousUpdates: true,
+      withServices: [Guid(_hopsServiceUuid)], // ← hardware filter
+    );
   }
 
   // ---------- Pairing ----------
   void _startPairingServer(String code) {
     _activePairingCode = code;
     BlePeripheral.stopAdvertising().then((_) {
-      BlePeripheral.startAdvertising(
-        localName: "HOP:$code:$myUsername",
-        services: [],
-      );
+      _advertiseWithName("HOP:$code:$myUsername", []);
     });
     _pairingTimeout?.cancel();
     _pairingTimeout = Timer(const Duration(seconds: 180), () {
@@ -634,29 +709,40 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _startPairingClient(String code) async {
     await FlutterBluePlus.stopScan();
-    Completer<String?> completer = Completer<String?>();
-    StreamSubscription<List<ScanResult>> sub;
+
+    final completer = Completer<String?>();
+    StreamSubscription<List<ScanResult>>? sub;
+
     sub = FlutterBluePlus.scanResults.listen((results) {
-      for (ScanResult r in results) {
-        String name = r.advertisementData.advName;
+      for (final r in results) {
+        final name = r.advertisementData.advName;
         if (name.startsWith("HOP:$code:")) {
-          String remoteUsername = name.substring(("HOP:$code:").length);
-          completer.complete(remoteUsername);
+          final remoteUsername = name.substring("HOP:$code:".length);
+          if (!completer.isCompleted) completer.complete(remoteUsername);
         }
       }
     });
-    await FlutterBluePlus.startScan(androidUsesFineLocation: true);
+
+    await FlutterBluePlus.startScan(
+      androidUsesFineLocation: true,
+      withServices: [Guid(_hopsServiceUuid)], // ← hardware filter
+    );
+
     String? remoteUsername;
     try {
-      remoteUsername = await completer.future.timeout(const Duration(seconds: 30));
+      remoteUsername =
+      await completer.future.timeout(const Duration(seconds: 30));
     } catch (_) {}
+
     await sub.cancel();
     await FlutterBluePlus.stopScan();
 
     if (remoteUsername == null) {
-      _showToastFeedbackAlert("Device not found. Ensure the code is active on the other device.");
+      _showToastFeedbackAlert(
+          "Device not found. Ensure the code is active on the other device.");
       return;
     }
+
     await _writeContactLogToDatabase(remoteUsername, "Mutual pairing via code");
     await _sendAck(code);
     _showToastFeedbackAlert("Connected with $remoteUsername!");
@@ -665,10 +751,7 @@ class _HopsAppState extends State<HopsApp> {
 
   Future<void> _sendAck(String code) async {
     await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(
-      localName: "ACK:$code:$myUsername",
-      services: [],
-    );
+    await _advertiseWithName("ACK:$code:$myUsername", []);
     Future.delayed(const Duration(seconds: 5), () {
       if (_activePairingCode == null) {
         _stopAllAdvertising();
@@ -791,36 +874,50 @@ class _HopsAppState extends State<HopsApp> {
           Flexible(
             child: Text(
               title,
-              style: theme.textTheme.headlineMedium?.copyWith(fontSize: 20),
+              style: theme.textTheme.headlineMedium?.copyWith(
+                fontSize: 20,
+                color: colors.primary,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
       ),
       actions: [
-        Flexible(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-                color: colors.tertiaryContainer.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(100)),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.radar, size: 10, color: colors.tertiaryContainer),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(
-                    "BLE Mesh Active",
-                    style: TextStyle(
-                        color: colors.tertiaryContainer,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: _bleMeshColor(_nearbyBleCount).withOpacity(0.12),
+            borderRadius: BorderRadius.circular(100),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Pulsing color dot
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: _bleMeshColor(_nearbyBleCount),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: _bleMeshColor(_nearbyBleCount).withOpacity(0.6),
+                      blurRadius: 6,
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$_nearbyBleCount BLE',
+                style: TextStyle(
+                  color: _bleMeshColor(_nearbyBleCount),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(width: 8),
@@ -853,6 +950,8 @@ class _HopsAppState extends State<HopsApp> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+
+    // Messages tab is self-contained — owns its own BT discovery and session mgmt.
     final List<Widget> tabs = [
       RadarScreen(
         radarStream: radarStream,
@@ -862,17 +961,20 @@ class _HopsAppState extends State<HopsApp> {
         onDeclineRequest: declineRequest,
         friendUsernames: friendUsernames,
         onActivateFlare: (String reason) => _broadcastEmergencyFlare(reason),
-        onRescan: () {                                 // <-- add this
+        onRescan: () {
           FlutterBluePlus.stopScan();
-          FlutterBluePlus.startScan(
-            androidUsesFineLocation: true,
-            continuousUpdates: true,
-          );
+          _startContinuousScan();
         },
+        nearbyBleCount: _nearbyBleCount,
       ),
-      _buildContactsTab(),
-      _buildFeaturesTab(),
-      _buildMyFeaturesTab(),
+      _buildContactsTab(),             // index 1 — unchanged radar contacts
+      CommunityChat(
+        radarStream: radarStream,
+        onSendMessage: _advertiseCommunityMessage,
+        myUsername: myUsername,
+      ), // index 2 — NEW: BT peer chat
+      _buildFeaturesTab(),             // index 3
+      _buildMyFeaturesTab(),           // index 4
     ];
 
     return Scaffold(
@@ -892,7 +994,10 @@ class _HopsAppState extends State<HopsApp> {
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: colors.surface.withOpacity(0.8),
-          borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(24),
+            topRight: Radius.circular(24),
+          ),
         ),
         child: SafeArea(
           child: Padding(
@@ -900,10 +1005,11 @@ class _HopsAppState extends State<HopsApp> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildNavItem(0, Icons.radar, Icons.radar, "Radar"),
-                _buildNavItem(1, Icons.people_outline, Icons.people, "Contacts"),
-                _buildNavItem(2, Icons.grid_view_outlined, Icons.grid_view, "Features"),
-                _buildNavItem(3, Icons.star_outline, Icons.star, "My Features"),
+                _buildNavItem(0, Icons.radar,           Icons.radar,     "Radar"),
+                _buildNavItem(1, Icons.people_outline,  Icons.people,    "Contacts"),
+                _buildNavItem(2, Icons.campaign_outlined, Icons.campaign, "Community"),
+                _buildNavItem(3, Icons.grid_view_outlined, Icons.grid_view, "Features"),
+                _buildNavItem(4, Icons.star_outline,    Icons.star,      "My Features"),
               ],
             ),
           ),
@@ -1005,20 +1111,10 @@ class _HopsAppState extends State<HopsApp> {
                     style: const TextStyle(fontSize: 13, color: Colors.black54),
                   ),
                 ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: Icon(Icons.chat_bubble_outline, color: colors.primary),
-                      onPressed: () => _startChatConnection(contact['username'] as String),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                      onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
-                    ),
-                  ],
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                  onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
                 ),
-                onTap: null,  // Remove the old onTap that opened the chat directly
               ),
             );
           },
@@ -1183,9 +1279,9 @@ class _HopsAppState extends State<HopsApp> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      //margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      color: colors.surfaceContainerHighest.withOpacity(0.4),
+      color: colors.primary.withOpacity(0.4),
       elevation: 0,
       child: ExpansionTile(
         leading: Icon(feature.icon, color: colors.primary, size: 28),
@@ -1257,7 +1353,7 @@ class _HopsAppState extends State<HopsApp> {
           TextButton.icon(
             icon: Icon(Icons.add_circle_outline, size: 18, color: colors.primary),
             label: Text("Manage", style: TextStyle(color: colors.primary)),
-            onPressed: () => setState(() => _currentIndex = 2),
+            onPressed: () => setState(() => _currentIndex = 3),
           ),
           const SizedBox(width: 8),
         ],
@@ -1314,17 +1410,6 @@ class _HopsAppState extends State<HopsApp> {
                       builder: (_) => VibeCheckPage(
                         radarStream: radarStream,
                         onAdvertiseVibeTag: _advertiseVibeTag,
-                      ),
-                    ),
-                  );
-                } else if (feature.id == 8) {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => HopsAndRobbersPage(
-                        radarStream: radarStream,
-                        myUsername: myUsername,
-                        onSendGameAction: _sendGameAction,
-                        gameEventStream: gameEventStream,
                       ),
                     ),
                   );

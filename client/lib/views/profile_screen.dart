@@ -10,6 +10,7 @@ import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/theme_picker_screen.dart';
 import 'package:client/views/terms_screen.dart';
 import 'package:client/views/edit_identity_screen.dart';
+import 'package:client/views/walkthrough_screen.dart';
 
 class HopsProfileScreen extends StatefulWidget {
   const HopsProfileScreen({super.key});
@@ -28,6 +29,23 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
     super.initState();
     _loadPersistedIdentityStrings();
     _loadIdentityData();
+  }
+
+  Future<void> _loadPersistedIdentityStrings() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      dynamicProfileUsername =
+          prefs.getString('my_username') ?? 'Mesh_Operator';
+    });
+  }
+
+  Future<void> _loadIdentityData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _nickname = prefs.getString('nickname') ?? '';
+      _bio = prefs.getString('bio') ?? '';
+      _avatarPath = prefs.getString('avatar_path');
+    });
   }
 
   void _showFullImage() {
@@ -49,39 +67,22 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
     );
   }
 
-  Future<void> _loadPersistedIdentityStrings() async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    setState(() {
-      dynamicProfileUsername =
-          prefs.getString('my_username') ?? 'Mesh_Operator';
-    });
-  }
-
-  Future<void> _loadIdentityData() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _nickname = prefs.getString('nickname') ?? '';
-      _bio = prefs.getString('bio') ?? '';
-      _avatarPath = prefs.getString('avatar_path');
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final displayName =
     _nickname.isNotEmpty ? _nickname : dynamicProfileUsername;
-    final bioText = _bio.isNotEmpty ? _bio : "Proud Hops User";
+    final bioText = _bio.isNotEmpty ? _bio : "Your Average Hopper";
 
     return Scaffold(
       appBar: AppBar(
         title: Flexible(
           child: Text(
-            "Profile Identity",
+            "Profile",
             style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: colors.onBackground),
+                color: colors.primary),
             overflow: TextOverflow.ellipsis,
           ),
         ),
@@ -129,11 +130,13 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
 
             // Edit Identity button
             ListTile(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               contentPadding:
               const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               leading: Icon(Icons.edit, color: colors.primary),
               title: Text(
-                'Edit Identity',
+                'Edit Profile Details',
                 style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 14,
@@ -149,7 +152,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 );
                 if (result == true) {
                   _loadIdentityData();
-                  setState(() {}); // force rebuild
+                  setState(() {});
                 }
               },
             ),
@@ -198,7 +201,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 14,
-                    color: colors.onBackground),
+                    color: colors.primary),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -209,6 +212,27 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                     context,
                     MaterialPageRoute(
                         builder: (_) => const TermsScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Help button
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.help_outline, color: colors.primary),
+              title: Text(
+                'Help',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18, color: colors.onBackground),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const WalkthroughScreen()),
+                );
               },
             ),
             const SizedBox(height: 24),

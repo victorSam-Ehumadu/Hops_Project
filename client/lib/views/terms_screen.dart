@@ -209,68 +209,66 @@ By using Hops, you acknowledge that you have:
 If you do not agree, you must discontinue use of the application immediately.
 ''';
 
-  // Styles
-  static const TextStyle _titleStyle = TextStyle(
-    fontSize: 22,
-    fontWeight: FontWeight.bold,
-    height: 1.4,
-  );
-  static const TextStyle _headingStyle = TextStyle(
-    fontSize: 18,
-    fontWeight: FontWeight.bold,
-    height: 1.4,
-  );
-  static const TextStyle _bodyStyle = TextStyle(
-    fontSize: 14,
-    height: 1.5,
-  );
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final lines = termsText.split('\n');
     final spans = <TextSpan>[];
 
+    // Default style applied to every span unless overridden
+    final defaultStyle = TextStyle(
+      fontSize: 14,
+      height: 1.5,
+      color: colors.primary,
+    );
+
     for (int i = 0; i < lines.length; i++) {
       final line = lines[i];
       if (line.trim().isEmpty) {
-        // blank line
         spans.add(const TextSpan(text: '\n'));
         continue;
       }
 
-      // Check if it's the main title (first non-empty line)
       if (i == 0) {
+        // Main title – largest, centred
         spans.add(TextSpan(
           text: line.trim(),
-          style: _titleStyle.copyWith(color: colors.primary),
+          style: defaultStyle.copyWith(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: colors.primary,
+          ),
         ));
         spans.add(const TextSpan(text: '\n\n'));
         continue;
       }
 
-      // Check if it's a section heading (starts with a digit followed by ". ")
       final headingPattern = RegExp(r'^\d+\.\s');
       if (headingPattern.hasMatch(line.trim())) {
-        spans.add(const TextSpan(text: '\n\n'));
+        // Section heading
         spans.add(TextSpan(
           text: line.trim(),
-          style: _headingStyle.copyWith(color: colors.primary),
+          style: defaultStyle.copyWith(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: colors.primary,
+          ),
         ));
         spans.add(const TextSpan(text: '\n\n'));
         continue;
       }
 
-      // Normal body text
-      spans.add(TextSpan(
-        text: line.trim().isEmpty ? '\n' : '${line.trim()} ',
-        style: _bodyStyle.copyWith(color: colors.onBackground),
-      ));
+      // Normal body text – uses the default style
+      spans.add(TextSpan(text: '${line.trim()} '));
+      spans.add(const TextSpan(text: '\n\n'));
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Terms and Conditions'),
+        title: Text(
+          'Terms and Conditions',
+          style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: colors.primary,
@@ -278,7 +276,10 @@ If you do not agree, you must discontinue use of the application immediately.
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: RichText(
-          text: TextSpan(children: spans),
+          text: TextSpan(
+            style: defaultStyle,   // fallback for any span that might miss a color
+            children: spans,
+          ),
         ),
       ),
     );

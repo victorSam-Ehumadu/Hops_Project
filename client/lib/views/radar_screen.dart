@@ -1,3 +1,4 @@
+// radar_screen.dart
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -15,6 +16,7 @@ class RadarScreen extends StatefulWidget {
   final Set<String> friendUsernames;
   final ValueChanged<String>? onActivateFlare;
   final VoidCallback? onRescan;
+  final int nearbyBleCount;
 
   const RadarScreen({
     super.key,
@@ -26,6 +28,7 @@ class RadarScreen extends StatefulWidget {
     required this.friendUsernames,
     this.onActivateFlare,
     this.onRescan,
+    this.nearbyBleCount = 0,
   });
 
   @override
@@ -37,6 +40,20 @@ class _RadarScreenState extends State<RadarScreen>
   final Map<String, ScanResult> _devices = {};
   StreamSubscription<List<ScanResult>>? _sub;
   late AnimationController _radarController;
+
+  Color _bleMeshColor(int count) {
+    if (count >= 50) return Colors.green;
+    if (count >= 20) return const Color(0xFFF9A825); // amber
+    if (count >= 5)  return Colors.orange;
+    return Colors.red;
+  }
+
+  String _bleMeshLabel(int count) {
+    if (count >= 50) return 'Rich';
+    if (count >= 20) return 'Decent';
+    if (count >= 5)  return 'Limited';
+    return 'Sparse';
+  }
 
   // Timers for cleanup
   Timer? _cleanupTimer;
@@ -214,23 +231,60 @@ class _RadarScreenState extends State<RadarScreen>
           ],
         ),
         actions: [
+          // --- BLE device count chip (radar only) ---
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-                color: colors.tertiaryContainer.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(100)),
+              color: _bleMeshColor(widget.nearbyBleCount).withOpacity(0.12),
+              borderRadius: BorderRadius.circular(100),
+            ),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.radar, size: 12, color: colors.tertiaryContainer),
+                // Colored mesh-strength dot
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: _bleMeshColor(widget.nearbyBleCount),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: _bleMeshColor(widget.nearbyBleCount).withOpacity(0.6),
+                        blurRadius: 6,
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(width: 6),
-                Text("BLE Mesh Active",
-                    style: TextStyle(
-                        color: colors.tertiaryContainer,
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${widget.nearbyBleCount} BLE',
+                      style: TextStyle(
+                        color: _bleMeshColor(widget.nearbyBleCount),
                         fontSize: 11,
-                        fontWeight: FontWeight.bold)),
+                        fontWeight: FontWeight.bold,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      _bleMeshLabel(widget.nearbyBleCount),
+                      style: TextStyle(
+                        color: _bleMeshColor(widget.nearbyBleCount).withOpacity(0.8),
+                        fontSize: 8,
+                        fontWeight: FontWeight.w500,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
+
           const SizedBox(width: 8),
           GestureDetector(
             onLongPress: () {
@@ -424,9 +478,13 @@ class _RadarScreenState extends State<RadarScreen>
                                   Expanded(
                                     child: Text(
                                       "$sender wants to add you",
-                                      style: const TextStyle(fontSize: 13),
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.grey
+                                      ),
                                       overflow: TextOverflow.ellipsis,
                                       maxLines: 2,
+
                                     ),
                                   ),
                                 ],

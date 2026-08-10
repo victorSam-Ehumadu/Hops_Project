@@ -41,7 +41,6 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
     );
     if (image == null) return;
 
-    // Read bytes and save to permanent storage
     final Uint8List imageBytes = await image.readAsBytes();
     final dir = await getApplicationDocumentsDirectory();
     final fileName = 'avatar_${DateTime.now().millisecondsSinceEpoch}.jpg';
@@ -97,7 +96,10 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Edit Identity'),
+        title: Text(
+          'Edit Identity',
+          style: TextStyle(color: colors.primary),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: colors.primary,
@@ -112,8 +114,9 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
               child: CircleAvatar(
                 radius: 48,
                 backgroundColor: colors.primaryContainer,
-                backgroundImage:
-                _avatarPath != null ? FileImage(File(_avatarPath!)) : null,
+                backgroundImage: _avatarPath != null
+                    ? FileImage(File(_avatarPath!))
+                    : null,
                 child: _avatarPath == null
                     ? const Icon(Icons.camera_alt, size: 48, color: Colors.white)
                     : null,
@@ -122,16 +125,30 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
             const SizedBox(height: 8),
             TextButton(
               onPressed: _removeAvatar,
-              child: const Text('Remove photo'),
+              child: Text(
+                'Remove photo',
+                style: TextStyle(color: colors.primary),   // visible
+              ),
             ),
             const SizedBox(height: 24),
 
             // Nickname field
             TextField(
               controller: _nicknameController,
+              style: TextStyle(color: colors.onSurface),   // typed text
               decoration: InputDecoration(
                 labelText: 'Nickname',
+                labelStyle: TextStyle(color: colors.primary.withOpacity(0.7)),
                 hintText: 'Your display name',
+                hintStyle: TextStyle(color: colors.onSurface.withOpacity(0.4)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 1.5),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 2),
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -143,9 +160,20 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
             TextField(
               controller: _bioController,
               maxLines: 3,
+              style: TextStyle(color: colors.onSurface),   // typed text
               decoration: InputDecoration(
                 labelText: 'Bio',
+                labelStyle: TextStyle(color: colors.onSurface.withOpacity(0.7)),
                 hintText: 'Tell people about yourself',
+                hintStyle: TextStyle(color: colors.onSurface.withOpacity(0.4)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 1.5),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 2),
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),

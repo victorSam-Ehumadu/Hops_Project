@@ -468,7 +468,10 @@ class _AuthScreenState extends State<AuthScreen> {
     final colors = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(100)),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(100),
+      ),
       child: Row(
         children: [
           Expanded(
@@ -477,13 +480,20 @@ class _AuthScreenState extends State<AuthScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: !isJoinMeshMode ? colors.surfaceContainerHighest : Colors.transparent,
+                  color: !isJoinMeshMode ? colors.primary : Colors.transparent,
                   borderRadius: BorderRadius.circular(100),
                 ),
-                child: const Center(
-                    child: Text("Login",
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                        overflow: TextOverflow.ellipsis)),
+                child: Center(
+                  child: Text(
+                    "Login",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: !isJoinMeshMode ? Colors.white : colors.primary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ),
             ),
           ),
@@ -497,10 +507,16 @@ class _AuthScreenState extends State<AuthScreen> {
                   borderRadius: BorderRadius.circular(100),
                 ),
                 child: Center(
-                    child: Text("Join Hops",
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13,
-                            color: isJoinMeshMode ? Colors.white : colors.tertiaryContainer),
-                        overflow: TextOverflow.ellipsis)),
+                  child: Text(
+                    "Join Hops",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: isJoinMeshMode ? Colors.white : colors.tertiaryContainer,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ),
             ),
           ),
