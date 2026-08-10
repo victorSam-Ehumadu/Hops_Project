@@ -84,16 +84,16 @@ class AppThemes {
       onTertiaryContainer: Colors.white,
     ),
     // 3 – Sunset Glow
-    AppTheme(
-      name: 'Sunset Glow',
-      primary: Color(0xFFFF6F00),
-      background: Color(0xFFFFF3E0),
-      surface: Color(0xFFFFE0B2),
-      onBackground: Color(0xBF360C),
-      primaryContainer: Color(0xFFFFB74D),
-      tertiaryContainer: Color(0xFFE65100),
-      onTertiaryContainer: Colors.white,
-    ),
+    // AppTheme(
+    //   name: 'Sunset Glow',
+    //   primary: Color(0xFFFF6F00),
+    //   background: Color(0xFFFFF3E0),
+    //   surface: Color(0xFFFFE0B2),
+    //   onBackground: Color(0xBF360C),
+    //   primaryContainer: Color(0xFFFFB74D),
+    //   tertiaryContainer: Color(0xFFE65100),
+    //   onTertiaryContainer: Colors.white,
+    // ),
     // 4 – Forest Calm
     AppTheme(
       name: 'Forest Calm',

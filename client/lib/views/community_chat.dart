@@ -1,11 +1,16 @@
 // lib/views/community_chat.dart
+//
+// Dedup mechanism is identical to VibeCheckPage:
+// _processedNames is a Set<String> keyed by the FULL advertisement name
+// (e.g. "CM:alic:meet at gate 2"). A Set can only contain each string once,
+// so the same packet received 1000 times is processed exactly once.
+// No timers, no MACs, no async — just a Set.contains() check.
+
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-// ─── Model ───────────────────────────────────────────────────────────────────
 
 class CommunityMessage {
   final String sender;
@@ -37,8 +42,6 @@ class CommunityMessage {
       );
 }
 
-// ─── Widget ──────────────────────────────────────────────────────────────────
-
 class CommunityChat extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
   final Future<void> Function(String message) onSendMessage;
@@ -58,57 +61,33 @@ class CommunityChat extends StatefulWidget {
 class _CommunityChatState extends State<CommunityChat> {
   static const _prefsKey = 'community_messages_v1';
   static const int _maxStored = 100;
-
-  // ── BLE packet budget ─────────────────────────────────────────────────────
-  // Scan-response = 31 bytes. Name header = 2 bytes → name ≤ 29 chars.
-  // Format: "CM:" (3) + sender (4) + ":" (1) + message (21) = 29 ✓
-  static const int _maxMsgLen = 21;
+  static const int _maxMsgLen = 21; // CM:(4)sender:(1):(21)msg = 29 bytes ✓
   static const int _userLen = 4;
 
   List<CommunityMessage> _messages = [];
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
-  StreamSubscription? _radarSub;
+  StreamSubscription? _streamSub;
   bool _isSending = false;
 
-  // ── Deduplication ─────────────────────────────────────────────────────────
-  //
-  // Key  : "$sender4|$text"  — content-only, no device MAC.
-  //        Using the MAC (remoteId) is unreliable on Android 12+ because
-  //        BLE uses randomised addresses that can change between scan windows.
-  //        Content-keying is stable: same sender + same text = same key.
-  //
-  // Value: DateTime of FIRST appearance.
-  //
-  // A packet is a duplicate if the same key appeared within the last 30 s.
-  // 30 s > the 8-second advertising window, so every message is processed
-  // exactly once regardless of how many scan cycles overlap with that window.
-  //
-  // Own-message pre-population: when WE send, we immediately insert the key
-  // into the map. Any bounce-back from our own scanner is therefore seen as
-  // a duplicate and silently dropped — with zero race-window.
-  final Map<String, DateTime> _seen = {};
-  Timer? _pruneTimer;
+  // ── Dedup — IDENTICAL to VibeCheckPage._communityReports ─────────────────
+  // Key = full advertisement name, e.g. "CM:alic:meet at gate 2".
+  // A Set<String> can hold each value exactly once. The scanner may deliver
+  // the same advertisement thousands of times — Set.contains() catches all
+  // of them after the first. No timers, no MACs, no async removal needed.
+  final Set<String> _processedNames = {};
 
   @override
   void initState() {
     super.initState();
     _loadHistory();
-    _listenToRadar();
+    _listenToRadar(); // same structure as VibeCheckPage.initState
     _controller.addListener(() => setState(() {}));
-
-    // Prune stale entries every minute so the map stays small.
-    _pruneTimer = Timer.periodic(const Duration(minutes: 1), (_) {
-      final cutoff =
-      DateTime.now().subtract(const Duration(seconds: 35));
-      _seen.removeWhere((_, t) => t.isBefore(cutoff));
-    });
   }
 
   @override
   void dispose() {
-    _radarSub?.cancel();
-    _pruneTimer?.cancel();
+    _streamSub?.cancel();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -142,18 +121,24 @@ class _CommunityChatState extends State<CommunityChat> {
     );
   }
 
-  // ── BLE receiving ─────────────────────────────────────────────────────────
+  // ── Radar listener — same structure as VibeCheckPage ─────────────────────
 
   void _listenToRadar() {
-    _radarSub = widget.radarStream.listen((results) {
-      final now = DateTime.now();
+    _streamSub = widget.radarStream.listen((results) {
+      bool updated = false;
 
       for (final r in results) {
-        final name = r.advertisementData.advName;
-        if (!name.startsWith('CM:')) continue;
+        final advName = r.advertisementData.advName;
+        if (!advName.startsWith('CM:')) continue;
+
+        // ── The VibeCheck dedup trick ──────────────────────────────────────
+        // If this exact advertisement name is already in the Set, skip.
+        // The Set holds it once no matter how many scan results deliver it.
+        if (_processedNames.contains(advName)) continue;
+        _processedNames.add(advName);
 
         // Parse "CM:sender:text"  (text may contain colons)
-        final payload = name.substring(3);
+        final payload = advName.substring(3);
         final sep = payload.indexOf(':');
         if (sep <= 0 || sep >= payload.length - 1) continue;
 
@@ -161,28 +146,22 @@ class _CommunityChatState extends State<CommunityChat> {
         final text = payload.substring(sep + 1);
         if (sender.isEmpty || text.isEmpty) continue;
 
-        // Fast-path: drop own advertisements
+        // Skip own advertisements
         if (sender == _adUserCm(widget.myUsername)) continue;
 
-        // Content-keyed dedup — immune to randomised BLE MACs
-        final key = '$sender|$text';
-        final firstSeen = _seen[key];
-        if (firstSeen != null &&
-            now.difference(firstSeen).inSeconds < 30) {
-          continue; // duplicate within the 30-second window
-        }
-        _seen[key] = now;
-
-        final msg = CommunityMessage(
+        _messages.add(CommunityMessage(
           sender: sender,
           text: text,
-          timestamp: now,
+          timestamp: DateTime.now(),
           isMe: false,
-        );
+        ));
+        updated = true;
+      }
 
+      if (updated) {
+        _persist();
         if (mounted) {
-          setState(() => _messages.add(msg));
-          _persist();
+          setState(() {});
           _scrollToBottom();
         }
       }
@@ -197,15 +176,15 @@ class _CommunityChatState extends State<CommunityChat> {
 
     _controller.clear();
 
-    // Pre-populate the dedup map NOW — before the advertisement starts —
-    // so any bounce-back the scanner picks up is treated as a duplicate
-    // and silently dropped. No race window.
-    final ownKey = '${_adUserCm(widget.myUsername)}|$text';
-    _seen[ownKey] = DateTime.now();
+    // Pre-register our own advertisement name in the Set BEFORE advertising
+    // starts. If our own scanner picks it up, Set.contains() catches it
+    // immediately — zero race window, same trick as the listener above.
+    final ownAdvName = 'CM:${_adUserCm(widget.myUsername)}:$text';
+    _processedNames.add(ownAdvName);
 
     setState(() => _isSending = true);
 
-    // Show own message immediately (optimistic)
+    // Show own message immediately
     setState(() => _messages.add(CommunityMessage(
       sender: widget.myUsername,
       text: text,
@@ -224,8 +203,6 @@ class _CommunityChatState extends State<CommunityChat> {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  /// 4-char truncation for CM: advertisement sender field.
-  /// Must match _adUserCm in hops_app.dart.
   String _adUserCm(String u) =>
       u.length > _userLen ? u.substring(0, _userLen) : u;
 
@@ -347,9 +324,8 @@ class _CommunityChatState extends State<CommunityChat> {
                     '$charsUsed/$_maxMsgLen',
                     style: TextStyle(
                       fontSize: 11,
-                      fontWeight: nearLimit
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                      fontWeight:
+                      nearLimit ? FontWeight.bold : FontWeight.normal,
                       color: nearLimit
                           ? Colors.redAccent
                           : colors.onSurface.withOpacity(0.4),
@@ -401,8 +377,7 @@ class _CommunityChatState extends State<CommunityChat> {
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white),
+                        strokeWidth: 2, color: Colors.white),
                   )
                       : const Icon(Icons.send,
                       color: Colors.white, size: 20),
@@ -471,8 +446,7 @@ class _CommunityChatState extends State<CommunityChat> {
               children: [
                 if (!isMe && showHeader)
                   Padding(
-                    padding:
-                    const EdgeInsets.only(bottom: 3, left: 4),
+                    padding: const EdgeInsets.only(bottom: 3, left: 4),
                     child: Text(
                       msg.sender,
                       style: TextStyle(
@@ -492,10 +466,8 @@ class _CommunityChatState extends State<CommunityChat> {
                     borderRadius: BorderRadius.only(
                       topLeft: const Radius.circular(18),
                       topRight: const Radius.circular(18),
-                      bottomLeft:
-                      Radius.circular(isMe ? 18 : 4),
-                      bottomRight:
-                      Radius.circular(isMe ? 4 : 18),
+                      bottomLeft: Radius.circular(isMe ? 18 : 4),
+                      bottomRight: Radius.circular(isMe ? 4 : 18),
                     ),
                     boxShadow: [
                       BoxShadow(
@@ -508,16 +480,15 @@ class _CommunityChatState extends State<CommunityChat> {
                   child: Text(
                     msg.text,
                     style: TextStyle(
-                      color:
-                      isMe ? Colors.white : colors.onSurface,
+                      color: isMe ? Colors.white : colors.onSurface,
                       fontSize: 14,
                       height: 1.3,
                     ),
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.only(
-                      top: 3, left: 4, right: 4),
+                  padding:
+                  const EdgeInsets.only(top: 3, left: 4, right: 4),
                   child: Text(
                     _fmtTime(msg.timestamp),
                     style: TextStyle(
@@ -545,8 +516,7 @@ class _CommunityChatState extends State<CommunityChat> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.campaign_outlined,
-                size: 64,
-                color: colors.primary.withOpacity(0.18)),
+                size: 64, color: colors.primary.withOpacity(0.18)),
             const SizedBox(height: 18),
             Text(
               'Community Chat',

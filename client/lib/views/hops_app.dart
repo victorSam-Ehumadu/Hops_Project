@@ -67,6 +67,16 @@ class _HopsAppState extends State<HopsApp> {
   String? _activePairingCode;
   Timer? _pairingTimeout;
 
+  int _nearbyBleCount = 0;
+  Timer? _bleCountTimer;
+
+  Color _bleMeshColor(int count) {
+    if (count >= 50) return Colors.green;
+    if (count >= 20) return const Color(0xFFF9A825); // amber/yellow
+    if (count >= 5)  return Colors.orange;
+    return Colors.red;
+  }
+
   // Diagnostic counters
   int _totalScanResults = 0;
   final Set<String> _uniqueHopsDevices = {};
@@ -78,6 +88,8 @@ class _HopsAppState extends State<HopsApp> {
 
   // At the top, next to the other sets
   final Set<String> _handledWatchAcks = {};
+  final Set<String> _handledEmgNames = {};    // dedup for incoming EMG: alerts
+  final Set<String> _handledEmgOffNames = {}; // dedup for incoming EMG_OFF: cancels_cance
 
   final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
@@ -149,6 +161,7 @@ class _HopsAppState extends State<HopsApp> {
     _gameEventStreamController.close();
     _diagTimer?.cancel();
     _scanRestartTimer?.cancel();
+    _bleCountTimer?.cancel();
     for (final timer in _recentWatchTimers.values) {
       timer.cancel();
     }
@@ -161,6 +174,40 @@ class _HopsAppState extends State<HopsApp> {
     final watching = prefs.getStringList('watchingBuddies') ?? [];
     setState(() => _watchingBuddies = watching.toSet());
     _notifyWatchingBuddiesChanged();
+  }
+
+  Future<void> _updateBleDeviceCount() async {
+    // Don't interrupt an active pairing handshake
+    if (_activePairingCode != null) return;
+
+    await FlutterBluePlus.stopScan();
+
+    final Set<String> uniqueIds = {};
+    StreamSubscription<List<ScanResult>>? countSub;
+
+    // Temporary listener on the raw scan stream — counts every visible device
+    countSub = FlutterBluePlus.scanResults.listen((results) {
+      for (final r in results) {
+        uniqueIds.add(r.device.remoteId.toString());
+      }
+    });
+
+    // Unfiltered 3-second scan — sees ALL BLE devices, not just Hops ones
+    await FlutterBluePlus.startScan(
+      androidUsesFineLocation: true,
+      continuousUpdates: true,
+    );
+
+    await Future.delayed(const Duration(seconds: 3));
+    await countSub.cancel();
+    await FlutterBluePlus.stopScan();
+
+    if (mounted) {
+      setState(() => _nearbyBleCount = uniqueIds.length);
+    }
+
+    // Restart the filtered Hops scan
+    await _startContinuousScan();
   }
 
   Future<void> _advertiseCommunityMessage(String message) async {
@@ -208,8 +255,17 @@ class _HopsAppState extends State<HopsApp> {
     _flareCancelTimer?.cancel();
     _flareCancelTimer = null;
 
-    BlePeripheral.stopAdvertising();
-    _advertiseWithName("HPS:$myUsername", []);
+    // Broadcast the cancel signal — receivers listen for EMG_OFF: and dismiss
+    final sender = myUsername.length > 8
+        ? myUsername.substring(0, 8)
+        : myUsername;
+    _advertiseWithName("EMG_OFF:$sender", []);
+
+    // After 5 seconds of broadcasting EMG_OFF, revert to normal HPS beacon
+    Future.delayed(const Duration(seconds: 5), () {
+      BlePeripheral.stopAdvertising();
+      _advertiseWithName("HPS:$myUsername", []);
+    });
 
     setState(() => _isFlareActive = false);
 
@@ -224,18 +280,11 @@ class _HopsAppState extends State<HopsApp> {
     }
   }
 
-  Future<void> _sendGameAction(String action, Map<String, String> data) async {
-    final advName = "GAME_$action:${data.entries.map((e) => '${e.key}=${e.value}').join(';')}";
-    await BlePeripheral.stopAdvertising();
-    await BlePeripheral.startAdvertising(localName: advName, services: []);
-    Future.delayed(const Duration(seconds: 2), () {
-      BlePeripheral.stopAdvertising();
-      BlePeripheral.startAdvertising(localName: "HPS:$myUsername", services: []);
-    });
-  }
-
   Future<void> _broadcastEmergencyFlare(String reason) async {
-    _cancelEmergencyFlare(silent: true);
+    // Only cancel the timer — do NOT call _cancelEmergencyFlare here,
+    // which would start an HPS advertisement we'd immediately kill anyway.
+    _flareCancelTimer?.cancel();
+    _flareCancelTimer = null;
 
     final maxSenderLen = 8;
     final maxReasonLen = 14;
@@ -247,12 +296,16 @@ class _HopsAppState extends State<HopsApp> {
         : reason;
 
     final advName = "EMG:$sender:$shortReason";
-    await BlePeripheral.stopAdvertising();
+
+    // Single stop + start — no redundant cycles, no delay.
+    // _advertiseWithName already includes _hopsServiceUuid so the campus
+    // hardware filter picks it up the same as HPS:, FR:, VBT:, etc.
     await _advertiseWithName(advName, []);
     print("🚨 Broadcasting emergency: $advName");
 
     setState(() => _isFlareActive = true);
 
+    // Auto-cancel after 30 seconds
     _flareCancelTimer = Timer(const Duration(seconds: 30), () {
       _cancelEmergencyFlare(silent: true);
     });
@@ -266,9 +319,7 @@ class _HopsAppState extends State<HopsApp> {
           action: SnackBarAction(
             label: "CANCEL",
             textColor: Colors.white,
-            onPressed: () {
-              _cancelEmergencyFlare();
-            },
+            onPressed: _cancelEmergencyFlare,
           ),
         ),
       );
@@ -578,18 +629,51 @@ class _HopsAppState extends State<HopsApp> {
         }
         // Emergency Flare (with reason parsing)
         if (name.startsWith("EMG:")) {
-          final payload = name.substring(4);
-          final parts = payload.split(':');
-          final sender = parts.isNotEmpty ? parts[0] : 'Unknown';
-          final reason = parts.length > 1 ? parts.sublist(1).join(':') : 'Emergency';
-          await NotificationService.showEmergencyNotification(
-            sender: sender,
-            reason: reason,
-          );
+          // Ignore own flares (we're the sender)
+          if (!name.startsWith("EMG:${myUsername.length > 8 ? myUsername.substring(0, 8) : myUsername}")) {
+            // Set dedup: same advertisement name → processed exactly once
+            if (!_handledEmgNames.contains(name)) {
+              _handledEmgNames.add(name);
+              // Allow the same emergency to alert again after 35 s
+              // (covers the 30 s flare window + 5 s margin)
+              Future.delayed(const Duration(seconds: 35), () {
+                _handledEmgNames.remove(name);
+              });
+
+              final payload = name.substring(4);
+              final parts = payload.split(':');
+              final sender = parts.isNotEmpty ? parts[0] : 'Unknown';
+              final reason =
+              parts.length > 1 ? parts.sublist(1).join(':') : 'Emergency';
+              await NotificationService.showEmergencyNotification(
+                sender: sender,
+                reason: reason,
+              );
+            }
+          }
+        }
+
+        if (name.startsWith("EMG_OFF:")) {
+          if (!_handledEmgOffNames.contains(name)) {
+            _handledEmgOffNames.add(name);
+            Future.delayed(const Duration(seconds: 10), () {
+              _handledEmgOffNames.remove(name);
+            });
+            // Dismiss the emergency notification on this device
+            await NotificationService.cancelEmergencyNotification();
+          }
         }
       }
     });
+
     await _startContinuousScan();
+
+    // Initial count after BLE has had 5 seconds to warm up
+    Future.delayed(const Duration(seconds: 5), _updateBleDeviceCount);
+    // Then refresh every 30 seconds
+    _bleCountTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _updateBleDeviceCount();
+    });
   }
 
   Future<void> _stopAllAdvertising() async => BlePeripheral.stopAdvertising();
@@ -798,29 +882,40 @@ class _HopsAppState extends State<HopsApp> {
         ],
       ),
       actions: [
-        Flexible(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-                color: colors.tertiaryContainer.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(100)),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.radar, size: 10, color: colors.tertiaryContainer),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(
-                    "BLE Mesh Active",
-                    style: TextStyle(
-                        color: colors.tertiaryContainer,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: _bleMeshColor(_nearbyBleCount).withOpacity(0.12),
+            borderRadius: BorderRadius.circular(100),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Pulsing color dot
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: _bleMeshColor(_nearbyBleCount),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: _bleMeshColor(_nearbyBleCount).withOpacity(0.6),
+                      blurRadius: 6,
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$_nearbyBleCount BLE',
+                style: TextStyle(
+                  color: _bleMeshColor(_nearbyBleCount),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(width: 8),
@@ -868,6 +963,7 @@ class _HopsAppState extends State<HopsApp> {
           FlutterBluePlus.stopScan();
           _startContinuousScan();
         },
+        nearbyBleCount: _nearbyBleCount,
       ),
       _buildContactsTab(),             // index 1 — unchanged radar contacts
       CommunityChat(
@@ -1181,9 +1277,9 @@ class _HopsAppState extends State<HopsApp> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      //margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      color: colors.surfaceContainerHighest.withOpacity(0.4),
+      color: colors.primary.withOpacity(0.4),
       elevation: 0,
       child: ExpansionTile(
         leading: Icon(feature.icon, color: colors.primary, size: 28),
@@ -1312,17 +1408,6 @@ class _HopsAppState extends State<HopsApp> {
                       builder: (_) => VibeCheckPage(
                         radarStream: radarStream,
                         onAdvertiseVibeTag: _advertiseVibeTag,
-                      ),
-                    ),
-                  );
-                } else if (feature.id == 8) {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => HopsAndRobbersPage(
-                        radarStream: radarStream,
-                        myUsername: myUsername,
-                        onSendGameAction: _sendGameAction,
-                        gameEventStream: gameEventStream,
                       ),
                     ),
                   );

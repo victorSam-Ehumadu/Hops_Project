@@ -2,6 +2,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:just_audio/just_audio.dart';
 
 class NotificationService {
+  static const int _emgNotificationId = 0; // fixed — used by show AND cancel
+
   static final FlutterLocalNotificationsPlugin _plugin =
   FlutterLocalNotificationsPlugin();
 
@@ -12,8 +14,7 @@ class NotificationService {
     description: 'Critical alerts from Hops mesh',
     importance: Importance.max,
     enableVibration: true,
-    playSound: false,                // we control sound ourselves
-    // sound: RawResourceAndroidNotificationSound('alert'),   // optional custom sound
+    playSound: false, // we control sound ourselves
   );
 
   static AudioPlayer? _alertPlayer;
@@ -30,35 +31,35 @@ class NotificationService {
     await _plugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
+        // User tapped "Deactivate" on the notification itself
         if (response.actionId == 'dismiss' || response.actionId == null) {
-          _stopAlertSound();
-          _plugin.cancel(0);
+          cancelEmergencyNotification();
         }
       },
     );
   }
 
+  // ── Show (called when an EMG: advertisement is first received) ────────────
+
   static Future<void> showEmergencyNotification({
     required String sender,
     required String reason,
   }) async {
-    // Stop any previous alert that might still be playing
-    _stopAlertSound();
+    // Stop any previous alert still playing before starting a new one
+    await _stopAlertSound();
 
-    // Start looping the alarm sound
+    // Start looping alarm sound
     _alertPlayer = AudioPlayer();
     try {
-      // Use a built‑in alarm sound from the system, or your custom asset
       await _alertPlayer!.setAsset('assets/sounds/alert.wav');
       await _alertPlayer!.setLoopMode(LoopMode.one);
       await _alertPlayer!.play();
-    } catch (e) {
-      // Fallback: use the default notification sound via the channel
-      // (the channel's sound will still play because we'll set playSound: true later)
+    } catch (_) {
+      // Audio failed — notification channel sound acts as fallback
     }
 
     await _plugin.show(
-      0,
+      _emgNotificationId,
       '🚨 Emergency from $sender',
       reason.isNotEmpty ? reason : 'Emergency alert!',
       NotificationDetails(
@@ -69,17 +70,17 @@ class NotificationService {
           importance: Importance.max,
           priority: Priority.max,
           enableVibration: true,
-          playSound: _alertPlayer == null,   // only fallback if our player failed
+          playSound: _alertPlayer == null, // fallback if our player failed
           fullScreenIntent: true,
           category: AndroidNotificationCategory.alarm,
-          ongoing: true,                      // keep it alive
-          autoCancel: false,                  // dismiss only by our action
+          ongoing: true,     // keeps the notification alive
+          autoCancel: false, // only dismissed by our cancel call
           actions: [
             const AndroidNotificationAction(
               'dismiss',
               'Deactivate',
               showsUserInterface: true,
-              cancelNotification: false,      // we cancel manually
+              cancelNotification: false, // we cancel manually below
             ),
           ],
         ),
@@ -87,9 +88,19 @@ class NotificationService {
     );
   }
 
-  static void _stopAlertSound() {
-    _alertPlayer?.stop();
-    _alertPlayer?.dispose();
+  // ── Cancel (called when EMG_OFF: is received OR user taps Deactivate) ─────
+  // Stops the looping audio AND removes the persistent notification.
+
+  static Future<void> cancelEmergencyNotification() async {
+    await _stopAlertSound();
+    await _plugin.cancel(_emgNotificationId);
+  }
+
+  // ── Internal audio helper ─────────────────────────────────────────────────
+
+  static Future<void> _stopAlertSound() async {
+    await _alertPlayer?.stop();
+    await _alertPlayer?.dispose();
     _alertPlayer = null;
   }
 }

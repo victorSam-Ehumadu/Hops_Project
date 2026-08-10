@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import 'package:client/views/auth_screen.dart';
 import 'package:client/views/hops_app.dart';
 import 'package:client/views/terms_screen.dart';
+import 'package:client/views/walkthrough_screen.dart';
 import 'dart:convert';
 
 class HopsRootGatekeeper extends StatefulWidget {
@@ -182,9 +183,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     final hasAccepted = prefs.getBool('terms_accepted') ?? false;
 
     if (hasAccepted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HopsApp()),
-      );
+      _navigateToDashboard();
       return;
     }
 
@@ -274,14 +273,10 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
                     backgroundColor: agreed ? colors.primary : Colors.grey,
                     foregroundColor: Colors.white,
                   ),
-                  onPressed: agreed
-                      ? () async {
+                  onPressed: agreed ? () async {
                     await prefs.setBool('terms_accepted', true);
                     Navigator.of(context).pop();
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(
-                          builder: (_) => const HopsApp()),
-                    );
+                    _navigateToDashboard();
                   }
                       : null,
                   child: const Text("Proceed to Hops"),
@@ -292,6 +287,31 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         );
       },
     );
+  }
+
+  void _navigateToDashboard() async {
+    final prefs = await SharedPreferences.getInstance();
+    final walkthroughSeen = prefs.getBool('walkthrough_seen') ?? false;
+
+    if (mounted) {
+      if (walkthroughSeen) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HopsApp()),
+        );
+      } else {
+        // Show walkthrough, then go to dashboard
+        final result = await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const WalkthroughScreen(showOnboarding: true),
+          ),
+        );
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const HopsApp()),
+          );
+        }
+      }
+    }
   }
 
   @override
