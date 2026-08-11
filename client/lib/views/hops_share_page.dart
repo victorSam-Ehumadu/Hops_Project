@@ -8,6 +8,7 @@ import 'package:nearby_connections/nearby_connections.dart';
 import 'package:client/views/received_files_page.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:client/services/hops_constants.dart';
 
 class HopsSharePage extends StatefulWidget {
   final String myUsername;
@@ -30,10 +31,6 @@ class _HopsSharePageState extends State<HopsSharePage> {
   // Service ID must be passed explicitly — the package default is unrelated.
   static const String _serviceId = "com.hops.share";
 
-  // Must match the UUID used everywhere else in hops_app.dart so the radar
-  // scan filter sees us again after we restore advertising in dispose().
-  static const String _hopsServiceUuid = '0000FA57-0000-1000-8000-00805F9B34FB';
-
   @override
   void initState() {
     super.initState();
@@ -50,7 +47,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
     // hardware filter picks us up again immediately.
     BlePeripheral.startAdvertising(
       localName: "HPS:${widget.myUsername}",
-      services: [_hopsServiceUuid],
+      services: [HOPS_SERVICE_UUID],
     );
     _textNoteController.dispose();
     super.dispose();

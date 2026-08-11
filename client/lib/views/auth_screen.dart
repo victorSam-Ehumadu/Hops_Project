@@ -310,7 +310,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final colors = Theme.of(context).colorScheme;
     return Column(
       children: [
-        _buildCapsuleInput(label: "EMAIL OR USERNAME", hint: "your@email.edu or handle", icon: Icons.person_outline, controller: _emailController),
+        _buildCapsuleInput(label: "USERNAME", hint: "student_handle", icon: Icons.person_outline, controller: _emailController),
         const SizedBox(height: 16),
         _buildCapsuleInput(
           label: "PASSWORD",

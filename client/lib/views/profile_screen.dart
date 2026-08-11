@@ -11,6 +11,7 @@ import 'package:client/views/theme_picker_screen.dart';
 import 'package:client/views/terms_screen.dart';
 import 'package:client/views/edit_identity_screen.dart';
 import 'package:client/views/walkthrough_screen.dart';
+import 'package:client/views/font_preview_screen.dart';
 
 class HopsProfileScreen extends StatefulWidget {
   const HopsProfileScreen({super.key});
@@ -237,6 +238,30 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
             ),
             const SizedBox(height: 24),
 
+            // Temporary: Font Preview
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.text_fields, color: colors.primary),
+              title: Text(
+                'Font Preview',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onBackground),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const FontPreviewScreen()),
+                );
+              },
+            ),
+            const SizedBox(height: 24),
+
             Card(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16)),
@@ -261,13 +286,33 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 onTap: () async {
-                  final db = await DatabaseHelper.instance.database;
+                  // Close our handle before unlinking the file — deleting
+                  // an open sqlite db can leave it locked/corrupted, and
+                  // DatabaseHelper's cached connection must be dropped too
+                  // or every DB call for the rest of this app session keeps
+                  // talking to the now-deleted file instead of the fresh
+                  // one a new sign-up expects.
+                  await DatabaseHelper.instance.close();
                   final dbPath = await getDatabasesPath();
                   await deleteDatabase(p.join(dbPath, 'MeshNetwork.db'));
+
                   final SharedPreferences prefs =
                   await SharedPreferences.getInstance();
+                  // Clear every locally-scoped identity key, not just the
+                  // session token — otherwise a different person signing
+                  // up on this device inherits the previous account's
+                  // avatar, nickname, bio and feature toggles.
                   await prefs.remove('saved_hops_token');
-                  const FlutterSecureStorage().delete(key: 'private_key');
+                  await prefs.remove('my_username');
+                  await prefs.remove('my_hops_id');
+                  await prefs.remove('avatar_path');
+                  await prefs.remove('nickname');
+                  await prefs.remove('bio');
+                  await prefs.remove('enabledFeatureIds');
+                  await prefs.remove('watchingBuddies');
+                  await prefs.remove('terms_accepted');
+                  await prefs.remove('walkthrough_seen');
+                  await const FlutterSecureStorage().delete(key: 'private_key');
                   if (context.mounted) {
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(

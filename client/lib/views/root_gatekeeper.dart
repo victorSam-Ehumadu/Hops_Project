@@ -128,8 +128,13 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       if (!permissionsGranted) return;
 
       setState(() => authEngineStatus = "Verifying Credentials...");
-      final String targetedUsername =
-      email.contains('@') ? email.split('@').first : email;
+      // Sign-up takes username and email as two independent fields, and
+      // email is never persisted to `profiles` at all (see
+      // handleMeshSignUp below) — so deriving a lookup username from the
+      // email's local-part only worked by coincidence when they happened
+      // to match, and otherwise locked users out with a correct password.
+      // The only thing we can reliably look up by is the username itself.
+      final String targetedUsername = email.trim();
 
       final response = await Supabase.instance.client
           .from('profiles')
@@ -226,15 +231,16 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
                 spans.add(const TextSpan(text: '\n\n'));
                 continue;
               }
-              // Body text – keep inside dialog black for readability on white bg
+              // Body text — theme-aware so it stays readable against the
+              // dialog's own background instead of assuming it's white.
               spans.add(TextSpan(
                 text: line.trim().isEmpty ? '\n' : '${line.trim()} ',
-                style: _bodyStyle.copyWith(color: Colors.black87),
+                style: _bodyStyle.copyWith(color: colors.onSurface),
               ));
             }
 
             return AlertDialog(
-              backgroundColor: Colors.white,
+              backgroundColor: colors.surface,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
               title: Text(
                 "Welcome, $username!",

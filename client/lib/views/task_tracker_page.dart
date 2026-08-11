@@ -17,6 +17,11 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   Map<String, Color> _taskDates = {};
   final Set<String> _outsideMonthTaskDates = {};
   Timer? _reminderTimer;
+  // Task ids already reminded this session — without this, an overdue,
+  // still-incomplete task re-triggers the dialog every 10s forever, and
+  // dialogs stack if a previous one is still on screen.
+  final Set<String> _remindedTaskIds = {};
+  bool _reminderDialogShowing = false;
 
   @override
   void initState() {
@@ -90,11 +95,15 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
 
   void _startReminderCheck() {
     _reminderTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (_reminderDialogShowing) return; // one at a time, never stack
       final now = DateTime.now().millisecondsSinceEpoch;
       for (final task in _tasks) {
+        final id = task[DatabaseHelper.taskColId] as String;
         if (task[DatabaseHelper.taskColCompleted] == 0 &&
             task[DatabaseHelper.taskColDueDate] != null &&
-            (task[DatabaseHelper.taskColDueDate] as int) <= now) {
+            (task[DatabaseHelper.taskColDueDate] as int) <= now &&
+            !_remindedTaskIds.contains(id)) {
+          _remindedTaskIds.add(id);
           _showReminderDialog(task[DatabaseHelper.taskColTitle]);
           break;
         }
@@ -103,6 +112,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   }
 
   void _showReminderDialog(String title) {
+    _reminderDialogShowing = true;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -110,7 +120,10 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
         content: Text("'$title' is due now!"),
         actions: [
           ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () {
+              _reminderDialogShowing = false;
+              Navigator.of(ctx).pop();
+            },
             child: const Text("OK"),
           ),
         ],
@@ -141,7 +154,12 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => Padding(
+      // StatefulBuilder so picking a date/start/end time visibly updates
+      // the button label immediately — without it, dueDate/startTime/
+      // endTime were still saved correctly on submit, but the sheet never
+      // rebuilt so the labels stayed stuck on "Pick date"/"Start time".
+      builder: (_) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
         padding: EdgeInsets.only(
           left: 16, right: 16, top: 16,
           bottom: MediaQuery.of(context).viewInsets.bottom + 16,
@@ -199,7 +217,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                       firstDate: DateTime.now(),
                       lastDate: DateTime.now().add(const Duration(days: 365)),
                     );
-                    if (picked != null) dueDate = picked;
+                    if (picked != null) setModalState(() => dueDate = picked);
                   },
                 ),
                 const Spacer(),
@@ -218,7 +236,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                       context: context,
                       initialTime: startTime ?? TimeOfDay.now(),
                     );
-                    if (picked != null) startTime = picked;
+                    if (picked != null) setModalState(() => startTime = picked);
                   },
                 ),
                 const SizedBox(width: 8),
@@ -233,7 +251,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                       context: context,
                       initialTime: endTime ?? TimeOfDay.now(),
                     );
-                    if (picked != null) endTime = picked;
+                    if (picked != null) setModalState(() => endTime = picked);
                   },
                 ),
               ],
@@ -277,6 +295,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             ),
           ],
         ),
+      ),
       ),
     );
     if (result == true) await _loadTasks();

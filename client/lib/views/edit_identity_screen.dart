@@ -41,6 +41,11 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
     );
     if (image == null) return;
 
+    // Each pick used to write a new timestamped file and just abandon the
+    // previous one — avatars accumulated on disk forever. Delete the old
+    // one (if any) before saving the new one's path.
+    final previousPath = _avatarPath;
+
     final Uint8List imageBytes = await image.readAsBytes();
     final dir = await getApplicationDocumentsDirectory();
     final fileName = 'avatar_${DateTime.now().millisecondsSinceEpoch}.jpg';
@@ -50,6 +55,17 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
     setState(() => _avatarPath = savedImage.path);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('avatar_path', savedImage.path);
+
+    if (previousPath != null && previousPath != savedImage.path) {
+      final oldFile = File(previousPath);
+      if (await oldFile.exists()) {
+        try {
+          await oldFile.delete();
+        } catch (_) {
+          // Best-effort cleanup — not worth surfacing an error for this.
+        }
+      }
+    }
   }
 
   Future<void> _removeAvatar() async {

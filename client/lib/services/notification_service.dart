@@ -48,12 +48,19 @@ class NotificationService {
     // Stop any previous alert still playing before starting a new one
     await _stopAlertSound();
 
-    // Start looping alarm sound
+    // Start looping alarm sound. Track success separately from whether
+    // _alertPlayer is null — it's assigned unconditionally below, so
+    // `_alertPlayer == null` was never true here even when setAsset/play
+    // threw, which meant the "fall back to the channel's own sound"
+    // branch a few lines down could never actually trigger and a failed
+    // asset load meant a silent (vibrate-only) emergency alert.
     _alertPlayer = AudioPlayer();
+    bool customSoundPlaying = false;
     try {
       await _alertPlayer!.setAsset('assets/sounds/alert.wav');
       await _alertPlayer!.setLoopMode(LoopMode.one);
       await _alertPlayer!.play();
+      customSoundPlaying = true;
     } catch (_) {
       // Audio failed — notification channel sound acts as fallback
     }
@@ -70,7 +77,7 @@ class NotificationService {
           importance: Importance.max,
           priority: Priority.max,
           enableVibration: true,
-          playSound: _alertPlayer == null, // fallback if our player failed
+          playSound: !customSoundPlaying, // fallback if our player failed
           fullScreenIntent: true,
           category: AndroidNotificationCategory.alarm,
           ongoing: true,     // keeps the notification alive

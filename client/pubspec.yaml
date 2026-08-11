@@ -35,6 +35,9 @@ dependencies:
   just_audio: ^0.9.38
   share_plus: ^10.1.4
   image_picker: ^1.0.0
+  mobile_scanner: ^7.4.0
+  qr_flutter: ^4.1.0
+  google_fonts: ^6.1.0
 
 
 dev_dependencies:

@@ -4,11 +4,12 @@ import 'package:path_provider/path_provider.dart';
 
 class DatabaseHelper {
   static const _databaseName = "MeshNetwork.db";
-  static const _databaseVersion = 4;
+  static const _databaseVersion = 7;
 
   static const table = 'messages';
   static const vibeTable = 'vibe_records';
   static const tasksTable = 'tasks';
+  static const contactProfilesTable = 'contact_profiles';
 
   // Columns for Mesh Routing
   static const columnId = 'id';
@@ -17,12 +18,33 @@ class DatabaseHelper {
   static const columnIsForMe = 'is_for_me';
   static const columnNeedsRelay = 'needs_relay';
   static const columnTimestamp = 'timestamp';
+  // The *other* party in a 1:1 conversation, regardless of message
+  // direction. sender_id alone can't scope a thread (an outgoing row's
+  // sender_id is always *my* username, not the recipient's), which used to
+  // make every conversation show every message you'd ever sent to anyone.
+  static const columnPeerId = 'peer_id';
+  // 1 once an outgoing message has actually been handed to the transport
+  // successfully; 0 while it's waiting to be (re)sent. Meaningless for
+  // inbound rows — they only exist because they already arrived, so they're
+  // always written as delivered. Defaults to 1 so pre-existing rows from
+  // before this column existed don't retroactively show as pending.
+  static const columnDelivered = 'delivered';
 
   // Columns for Vibe Records
   static const vibeColId = 'id';
   static const vibeColLocation = 'location_name';
   static const vibeColDeviceCount = 'device_count';
   static const vibeColTimestamp = 'timestamp';
+
+  // Columns for Contact Profiles — a peer's avatar/bio, learned only by
+  // direct device-to-device exchange the first time you actually chat
+  // with them (see HopsChatService.sendProfile). Nothing in this app ever
+  // uploads this anywhere; it's a purely local cache of what that peer's
+  // device told yours.
+  static const cpColUsername = 'username';
+  static const cpColAvatarPath = 'avatar_path';
+  static const cpColBio = 'bio';
+  static const cpColUpdatedAt = 'updated_at';
 
   // Columns for Tasks
   static const taskColId = 'id';
@@ -42,6 +64,17 @@ class DatabaseHelper {
     if (_database != null) return _database!;
     _database = await _initDatabase();
     return _database!;
+  }
+
+  // Must be called before deleting the underlying db file (e.g. on
+  // "Destroy Identity") — otherwise the file gets unlinked while this
+  // singleton still holds an open handle to it, and every DB call made
+  // afterward in the same app session keeps talking to the stale handle
+  // instead of the freshly-created file a new sign-up expects.
+  Future<void> close() async {
+    final db = _database;
+    _database = null;
+    await db?.close();
   }
 
   _initDatabase() async {
@@ -64,7 +97,9 @@ class DatabaseHelper {
         $columnSenderId TEXT NOT NULL,
         $columnIsForMe INTEGER NOT NULL,
         $columnNeedsRelay INTEGER NOT NULL,
-        $columnTimestamp INTEGER NOT NULL
+        $columnTimestamp INTEGER NOT NULL,
+        $columnPeerId TEXT,
+        $columnDelivered INTEGER NOT NULL DEFAULT 1
       )
     ''');
 
@@ -87,6 +122,15 @@ class DatabaseHelper {
         $taskColEndTime INTEGER,
         $taskColCompleted INTEGER NOT NULL DEFAULT 0,
         $taskColCreatedAt INTEGER NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE $contactProfilesTable (
+        $cpColUsername TEXT PRIMARY KEY,
+        $cpColAvatarPath TEXT,
+        $cpColBio TEXT,
+        $cpColUpdatedAt INTEGER NOT NULL
       )
     ''');
   }
@@ -117,6 +161,22 @@ class DatabaseHelper {
       await db.execute('ALTER TABLE $tasksTable ADD COLUMN $taskColDescription TEXT');
       await db.execute('ALTER TABLE $tasksTable ADD COLUMN $taskColStartTime INTEGER');
       await db.execute('ALTER TABLE $tasksTable ADD COLUMN $taskColEndTime INTEGER');
+    }
+    if (oldVersion < 5) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $columnPeerId TEXT');
+    }
+    if (oldVersion < 6) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $columnDelivered INTEGER NOT NULL DEFAULT 1');
+    }
+    if (oldVersion < 7) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS $contactProfilesTable (
+          $cpColUsername TEXT PRIMARY KEY,
+          $cpColAvatarPath TEXT,
+          $cpColBio TEXT,
+          $cpColUpdatedAt INTEGER NOT NULL
+        )
+      ''');
     }
   }
 
@@ -183,6 +243,49 @@ class DatabaseHelper {
     return await db.insert(table, row, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
+  // Full 1:1 thread with a peer, both directions — every row written for a
+  // conversation (inbound or outbound) must carry columnPeerId = the other
+  // party's username, or it won't show up here.
+  Future<List<Map<String, dynamic>>> getMessagesForPeer(String peerId) async {
+    Database db = await instance.database;
+    return await db.query(
+      table,
+      where: '$columnPeerId = ?',
+      whereArgs: [peerId],
+      orderBy: '$columnTimestamp ASC',
+    );
+  }
+
+  Future<int> markMessageDelivered(String id) async {
+    Database db = await instance.database;
+    return await db.update(table, {columnDelivered: 1},
+        where: '$columnId = ?', whereArgs: [id]);
+  }
+
+  // Messages I sent to this peer that never got confirmed as delivered —
+  // used to retry-send once a connection to them is (re)established.
+  Future<List<Map<String, dynamic>>> getUndeliveredMessagesForPeer(
+      String peerId, String myUsername) async {
+    Database db = await instance.database;
+    return await db.query(
+      table,
+      where: '$columnPeerId = ? AND $columnSenderId = ? AND $columnDelivered = 0',
+      whereArgs: [peerId, myUsername],
+      orderBy: '$columnTimestamp ASC',
+    );
+  }
+
+  Future<int> deleteConversationWithPeer(String peerId) async {
+    Database db = await instance.database;
+    return await db.delete(
+      table,
+      // OR sender_id covers rows written by the older pairing-log flow,
+      // which predates columnPeerId and never set it.
+      where: '$columnPeerId = ? OR $columnSenderId = ?',
+      whereArgs: [peerId, peerId],
+    );
+  }
+
   Future<List<Map<String, dynamic>>> getMessagesToRelay() async {
     Database db = await instance.database;
     return await db.query(table, where: '$columnNeedsRelay = ?', whereArgs: [1]);
@@ -192,5 +295,52 @@ class DatabaseHelper {
     Database db = await instance.database;
     return await db.update(table, {columnNeedsRelay: 0},
         where: '$columnId = ?', whereArgs: [uuid]);
+  }
+
+  // ---------- Contact Profiles ----------
+  Future<void> upsertContactProfile(
+    String username, {
+    String? avatarPath,
+    String? bio,
+  }) async {
+    Database db = await instance.database;
+    await db.insert(
+      contactProfilesTable,
+      {
+        cpColUsername: username,
+        cpColAvatarPath: avatarPath,
+        cpColBio: bio,
+        cpColUpdatedAt: DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<Map<String, dynamic>?> getContactProfile(String username) async {
+    Database db = await instance.database;
+    final rows = await db.query(
+      contactProfilesTable,
+      where: '$cpColUsername = ?',
+      whereArgs: [username],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  // Keyed by username, for the contacts list to look up avatars in bulk
+  // instead of one query per row.
+  Future<Map<String, Map<String, dynamic>>> getAllContactProfiles() async {
+    Database db = await instance.database;
+    final rows = await db.query(contactProfilesTable);
+    return {for (final row in rows) row[cpColUsername] as String: row};
+  }
+
+  Future<int> deleteContactProfile(String username) async {
+    Database db = await instance.database;
+    return await db.delete(
+      contactProfilesTable,
+      where: '$cpColUsername = ?',
+      whereArgs: [username],
+    );
   }
 }

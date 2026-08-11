@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 class TokenGeneratorWorkspace extends StatefulWidget {
   final Function(String code) onCodeGenerated;
@@ -11,16 +12,24 @@ class TokenGeneratorWorkspace extends StatefulWidget {
 }
 
 class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
+  static const int _codeLifetimeSeconds = 180;
+
   late String _code;
-  int _timeLeftSeconds = 180;
+  int _timeLeftSeconds = _codeLifetimeSeconds;
   Timer? _tickerTimer;
+  bool get _expired => _timeLeftSeconds <= 0;
 
   @override
   void initState() {
     super.initState();
+    _generateNewCode();
+  }
+
+  void _generateNewCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     _code =
         List.generate(6, (i) => chars[Random().nextInt(chars.length)]).join();
+    _timeLeftSeconds = _codeLifetimeSeconds;
     widget.onCodeGenerated(_code);
     _startCountdown();
   }
@@ -31,8 +40,12 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
       if (_timeLeftSeconds > 0) {
         setState(() => _timeLeftSeconds--);
       } else {
+        // Used to Navigator.pop(context) here — the dialog just vanished
+        // with no explanation, which looked like a glitch mid-pairing.
+        // Show an expired state instead and let the user decide whether
+        // to generate a fresh code or close.
         _tickerTimer?.cancel();
-        Navigator.pop(context);
+        setState(() {});
       }
     });
   }
@@ -48,28 +61,50 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
 
   @override
   Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     String formattedTime =
         "${(_timeLeftSeconds ~/ 60)}:${(_timeLeftSeconds % 60).toString().padLeft(2, '0')}";
     return AlertDialog(
-      backgroundColor: Colors.white,
+      backgroundColor: colors.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.qr_code_2, size: 40, color: Theme.of(context).colorScheme.primary),
+          Icon(Icons.qr_code_2, size: 40, color: colors.primary),
           const SizedBox(height: 12),
-          const Text("Your Pairing Code",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          Text("Your Pairing Code",
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: colors.onSurface)),
           const SizedBox(height: 16),
+          Opacity(
+            opacity: _expired ? 0.3 : 1.0,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                // Intentionally always a solid light background regardless
+                // of app theme — QR modules need real light/dark contrast
+                // to stay scannable, they shouldn't invert with dark mode.
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: colors.surfaceContainerHighest),
+              ),
+              child: QrImageView(
+                data: formattedCode,
+                version: QrVersions.auto,
+                size: 160,
+                gapless: true,
+                semanticsLabel: 'Hops pairing code QR',
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           FittedBox(
             fit: BoxFit.scaleDown,
             child: Container(
               padding:
               const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
               decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  color: colors.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(12)),
               child: SelectableText(
                 formattedCode,
@@ -77,47 +112,80 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
                 style: TextStyle(
                     fontSize: 22,
                     fontFamily: 'monospace',
-                    color: Theme.of(context).colorScheme.primary,
+                    color: colors.primary,
                     fontWeight: FontWeight.bold,
-                    letterSpacing: 2),
+                    letterSpacing: 2,
+                    decoration: _expired ? TextDecoration.lineThrough : null),
               ),
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             "Share this code with your peer.",
-            style: TextStyle(fontSize: 11, color: Colors.black54),
+            style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.6)),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.timer_outlined,
-                  size: 16, color: Colors.redAccent),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  "Expires in: $formattedTime",
-                  style: const TextStyle(
+          if (_expired) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.timer_off_outlined, size: 16, color: colors.onSurface.withOpacity(0.5)),
+                const SizedBox(width: 6),
+                Text(
+                  "This code has expired",
+                  style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      color: Colors.redAccent,
+                      color: colors.onSurface.withOpacity(0.6),
                       fontSize: 13),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            "Waiting for peer to connect...",
-            style: TextStyle(fontSize: 11, color: Colors.black45),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+              ],
+            ),
+          ] else ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.timer_outlined,
+                    size: 16, color: Colors.redAccent),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    "Expires in: $formattedTime",
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.redAccent,
+                        fontSize: 13),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "Waiting for peer to connect...",
+              style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.45)),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
           const SizedBox(height: 16),
+          if (_expired)
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
+                ),
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text("Generate New Code"),
+                onPressed: () => setState(_generateNewCode),
+              ),
+            ),
+          const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(
@@ -125,11 +193,11 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(100))),
               onPressed: () => Navigator.pop(context),
-              child: Text("Cancel",
+              child: Text(_expired ? "Close" : "Cancel",
                   style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.primary)),
+                      color: colors.primary)),
             ),
           ),
         ],
