@@ -129,7 +129,7 @@ class _WatchMePageState extends State<WatchMePage> {
           !_alertActive &&
           !_alertCooldown &&
           _lastSeen != null) {
-        _triggerAlert("Signal too weak! RSSI: $_lastRssi dBm");
+        _triggerAlert("Buddy's signal is weak — they may be far away, blocked by walls, or on a different floor.");
       }
     });
   }
@@ -164,34 +164,68 @@ class _WatchMePageState extends State<WatchMePage> {
     );
   }
 
+  // RSSI-based proximity — deliberately coarse buckets, not a precise
+  // meter figure. Real-world BLE RSSI is noisy (multipath, pocket vs.
+  // hand, phone antenna differences, walls) — a fake-precise "4.7 m away"
+  // reading would be actively misleading for a safety feature. These
+  // thresholds are the same rough zones iBeacon's proximity API uses
+  // (Immediate/Near/Far) rather than anything device-calibrated.
+  ({String label, String emoji, Color color}) _proximityInfo(int rssi, bool everSeen) {
+    if (!everSeen) return (label: "Not seen yet", emoji: "⚪", color: Colors.grey);
+    if (rssi >= -60) return (label: "Right next to you", emoji: "🟢", color: Colors.green);
+    if (rssi >= -75) return (label: "Nearby", emoji: "🟡", color: Colors.orange);
+    return (label: "Far, may be out of sight", emoji: "🔴", color: Colors.red);
+  }
+
   Widget _buildSignalBar(int rssi) {
+    final everSeen = _lastSeen != null;
+    final proximity = _proximityInfo(rssi, everSeen);
     final ratio = ((rssi + 100) / 70.0).clamp(0.0, 1.0);
-    final color = ratio > 0.6
-        ? Colors.green
-        : ratio > 0.3
-        ? Colors.orange
-        : Colors.red;
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Row(
+          children: [
+            Text(proximity.emoji, style: const TextStyle(fontSize: 18)),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                proximity.label,
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 16, color: proximity.color),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
         Text(
           "Signal: $rssi dBm",
-          style: const TextStyle(fontWeight: FontWeight.w600),
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 8),
         LinearProgressIndicator(
-          value: ratio,
-          color: color,
+          value: everSeen ? ratio : 0,
+          color: proximity.color,
           backgroundColor: Colors.grey.shade300,
           minHeight: 12,
         ),
         const SizedBox(height: 8),
         Text(
-          _lastSeen != null
+          everSeen
               ? "Last seen: ${_lastSeen!.hour}:${_lastSeen!.minute.toString().padLeft(2, '0')}"
               : "Not seen yet",
           maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          "Rough estimate from Bluetooth signal strength — not an exact distance.",
+          style: TextStyle(fontSize: 10, color: Colors.grey.shade500, fontStyle: FontStyle.italic),
+          maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
       ],
@@ -276,7 +310,7 @@ class _WatchMePageState extends State<WatchMePage> {
                             radius: 16,
                             backgroundColor:
                             colors.primary.withOpacity(0.1),
-                            child: Text(sender[0],
+                            child: Text(sender.isNotEmpty ? sender[0] : '?',
                                 style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     color: colors.primary)),

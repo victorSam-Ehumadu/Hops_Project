@@ -93,7 +93,13 @@ class _HopsRootState extends State<HopsRoot> {
       home: _getHomeWidget(),
       builder: (context, child) {
         final mediaQueryData = MediaQuery.of(context);
-        final constrainedTextScale = mediaQueryData.textScaleFactor.clamp(1.0, 1.2);
+        // Was clamped to [1.0, 1.2] — blocked anyone using their system
+        // accessibility text-size setting from going either smaller or
+        // meaningfully larger than default. Widened to a range that still
+        // protects the app's tighter layouts (radar labels, chat bubbles)
+        // from breaking at extreme scales, without overriding a real
+        // accessibility preference down to "off".
+        final constrainedTextScale = mediaQueryData.textScaleFactor.clamp(0.85, 1.6);
         return MediaQuery(
           data: mediaQueryData.copyWith(textScaleFactor: constrainedTextScale),
           child: child!,

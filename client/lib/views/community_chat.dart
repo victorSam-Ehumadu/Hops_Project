@@ -1,16 +1,20 @@
 // lib/views/community_chat.dart
 //
-// Dedup mechanism is identical to VibeCheckPage:
-// _processedNames is a Set<String> keyed by the FULL advertisement name
-// (e.g. "CM:alic:meet at gate 2"). A Set can only contain each string once,
-// so the same packet received 1000 times is processed exactly once.
-// No timers, no MACs, no async — just a Set.contains() check.
+// Wire format v2: messages ride in BLE manufacturer data (scan response),
+// chunked and reassembled — see hops_constants.dart for the byte-level
+// protocol and hops_app.dart's _advertiseCommunityMessage for the sender
+// side. Dedup here works at two levels: an in-flight reassembly buffer per
+// (sender, msgId) while chunks are still arriving, and a short-lived
+// "already shown" set once a message is complete, so the sender's own
+// repeated re-broadcast of the same chunks during its cycle doesn't
+// re-add the message every time it's picked up again.
 
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:client/services/hops_constants.dart';
 
 class CommunityMessage {
   final String sender;
@@ -42,6 +46,17 @@ class CommunityMessage {
       );
 }
 
+// Buffers chunks for one in-flight message until every piece has arrived.
+class _ChunkBuffer {
+  final int totalChunks;
+  final Map<int, String> chunks = {};
+  DateTime lastSeen;
+  _ChunkBuffer(this.totalChunks) : lastSeen = DateTime.now();
+  bool get isComplete => chunks.length >= totalChunks;
+  String get reassembled =>
+      List.generate(totalChunks, (i) => chunks[i] ?? '').join();
+}
+
 class CommunityChat extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
   final Future<void> Function(String message) onSendMessage;
@@ -61,8 +76,11 @@ class CommunityChat extends StatefulWidget {
 class _CommunityChatState extends State<CommunityChat> {
   static const _prefsKey = 'community_messages_v1';
   static const int _maxStored = 100;
-  static const int _maxMsgLen = 21; // CM:(4)sender:(1):(21)msg = 29 bytes ✓
-  static const int _userLen = 4;
+  // Generous cap safely under the worst-case chunk capacity
+  // (kCommunityMaxChunks × per-chunk text budget, see hops_constants.dart).
+  // Longer messages just take a few extra seconds to fully arrive, spread
+  // across multiple broadcast chunks, instead of hitting a hard wall.
+  static const int _maxMsgLen = 180;
 
   List<CommunityMessage> _messages = [];
   final _controller = TextEditingController();
@@ -70,18 +88,14 @@ class _CommunityChatState extends State<CommunityChat> {
   StreamSubscription? _streamSub;
   bool _isSending = false;
 
-  // ── Dedup — IDENTICAL to VibeCheckPage._communityReports ─────────────────
-  // Key = full advertisement name, e.g. "CM:alic:meet at gate 2".
-  // A Set<String> can hold each value exactly once. The scanner may deliver
-  // the same advertisement thousands of times — Set.contains() catches all
-  // of them after the first. No timers, no MACs, no async removal needed.
-  final Set<String> _processedNames = {};
+  final Map<String, _ChunkBuffer> _pendingChunks = {}; // key: "sender:msgId"
+  final Map<String, DateTime> _completedMsgKeys = {}; // msgKey -> shown-at
 
   @override
   void initState() {
     super.initState();
     _loadHistory();
-    _listenToRadar(); // same structure as VibeCheckPage.initState
+    _listenToRadar();
     _controller.addListener(() => setState(() {}));
   }
 
@@ -121,42 +135,55 @@ class _CommunityChatState extends State<CommunityChat> {
     );
   }
 
-  // ── Radar listener — same structure as VibeCheckPage ─────────────────────
+  // ── Radar listener — chunk reassembly ─────────────────────────────────────
 
   void _listenToRadar() {
     _streamSub = widget.radarStream.listen((results) {
       bool updated = false;
+      final now = DateTime.now();
 
       for (final r in results) {
-        final advName = r.advertisementData.advName;
-        if (!advName.startsWith('CM:')) continue;
+        final mfgBytes = r.advertisementData.manufacturerData[kCommunityManufacturerId];
+        if (mfgBytes == null) continue;
+        final decoded = decodeCommunityChatChunk(mfgBytes);
+        if (decoded == null || decoded.username.isEmpty) continue;
 
-        // ── The VibeCheck dedup trick ──────────────────────────────────────
-        // If this exact advertisement name is already in the Set, skip.
-        // The Set holds it once no matter how many scan results deliver it.
-        if (_processedNames.contains(advName)) continue;
-        _processedNames.add(advName);
+        // Skip our own broadcasts. Both sides derive this tag from the
+        // same communityUsernameTag() function, so there's no separate
+        // string that can drift out of sync between sender and receiver.
+        if (decoded.username == communityUsernameTag(widget.myUsername)) continue;
 
-        // Parse "CM:sender:text"  (text may contain colons)
-        final payload = advName.substring(3);
-        final sep = payload.indexOf(':');
-        if (sep <= 0 || sep >= payload.length - 1) continue;
+        final msgKey = '${decoded.username}:${decoded.msgId}';
+        if (_completedMsgKeys.containsKey(msgKey)) continue; // already shown
 
-        final sender = payload.substring(0, sep);
-        final text = payload.substring(sep + 1);
-        if (sender.isEmpty || text.isEmpty) continue;
+        final buffer = _pendingChunks.putIfAbsent(
+            msgKey, () => _ChunkBuffer(decoded.totalChunks));
+        buffer.chunks[decoded.chunkIndex] = decoded.text;
+        buffer.lastSeen = now;
 
-        // Skip own advertisements
-        if (sender == _adUserCm(widget.myUsername)) continue;
-
-        _messages.add(CommunityMessage(
-          sender: sender,
-          text: text,
-          timestamp: DateTime.now(),
-          isMe: false,
-        ));
-        updated = true;
+        if (buffer.isComplete) {
+          _pendingChunks.remove(msgKey);
+          _completedMsgKeys[msgKey] = now;
+          _messages.add(CommunityMessage(
+            sender: decoded.username,
+            text: buffer.reassembled,
+            timestamp: now,
+            isMe: false,
+          ));
+          updated = true;
+        }
       }
+
+      // Drop buffers for messages we've stopped hearing chunks for (some
+      // were missed and the sender's cycle has moved on or finished).
+      final staleCutoff = now.subtract(const Duration(seconds: 15));
+      _pendingChunks.removeWhere((_, buf) => buf.lastSeen.isBefore(staleCutoff));
+
+      // Forget completed keys after a while — msgId is only 0-255 per
+      // sender, and without this a wrapped-around id would be mistaken
+      // for the old message and silently dropped forever.
+      final forgetCutoff = now.subtract(const Duration(seconds: 90));
+      _completedMsgKeys.removeWhere((_, seenAt) => seenAt.isBefore(forgetCutoff));
 
       if (updated) {
         _persist();
@@ -175,16 +202,9 @@ class _CommunityChatState extends State<CommunityChat> {
     if (text.isEmpty || _isSending) return;
 
     _controller.clear();
-
-    // Pre-register our own advertisement name in the Set BEFORE advertising
-    // starts. If our own scanner picks it up, Set.contains() catches it
-    // immediately — zero race window, same trick as the listener above.
-    final ownAdvName = 'CM:${_adUserCm(widget.myUsername)}:$text';
-    _processedNames.add(ownAdvName);
-
     setState(() => _isSending = true);
 
-    // Show own message immediately
+    // Show own message immediately.
     setState(() => _messages.add(CommunityMessage(
       sender: widget.myUsername,
       text: text,
@@ -202,9 +222,6 @@ class _CommunityChatState extends State<CommunityChat> {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-
-  String _adUserCm(String u) =>
-      u.length > _userLen ? u.substring(0, _userLen) : u;
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -230,7 +247,7 @@ class _CommunityChatState extends State<CommunityChat> {
     final colors = theme.colorScheme;
     final charsUsed = _controller.text.length;
     final remaining = _maxMsgLen - charsUsed;
-    final nearLimit = remaining <= 5;
+    final nearLimit = remaining <= 10;
 
     return Scaffold(
       appBar: AppBar(

@@ -1,5 +1,6 @@
 // hops_app.dart
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
@@ -16,6 +17,7 @@ import 'package:client/database/database_helper.dart';
 import 'package:client/utils/hop_id_formatter.dart';
 import 'package:client/views/radar_screen.dart';
 import 'package:client/views/chat_terminal.dart';
+import 'package:client/views/contact_profile_screen.dart';
 import 'package:client/views/viewfinder_scanner.dart';
 import 'package:client/views/token_generator.dart';
 import 'package:client/views/profile_screen.dart';
@@ -27,10 +29,7 @@ import 'package:client/views/hops_and_robbers.dart';
 import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
 import 'package:client/services/notification_service.dart';
-//import 'package:client/services/chat_connection_service.dart';
-import 'dart:async';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:client/services/rfcomm_chat_service.dart';
+import 'package:client/services/hops_constants.dart';
 import 'package:flutter/services.dart';
 import 'package:client/views/community_chat.dart';
 
@@ -69,6 +68,10 @@ class _HopsAppState extends State<HopsApp> {
 
   int _nearbyBleCount = 0;
   Timer? _bleCountTimer;
+
+  // Community Chat chunk-cycling state.
+  int _communityMsgCounter = 0;
+  Timer? _communityChunkCycleTimer;
 
   Color _bleMeshColor(int count) {
     if (count >= 50) return Colors.green;
@@ -121,8 +124,6 @@ class _HopsAppState extends State<HopsApp> {
   final Set<String> _recentWatchSenders = {};
   final Map<String, Timer> _recentWatchTimers = {};
 
-  static const _hopsServiceUuid = '0000FA57-0000-1000-8000-00805F9B34FB';
-
   @override
   void initState() {
     super.initState();
@@ -162,6 +163,7 @@ class _HopsAppState extends State<HopsApp> {
     _diagTimer?.cancel();
     _scanRestartTimer?.cancel();
     _bleCountTimer?.cancel();
+    _communityChunkCycleTimer?.cancel();
     for (final timer in _recentWatchTimers.values) {
       timer.cancel();
     }
@@ -210,15 +212,61 @@ class _HopsAppState extends State<HopsApp> {
     await _startContinuousScan();
   }
 
+  // Splits a message into chunks that fit the manufacturer-data budget
+  // (see hops_constants.dart) and cycles the peripheral through them via
+  // scan-response manufacturer data, keeping the ordinary "HPS:username"
+  // beacon name unchanged throughout — receivers detect a chunk purely by
+  // the presence of our manufacturer ID, not by any change to the name.
   Future<void> _advertiseCommunityMessage(String message) async {
-    // Truncate to 16 chars — must fit in "CM:user9:message" within 29-char limit
-    final short = message.length > 16 ? message.substring(0, 16) : message;
-    final advName = "CM:${_adUser(myUsername)}:$short";
-    await _advertiseWithName(advName, []);
-    Future.delayed(const Duration(seconds: 8), () {
-      BlePeripheral.stopAdvertising();
-      _advertiseWithName("HPS:$myUsername", []);
-    });
+    _communityChunkCycleTimer?.cancel();
+
+    final msgId = _communityMsgCounter;
+    _communityMsgCounter = (_communityMsgCounter + 1) % 256;
+
+    final textBudget = communityChunkTextBudget(myUsername);
+    final chunks = <String>[];
+    for (var i = 0; i < message.length && chunks.length < kCommunityMaxChunks; i += textBudget) {
+      final end = (i + textBudget < message.length) ? i + textBudget : message.length;
+      chunks.add(message.substring(i, end));
+    }
+    if (chunks.isEmpty) chunks.add('');
+
+    const perChunkDuration = Duration(milliseconds: 1800);
+    const totalCycles = 2; // rebroadcast the full sequence twice for reliability
+
+    Future<void> advertiseChunk(int index) => _advertiseWithName(
+      "HPS:$myUsername",
+      [],
+      manufacturerData: ManufacturerData(
+        manufacturerId: kCommunityManufacturerId,
+        data: encodeCommunityChatChunk(
+          username: myUsername,
+          msgId: msgId,
+          chunkIndex: index,
+          totalChunks: chunks.length,
+          chunkText: chunks[index],
+        ),
+      ),
+      manufacturerDataInScanResponse: true,
+    );
+
+    void step(int chunkIndex, int cycle) {
+      advertiseChunk(chunkIndex);
+      _communityChunkCycleTimer = Timer(perChunkDuration, () {
+        if (chunkIndex + 1 < chunks.length) {
+          step(chunkIndex + 1, cycle);
+        } else if (cycle + 1 < totalCycles) {
+          step(0, cycle + 1);
+        } else {
+          // Done — drop the manufacturer data and revert to the plain
+          // presence beacon.
+          BlePeripheral.stopAdvertising();
+          _advertiseWithName("HPS:$myUsername", []);
+        }
+      });
+    }
+
+    step(0, 0);
   }
 
   Future<void> _captureOriginalBluetoothName() async {
@@ -232,11 +280,18 @@ class _HopsAppState extends State<HopsApp> {
     }
   }
 
-  Future<void> _advertiseWithName(String localName, List<String> services) async {
+  Future<void> _advertiseWithName(
+    String localName,
+    List<String> services, {
+    ManufacturerData? manufacturerData,
+    bool manufacturerDataInScanResponse = false,
+  }) async {
     await BlePeripheral.stopAdvertising();
     await BlePeripheral.startAdvertising(
       localName: localName,
-      services: [_hopsServiceUuid, ...services], // ← always include Hops UUID
+      services: [HOPS_SERVICE_UUID, ...services], // ← always include Hops UUID
+      manufacturerData: manufacturerData,
+      addManufacturerDataInScanResponse: manufacturerDataInScanResponse,
     );
     if (_originalBluetoothName != null) {
       Future.delayed(const Duration(milliseconds: 500), () async {
@@ -249,6 +304,40 @@ class _HopsAppState extends State<HopsApp> {
         } catch (_) {}
       });
     }
+  }
+
+  // Extends an Emergency Flare's (or its cancellation's) reach beyond the
+  // originating device's direct BLE range — typically about one floor —
+  // by having every device that hears it for the first time re-broadcast
+  // the exact same payload for a short window. A device on the floor
+  // between the sender and a far device becomes an unwitting relay hop
+  // simply by having Hops open; chain enough of them and the flare
+  // reaches devices the original sender could never have reached alone.
+  //
+  // Deliberately NOT used for the "HPS:" presence beacon — relaying that
+  // would make Watch Me's RSSI-based proximity read distance-to-relayer
+  // instead of distance-to-buddy, which would be actively misleading for
+  // a feature whose whole job is estimating how far someone actually is.
+  //
+  // No hop-count field is embedded in the payload (there's no spare byte
+  // in EMG's already-tight 29-byte string budget for one). Instead this
+  // relies entirely on the caller's existing "have I seen this exact
+  // string before" dedup set — every device relays each distinct flare
+  // string at most once, ever, so the flood is bounded by the number of
+  // devices that hear it, not by an explicit hop limit, and can't loop.
+  void _scheduleEmgRelay(String localName) {
+    // Small random jitter so every device that just heard the same
+    // broadcast doesn't key up the radio in perfect lockstep and collide.
+    final jitter = Duration(milliseconds: 300 + Random().nextInt(700));
+    Future.delayed(jitter, () async {
+      if (!mounted) return;
+      await _advertiseWithName(localName, []);
+      Future.delayed(const Duration(seconds: 4), () {
+        if (!mounted) return;
+        BlePeripheral.stopAdvertising();
+        _advertiseWithName("HPS:$myUsername", []);
+      });
+    });
   }
 
   void _cancelEmergencyFlare({bool silent = false}) {
@@ -298,7 +387,7 @@ class _HopsAppState extends State<HopsApp> {
     final advName = "EMG:$sender:$shortReason";
 
     // Single stop + start — no redundant cycles, no delay.
-    // _advertiseWithName already includes _hopsServiceUuid so the campus
+    // _advertiseWithName already includes HOPS_SERVICE_UUID so the campus
     // hardware filter picks it up the same as HPS:, FR:, VBT:, etc.
     await _advertiseWithName(advName, []);
     print("🚨 Broadcasting emergency: $advName");
@@ -640,6 +729,15 @@ class _HopsAppState extends State<HopsApp> {
                 _handledEmgNames.remove(name);
               });
 
+              // Relay it — BLE range is roughly one floor. Without this,
+              // an emergency flare simply never reaches anyone more than
+              // one hop away (e.g. a different floor of the same
+              // building). Gated on the same "first time we've seen this
+              // exact string" check above, so this naturally terminates
+              // once every reachable device has relayed it once — no
+              // hop-count field needed, no relay storm.
+              _scheduleEmgRelay(name);
+
               final payload = name.substring(4);
               final parts = payload.split(':');
               final sender = parts.isNotEmpty ? parts[0] : 'Unknown';
@@ -659,6 +757,11 @@ class _HopsAppState extends State<HopsApp> {
             Future.delayed(const Duration(seconds: 10), () {
               _handledEmgOffNames.remove(name);
             });
+            // Relay the cancel too — a device that only relayed the
+            // original EMG: and never hears (or relays) the matching
+            // EMG_OFF: would leave anyone further down the chain stuck
+            // with an alarm that never gets dismissed.
+            _scheduleEmgRelay(name);
             // Dismiss the emergency notification on this device
             await NotificationService.cancelEmergencyNotification();
           }
@@ -681,7 +784,7 @@ class _HopsAppState extends State<HopsApp> {
     await FlutterBluePlus.startScan(
       androidUsesFineLocation: true,
       continuousUpdates: true,
-      withServices: [Guid(_hopsServiceUuid)], // ← hardware filter
+      withServices: [Guid(HOPS_SERVICE_UUID)], // ← hardware filter
     );
   }
 
@@ -723,7 +826,7 @@ class _HopsAppState extends State<HopsApp> {
 
     await FlutterBluePlus.startScan(
       androidUsesFineLocation: true,
-      withServices: [Guid(_hopsServiceUuid)], // ← hardware filter
+      withServices: [Guid(HOPS_SERVICE_UUID)], // ← hardware filter
     );
 
     String? remoteUsername;
@@ -760,19 +863,30 @@ class _HopsAppState extends State<HopsApp> {
   // ---------- Contacts management ----------
   Future<void> _refreshContactsTrayList() async {
     final db = await DatabaseHelper.instance.database;
-    final maps = await db.query(DatabaseHelper.table);
+    // Ordered oldest->newest so the last write into contactThreads below
+    // ends up being the most recent message in each thread.
+    final maps = await db.query(DatabaseHelper.table, orderBy: '${DatabaseHelper.columnTimestamp} ASC');
     Map<String, Map<String, dynamic>> contactThreads = {};
 
-    // Existing contacts from messages
+    // Existing contacts from messages — keyed by peer_id (the conversation
+    // partner) so BOTH directions update the preview, not just messages
+    // received from them. peer_id is null on rows written before that
+    // column existed; for those, fall back to sender_id, which only ever
+    // worked for inbound rows anyway (outgoing rows from that era can't be
+    // attributed to a peer and are skipped, same as before).
     for (var row in maps) {
-      String sender = row[DatabaseHelper.columnSenderId] as String;
-      if (sender != myUsername) {
-        contactThreads[sender] = {
-          'username': sender,
-          'lastMsg': row[DatabaseHelper.columnMessage] as String,
-          'time': 'Nearby'
-        };
-      }
+      final sender = row[DatabaseHelper.columnSenderId] as String;
+      final peerId = row[DatabaseHelper.columnPeerId] as String?;
+      final peer = peerId ?? (sender != myUsername ? sender : null);
+      if (peer == null || peer == myUsername) continue;
+
+      final isMine = sender == myUsername;
+      final text = row[DatabaseHelper.columnMessage] as String;
+      contactThreads[peer] = {
+        'username': peer,
+        'lastMsg': isMine ? 'You: $text' : text,
+        'time': 'Nearby'
+      };
     }
 
     // Ensure every added friend appears, even with no messages
@@ -786,6 +900,14 @@ class _HopsAppState extends State<HopsApp> {
       }
     }
 
+    // Attach whatever avatar we've cached for each contact — populated the
+    // first time you've actually chatted with them (see chat_terminal.dart
+    // / HopsChatService.sendProfile), absent until then.
+    final profiles = await DatabaseHelper.instance.getAllContactProfiles();
+    for (final entry in contactThreads.entries) {
+      entry.value['avatarPath'] = profiles[entry.key]?[DatabaseHelper.cpColAvatarPath];
+    }
+
     setState(() => localActiveContacts = contactThreads.values.toList());
   }
 
@@ -794,6 +916,7 @@ class _HopsAppState extends State<HopsApp> {
       DatabaseHelper.columnId: const Uuid().v4(),
       DatabaseHelper.columnMessage: text,
       DatabaseHelper.columnSenderId: peerName,
+      DatabaseHelper.columnPeerId: peerName,
       DatabaseHelper.columnIsForMe: 1,
       DatabaseHelper.columnNeedsRelay: 0,
       DatabaseHelper.columnTimestamp: DateTime.now().millisecondsSinceEpoch,
@@ -802,11 +925,17 @@ class _HopsAppState extends State<HopsApp> {
     await _refreshContactsTrayList();
   }
 
-  Future<void> _deleteContactFromTrayIndex(String peerName) async {
-    final db = await DatabaseHelper.instance.database;
-    await db.delete(DatabaseHelper.table, where: '${DatabaseHelper.columnSenderId} = ?', whereArgs: [peerName]);
-    _refreshContactsTrayList();
-    _showToastFeedbackAlert("Purged conversation thread with $peerName.");
+  // Shared by both places a contact can be deleted from: the profile card
+  // reached via the Contacts list, and the one reached from inside an open
+  // chat. _addedFriends previously wasn't cleared here, which meant a
+  // friend-request-added contact would silently reappear on the very next
+  // refresh (_refreshContactsTrayList re-adds anyone still in that set).
+  Future<void> _deleteContact(String peerName) async {
+    await DatabaseHelper.instance.deleteConversationWithPeer(peerName);
+    await DatabaseHelper.instance.deleteContactProfile(peerName);
+    _addedFriends.remove(peerName);
+    await _refreshContactsTrayList();
+    _showToastFeedbackAlert("Removed $peerName from your contacts.");
   }
 
   void _showToastFeedbackAlert(String alertMessage) {
@@ -1073,22 +1202,50 @@ class _HopsAppState extends State<HopsApp> {
           itemCount: localActiveContacts.length,
           itemBuilder: (context, index) {
             final contact = localActiveContacts[index];
+            final username = contact['username'] as String;
+            final avatarPath = contact['avatarPath'] as String?;
             return Container(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               decoration: BoxDecoration(color: Colors.white.withOpacity(0.4), borderRadius: BorderRadius.circular(16)),
               child: ListTile(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => IndividualChatTerminalView(
+                      peerName: username,
+                      onDeleteContact: _deleteContact,
+                    ),
+                  ),
+                ).then((_) => _refreshContactsTrayList()),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                leading: CircleAvatar(
-                  radius: 24,
-                  backgroundColor: colors.primary.withOpacity(0.1),
-                  child: Text(contact['username'] as String, style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary)),
+                // Own tap target, separate from the row's — tapping the
+                // circle specifically opens the profile card instead of
+                // the chat. No longer shows the username as text; just
+                // the photo, or the default person icon if none is
+                // cached yet (only known once you've chatted with them).
+                leading: GestureDetector(
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ContactProfileScreen(
+                        peerUsername: username,
+                        onDeleteContact: _deleteContact,
+                      ),
+                    ),
+                  ).then((_) => _refreshContactsTrayList()),
+                  child: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: colors.primary.withOpacity(0.1),
+                    backgroundImage: avatarPath != null ? FileImage(File(avatarPath)) : null,
+                    child: avatarPath == null
+                        ? Icon(Icons.person, color: colors.primary)
+                        : null,
+                  ),
                 ),
                 title: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Flexible(
                       child: Text(
-                        contact['username'] as String,
+                        username,
                         style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: colors.primary),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1109,10 +1266,6 @@ class _HopsAppState extends State<HopsApp> {
                     style: const TextStyle(fontSize: 13, color: Colors.black54),
                   ),
                 ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                  onPressed: () => _deleteContactFromTrayIndex(contact['username'] as String),
-                ),
               ),
             );
           },
@@ -1127,7 +1280,7 @@ class _HopsAppState extends State<HopsApp> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: colors.surface,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.only(topLeft: Radius.circular(28), topRight: Radius.circular(28))),
       builder: (context) {
         return StatefulBuilder(builder: (BuildContext context, StateSetter setModalState) {
@@ -1137,11 +1290,11 @@ class _HopsAppState extends State<HopsApp> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(100)))),
+                Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: colors.onSurface.withOpacity(0.2), borderRadius: BorderRadius.circular(100)))),
                 const SizedBox(height: 20),
                 Text("Add Peer Node", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: colors.primary)),
                 const SizedBox(height: 6),
-                const Text("Enter the 6‑character pairing code shown on your classmate's device.", style: TextStyle(fontSize: 13, color: Colors.black54)),
+                Text("Enter the 6‑character pairing code shown on your classmate's device.", style: TextStyle(fontSize: 13, color: colors.onSurface.withOpacity(0.6))),
                 const SizedBox(height: 24),
                 Text("ENTER PAIRING CODE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: colors.primary, letterSpacing: 1.2)),
                 const SizedBox(height: 6),
@@ -1207,7 +1360,7 @@ class _HopsAppState extends State<HopsApp> {
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
         tilePadding: EdgeInsets.zero,
-        title: const Text("Try another way", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black45)),
+        title: Text("Try another way", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: colors.onSurface.withOpacity(0.55))),
         children: [
           Container(
             width: double.infinity,
@@ -1233,12 +1386,12 @@ class _HopsAppState extends State<HopsApp> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("Scan to Add", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                        const Text("Open camera viewfinder to decode transient QR matrix map signatures.", style: TextStyle(fontSize: 11, color: Colors.black54)),
+                        Text("Scan to Add", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: colors.onSurface)),
+                        Text("Open camera viewfinder to decode transient QR matrix map signatures.", style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.6))),
                       ],
                     ),
                   ),
-                  const Icon(Icons.chevron_right, size: 16, color: Colors.black26),
+                  Icon(Icons.chevron_right, size: 16, color: colors.onSurface.withOpacity(0.3)),
                 ],
               ),
             ),

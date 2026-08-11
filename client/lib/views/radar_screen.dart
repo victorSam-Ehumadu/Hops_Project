@@ -286,7 +286,21 @@ class _RadarScreenState extends State<RadarScreen>
           ),
 
           const SizedBox(width: 8),
-          GestureDetector(
+          // The button only ever responded to a long-press with zero
+          // affordance — a first-time tap did nothing and looked broken.
+          // Tooltip covers long-press hover/hold hints; the plain tap
+          // fallback tells mouse/first-time users what to actually do.
+          Tooltip(
+            message: "Hold to activate Emergency Flare",
+            child: GestureDetector(
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("Press and hold this button to activate the Emergency Flare"),
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            },
             onLongPress: () {
               showDialog(
                 context: context,
@@ -322,6 +336,7 @@ class _RadarScreenState extends State<RadarScreen>
               ),
               child: const Icon(Icons.warning_amber_rounded,
                   color: Colors.white, size: 22),
+            ),
             ),
           ),
           GestureDetector(
@@ -468,7 +483,7 @@ class _RadarScreenState extends State<RadarScreen>
                                   CircleAvatar(
                                     radius: 16,
                                     backgroundColor: colors.primary.withOpacity(0.1),
-                                    child: Text(sender[0],
+                                    child: Text(sender.isNotEmpty ? sender[0] : '?',
                                         style: TextStyle(
                                             fontWeight: FontWeight.bold,
                                             color: colors.primary,
