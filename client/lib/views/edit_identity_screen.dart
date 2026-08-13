@@ -140,9 +140,13 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
             ),
             const SizedBox(height: 8),
             TextButton(
-              onPressed: _removeAvatar,
+              // No photo yet → tapping here does the same thing as tapping
+              // the avatar itself. Once one's set, this becomes the way to
+              // clear it — showing "Remove photo" when there's nothing to
+              // remove was confusing (and did nothing when tapped).
+              onPressed: _avatarPath != null ? _removeAvatar : _pickAvatar,
               child: Text(
-                'Remove photo',
+                _avatarPath != null ? 'Remove photo' : 'Tap to change photo',
                 style: TextStyle(color: colors.primary),   // visible
               ),
             ),

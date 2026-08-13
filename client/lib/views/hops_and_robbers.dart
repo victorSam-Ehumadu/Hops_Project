@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/theme/hops_theme.dart';
+import 'package:client/services/hops_constants.dart';
 
 enum GameRole { runner, robber }
 
@@ -12,6 +13,13 @@ class HopsAndRobbersPage extends StatefulWidget {
   final String myUsername;
   final Future<void> Function(String action, Map<String, String> data) onSendGameAction;
   final Stream<Map<String, dynamic>> gameEventStream;
+  // Toggles the runner-identification tag riding alongside this device's
+  // normal presence beacon — see hops_constants.dart's kGameRunnerTag*.
+  // Needed because the rotating-ID presence beacon (HPS:<token>) no longer
+  // carries a plaintext username the way robbers' proximity scan used to
+  // rely on, and game participants are frequently strangers with no
+  // exchanged rotating-ID seed the way Watch Me's contacts always have.
+  final void Function(bool isRunner) onSetGameRunnerTag;
 
   const HopsAndRobbersPage({
     super.key,
@@ -19,6 +27,7 @@ class HopsAndRobbersPage extends StatefulWidget {
     required this.myUsername,
     required this.onSendGameAction,
     required this.gameEventStream,
+    required this.onSetGameRunnerTag,
   });
 
   @override
@@ -98,6 +107,9 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
 
   @override
   void dispose() {
+    // Don't leave a stale runner tag broadcasting if the screen is closed
+    // (back button, app switch) mid-game while still a runner.
+    if (_myRole == GameRole.runner && _gameActive) widget.onSetGameRunnerTag(false);
     _scanSub?.cancel();
     _gameSub?.cancel();
     _lobbyAdTimer?.cancel();
@@ -177,6 +189,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
   // ---------- Leave lobby ----------
   void _leaveLobby() {
     if (_isHost) _stopLobbyAd();
+    widget.onSetGameRunnerTag(false);
     setState(() {
       _myLobbyId = null;
       _isHost = false;
@@ -220,6 +233,10 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
     _gameActive = true;
     _gameId = _myLobbyId ?? DateTime.now().millisecondsSinceEpoch.toString();
     _stopLobbyAd();
+    // Runners broadcast the tag robbers scan for; a robber has no reason
+    // to (and shouldn't — it'd defeat the point of the "am I nearby a
+    // runner" check on the robber's own side).
+    widget.onSetGameRunnerTag(_myRole == GameRole.runner);
     setState(() {});
     if (_myRole == GameRole.robber) _startTagScanner();
   }
@@ -230,6 +247,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
       if (data['target'] == widget.myUsername) {
         _myRole = GameRole.robber;
         _playerRoles[widget.myUsername] = GameRole.robber;
+        widget.onSetGameRunnerTag(false); // just got tagged — no longer a runner
         _startTagScanner();
         setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
@@ -244,18 +262,22 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
   }
 
   // ---------- Tag scanner ----------
+  // Reads the runner tag from manufacturer data (see hops_constants.dart)
+  // rather than the beacon name itself — the rotating-ID presence beacon
+  // no longer carries a plaintext username to read at all.
   void _startTagScanner() {
     _scanSub?.cancel();
     _scanSub = widget.radarStream.listen((results) {
       if (!_gameActive || _myRole != GameRole.robber) return;
       final runners = <String, int>{};
       for (final r in results) {
-        final name = r.advertisementData.advName;
-        if (name.startsWith("HPS:") && r.rssi > -45) {
-          final username = name.substring(4);
-          if (_playerRoles[username] == GameRole.runner) {
-            runners[username] = r.rssi;
-          }
+        if (r.rssi <= -45) continue;
+        final mfgBytes = r.advertisementData.manufacturerData[kCommunityManufacturerId];
+        if (mfgBytes == null) continue;
+        final username = decodeGameRunnerTag(mfgBytes);
+        if (username == null) continue;
+        if (_playerRoles[username] == GameRole.runner) {
+          runners[username] = r.rssi;
         }
       }
       setState(() => _nearbyRunners
@@ -561,11 +583,11 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
         ],
       ),
       body: availableLobbies.isEmpty
-          ? const Center(
+          ? Center(
         child: Text(
           "No lobbies found.\nCreate one with the + button.",
           textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.grey),
+          style: TextStyle(color: colors.onSurface.withOpacity(0.5)),
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
         ),

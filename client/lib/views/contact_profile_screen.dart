@@ -130,7 +130,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                 backgroundColor: colors.primaryContainer,
                 backgroundImage: _avatarPath != null ? FileImage(File(_avatarPath!)) : null,
                 child: _avatarPath == null
-                    ? const Icon(Icons.person, size: 56, color: Colors.white)
+                    ? const Icon(Icons.cruelty_free, size: 56, color: Colors.white)
                     : null,
               ),
             ),

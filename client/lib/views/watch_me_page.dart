@@ -2,11 +2,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:client/services/hops_constants.dart';
+import 'package:client/services/notification_service.dart';
 
 class WatchMePage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
   final Set<String> friendUsernames;
   final Set<String> watchingBuddies;
+  // Rotating-ID seeds for known contacts (see hops_constants.dart) — a
+  // buddy's beacon no longer carries their plaintext username, so
+  // recognizing it requires their seed, learned the same way avatar/bio
+  // are: the first time you actually open a chat with them.
+  final Map<String, List<int>> contactSeeds;
   final Stream<Set<String>> watchingBuddiesStream;
   final Stream<List<String>> pendingWatchStream;
   final Future<void> Function(String buddy) onSendWatchRequest;
@@ -20,6 +27,7 @@ class WatchMePage extends StatefulWidget {
     required this.radarStream,
     required this.friendUsernames,
     required this.watchingBuddies,
+    this.contactSeeds = const {},
     required this.watchingBuddiesStream,
     required this.pendingWatchStream,
     required this.onSendWatchRequest,
@@ -101,8 +109,12 @@ class _WatchMePageState extends State<WatchMePage> {
     _monitoringStartTime = DateTime.now();
 
     _scanSub = widget.radarStream.listen((results) {
+      final seed = widget.contactSeeds[buddy];
+      if (seed == null) return; // can't recognize their beacon without it — see _buildSignalBar
       for (final r in results) {
-        if (r.advertisementData.advName == "HPS:$buddy") {
+        final name = r.advertisementData.advName;
+        if (!name.startsWith("HPS:")) continue;
+        if (matchesRotatingToken(seed, name.substring(4))) {
           _lastRssi = r.rssi;
           _lastSeen = DateTime.now();
           _alertCooldown = false;
@@ -141,10 +153,17 @@ class _WatchMePageState extends State<WatchMePage> {
   }
 
   void _triggerAlert(String message) {
-    if (_alertActive || !mounted) return;
+    if (_alertActive) return;
     _alertActive = true;
     _alertCooldown = true;
     HapticFeedback.heavyImpact();
+    // Fires regardless of whether this screen is even mounted right now —
+    // the in-app dialog below only ever helped if Watch Me happened to be
+    // the screen on top, which defeats the point of a *safety* alert. This
+    // is what actually reaches someone elsewhere in the app or with it
+    // backgrounded.
+    NotificationService.showWatchMeAlertNotification(message: message);
+    if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -178,6 +197,7 @@ class _WatchMePageState extends State<WatchMePage> {
   }
 
   Widget _buildSignalBar(int rssi) {
+    final colors = Theme.of(context).colorScheme;
     final everSeen = _lastSeen != null;
     final proximity = _proximityInfo(rssi, everSeen);
     final ratio = ((rssi + 100) / 70.0).clamp(0.0, 1.0);
@@ -202,7 +222,7 @@ class _WatchMePageState extends State<WatchMePage> {
         const SizedBox(height: 6),
         Text(
           "Signal: $rssi dBm",
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6)),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
@@ -210,7 +230,7 @@ class _WatchMePageState extends State<WatchMePage> {
         LinearProgressIndicator(
           value: everSeen ? ratio : 0,
           color: proximity.color,
-          backgroundColor: Colors.grey.shade300,
+          backgroundColor: colors.onSurface.withOpacity(0.15),
           minHeight: 12,
         ),
         const SizedBox(height: 8),
@@ -218,17 +238,78 @@ class _WatchMePageState extends State<WatchMePage> {
           everSeen
               ? "Last seen: ${_lastSeen!.hour}:${_lastSeen!.minute.toString().padLeft(2, '0')}"
               : "Not seen yet",
+          style: TextStyle(color: colors.onSurface),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 4),
         Text(
           "Rough estimate from Bluetooth signal strength — not an exact distance.",
-          style: TextStyle(fontSize: 10, color: Colors.grey.shade500, fontStyle: FontStyle.italic),
+          style: TextStyle(fontSize: 10, color: colors.onSurface.withOpacity(0.5), fontStyle: FontStyle.italic),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
       ],
+    );
+  }
+
+  // Replaces the old DropdownButton — a tap-to-select row of pill chips
+  // reads much more like the rest of the app's Elevated Soft UI (and
+  // shows every candidate at a glance instead of hiding them behind a
+  // closed menu) than a plain platform dropdown does.
+  Widget _buildBuddyPicker(ColorScheme colors) {
+    final available =
+        widget.friendUsernames.where((f) => !_watchingBuddies.contains(f)).toList();
+    if (available.isEmpty) {
+      return Text(
+        "No friends available to watch — add some from the Home tab first.",
+        style: TextStyle(color: colors.onSurface.withOpacity(0.5), fontSize: 12),
+      );
+    }
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: available.map((f) {
+        final selected = _selectedBuddy == f;
+        return GestureDetector(
+          onTap: () => setState(() => _selectedBuddy = f),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: BoxDecoration(
+              color: selected ? colors.primary : colors.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(100),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircleAvatar(
+                  radius: 10,
+                  backgroundColor:
+                      selected ? Colors.white.withOpacity(0.25) : colors.primary.withOpacity(0.15),
+                  child: Text(
+                    f.isNotEmpty ? f[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: selected ? Colors.white : colors.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  f,
+                  style: TextStyle(
+                    color: selected ? Colors.white : colors.onSurface,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -249,14 +330,19 @@ class _WatchMePageState extends State<WatchMePage> {
         backgroundColor: Colors.transparent,
         foregroundColor: colors.primary,
         actions: [
-          IconButton(
-            icon: Icon(
-              Icons.delete_sweep,
-              color: colors.primary,
+          // Was an icon-only IconButton — the tooltip only shows up on a
+          // long-press, so what it actually does wasn't visible at a
+          // glance. Same TextButton.icon treatment as Hops Share's
+          // "Received Files" and Vibe Check's "History" actions.
+          TextButton.icon(
+            icon: Icon(Icons.delete_sweep, color: colors.primary, size: 20),
+            label: Text(
+              "Clear All",
+              style: TextStyle(color: colors.primary, fontSize: 14, fontWeight: FontWeight.w600),
             ),
             onPressed: widget.onClearAll,
-            tooltip: "Clear all watch history",
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: SingleChildScrollView(
@@ -272,8 +358,18 @@ class _WatchMePageState extends State<WatchMePage> {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 8),
+              if (!widget.contactSeeds.containsKey(_monitoredBuddy))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    "You haven't chatted with $_monitoredBuddy yet — open a chat with "
+                    "them once so Watch Me can recognize their signal.",
+                    style: TextStyle(
+                        fontSize: 12, color: colors.error, fontStyle: FontStyle.italic),
+                  ),
+                ),
               _buildSignalBar(_lastRssi),
-              const Divider(height: 24),
+              const SizedBox(height: 24),
             ],
             Text(
               "Watch Requests",
@@ -285,11 +381,11 @@ class _WatchMePageState extends State<WatchMePage> {
             ),
             const SizedBox(height: 8),
             if (_pendingRequests.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(left: 16, top: 4),
+              Padding(
+                padding: const EdgeInsets.only(left: 16, top: 4),
                 child: Text(
                   "No pending requests",
-                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                  style: TextStyle(color: colors.onSurface.withOpacity(0.5), fontSize: 13),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -372,7 +468,7 @@ class _WatchMePageState extends State<WatchMePage> {
                   child: const Text("Stop"),
                 ),
               )),
-              const Divider(),
+              const SizedBox(height: 16),
             ],
             Text(
               "Send watch request to:",
@@ -384,24 +480,7 @@ class _WatchMePageState extends State<WatchMePage> {
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 8),
-            DropdownButton<String>(
-              value: _selectedBuddy,
-              isExpanded: true,
-              hint: const Text("Choose a friend"),
-              items: widget.friendUsernames
-                  .where((f) => !_watchingBuddies.contains(f))
-                  .map((f) => DropdownMenuItem(
-                value: f,
-                child: Text(
-                  f,
-                  style: TextStyle(color: colors.primary),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ))
-                  .toList(),
-              onChanged: (v) => setState(() => _selectedBuddy = v),
-            ),
+            _buildBuddyPicker(colors),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               icon: const Icon(Icons.send),

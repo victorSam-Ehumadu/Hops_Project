@@ -1,4 +1,34 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+// A headline/body font pairing — the four options here were originally
+// prototyped in font_preview_screen.dart (now retired from the real UI in
+// favor of this actually-wired picker, see theme_picker_screen.dart).
+// `headlineFont`/`bodyFont` mirror GoogleFonts' own function signature
+// (`TextStyle Function({TextStyle? textStyle})`) so an existing TextStyle
+// (weight, size, color already set elsewhere) can be passed through and
+// only have its font family swapped in, rather than replaced wholesale.
+class FontPairing {
+  final String name;
+  final TextStyle Function({TextStyle? textStyle}) headlineFont;
+  final TextStyle Function({TextStyle? textStyle}) bodyFont;
+  const FontPairing({
+    required this.name,
+    required this.headlineFont,
+    required this.bodyFont,
+  });
+}
+
+class AppFonts {
+  // Not const — GoogleFonts.xyz are themselves functions (tear-offs), not
+  // compile-time constants.
+  static final List<FontPairing> all = [
+    FontPairing(name: 'Poppins + Nunito', headlineFont: GoogleFonts.poppins, bodyFont: GoogleFonts.nunito),
+    FontPairing(name: 'Montserrat + Inter', headlineFont: GoogleFonts.montserrat, bodyFont: GoogleFonts.inter),
+    FontPairing(name: 'Rubik + Roboto', headlineFont: GoogleFonts.rubik, bodyFont: GoogleFonts.roboto),
+    FontPairing(name: 'Lato + Merriweather', headlineFont: GoogleFonts.lato, bodyFont: GoogleFonts.merriweather),
+  ];
+}
 
 class AppTheme {
   final String name;
@@ -23,7 +53,20 @@ class AppTheme {
     this.brightness = Brightness.light,
   });
 
-  ThemeData toThemeData() {
+  // [font] is optional so every existing call site (this app has plenty
+  // of raw TextStyle(...) literals scattered across screens rather than
+  // Theme.of(context).textTheme references) keeps working unchanged if no
+  // font is picked yet. When a font *is* picked, every TextTheme role gets
+  // it explicitly — not just the 4 roles this app happens to reference by
+  // name — because Flutter's Text widget merges its own style onto
+  // whatever DefaultTextStyle the ambient Scaffold/MaterialApp built from
+  // the theme, and that base could be resolved from any role depending on
+  // context. Leaving roles undefined would mean some raw TextStyle()
+  // literals silently keep the system font while others pick up the
+  // chosen one, depending on exactly which role Flutter happened to
+  // resolve — not a bug worth chasing when defining every role costs
+  // nothing.
+  ThemeData toThemeData({FontPairing? font}) {
     final isDark = brightness == Brightness.dark;
 
     // Build a ColorScheme that includes all the roles you use.
@@ -44,16 +87,80 @@ class AppTheme {
       onError: Colors.white,
     );
 
+    const baseTextTheme = TextTheme(
+      displayLarge: TextStyle(fontWeight: FontWeight.w800),
+      headlineMedium: TextStyle(fontWeight: FontWeight.bold),
+      bodyLarge: TextStyle(fontWeight: FontWeight.w500, height: 1.5),
+      labelLarge: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5),
+    );
+
+    final textTheme = font == null
+        ? baseTextTheme
+        : TextTheme(
+            displayLarge: font.headlineFont(textStyle: baseTextTheme.displayLarge),
+            displayMedium: font.headlineFont(textStyle: baseTextTheme.displayMedium),
+            displaySmall: font.headlineFont(textStyle: baseTextTheme.displaySmall),
+            headlineLarge: font.headlineFont(textStyle: baseTextTheme.headlineLarge),
+            headlineMedium: font.headlineFont(textStyle: baseTextTheme.headlineMedium),
+            headlineSmall: font.headlineFont(textStyle: baseTextTheme.headlineSmall),
+            titleLarge: font.headlineFont(textStyle: baseTextTheme.titleLarge),
+            titleMedium: font.headlineFont(textStyle: baseTextTheme.titleMedium),
+            titleSmall: font.headlineFont(textStyle: baseTextTheme.titleSmall),
+            bodyLarge: font.bodyFont(textStyle: baseTextTheme.bodyLarge),
+            bodyMedium: font.bodyFont(textStyle: baseTextTheme.bodyMedium),
+            bodySmall: font.bodyFont(textStyle: baseTextTheme.bodySmall),
+            labelLarge: font.bodyFont(textStyle: baseTextTheme.labelLarge),
+            labelMedium: font.bodyFont(textStyle: baseTextTheme.labelMedium),
+            labelSmall: font.bodyFont(textStyle: baseTextTheme.labelSmall),
+          );
+
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,
       scaffoldBackgroundColor: background,
       colorScheme: colorScheme,
-      textTheme: const TextTheme(
-        displayLarge: TextStyle(fontWeight: FontWeight.w800),
-        headlineMedium: TextStyle(fontWeight: FontWeight.bold),
-        bodyLarge: TextStyle(fontWeight: FontWeight.w500, height: 1.5),
-        labelLarge: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5),
+      textTheme: textTheme,
+      // Elevated Soft UI defaults — bigger consistent radii and real
+      // (if gentle) elevation instead of the flat opacity-tinted
+      // rectangles this app used to hand-roll slightly differently on
+      // every screen. Widgets that explicitly override shape/color still
+      // can (HopsCard draws its own two-layer shadow rather than relying
+      // on this), but anything left at its Material default now gets the
+      // same consistent look for free.
+      cardTheme: CardThemeData(
+        elevation: 3,
+        shadowColor: Colors.black.withOpacity(0.25),
+        color: surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        // A small default rather than zero — plenty of Card(...) call
+        // sites across the app rely on Material's own margin for basic
+        // breathing room between list items rather than wrapping
+        // themselves in an explicit margin, and zero would have made
+        // those touch edge-to-edge with no warning.
+        margin: const EdgeInsets.symmetric(vertical: 6),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          elevation: 2,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
+        ),
+      ),
+      appBarTheme: AppBarTheme(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: false,
+        titleTextStyle: (textTheme.headlineMedium ?? const TextStyle())
+            .copyWith(fontSize: 20, fontWeight: FontWeight.bold, color: primary),
+        iconTheme: IconThemeData(color: primary),
       ),
     );
   }
@@ -84,16 +191,21 @@ class AppThemes {
       onTertiaryContainer: Colors.white,
     ),
     // 3 – Sunset Glow
-    // AppTheme(
-    //   name: 'Sunset Glow',
-    //   primary: Color(0xFFFF6F00),
-    //   background: Color(0xFFFFF3E0),
-    //   surface: Color(0xFFFFE0B2),
-    //   onBackground: Color(0xBF360C),
-    //   primaryContainer: Color(0xFFFFB74D),
-    //   tertiaryContainer: Color(0xFFE65100),
-    //   onTertiaryContainer: Colors.white,
-    // ),
+    // Was disabled with onBackground: Color(0xBF360C) — only 6 hex digits,
+    // so Dart's Color(int) read that as 0x00BF360C: alpha byte 0x00, i.e.
+    // fully transparent text. Every word on this theme would have
+    // rendered invisible; re-enabled with the missing FF alpha prefix
+    // restored (was very likely meant to be Material's Deep Orange 900).
+    AppTheme(
+      name: 'Sunset Glow',
+      primary: Color(0xFFFF6F00),
+      background: Color(0xFFFFF3E0),
+      surface: Color(0xFFFFE0B2),
+      onBackground: Color(0xFFBF360C),
+      primaryContainer: Color(0xFFFFB74D),
+      tertiaryContainer: Color(0xFFE65100),
+      onTertiaryContainer: Colors.white,
+    ),
     // 4 – Forest Calm
     AppTheme(
       name: 'Forest Calm',
@@ -137,6 +249,68 @@ class AppThemes {
       primaryContainer: Color(0xFF3700B3),
       tertiaryContainer: Color(0xFF03DAC6),
       onTertiaryContainer: Color(0xFF000000),
+      brightness: Brightness.dark,
+    ),
+    // 8 – Ocean Depths (Dark) — dark counterpart to Ocean Breeze
+    AppTheme(
+      name: 'Ocean Depths',
+      primary: Color(0xFF64B5F6),
+      background: Color(0xFF0A1929),
+      surface: Color(0xFF132F4C),
+      onBackground: Color(0xFFE3F2FD),
+      primaryContainer: Color(0xFF1565C0),
+      tertiaryContainer: Color(0xFF29B6F6),
+      onTertiaryContainer: Color(0xFF001E3C),
+      brightness: Brightness.dark,
+    ),
+    // 9 – Forest Night (Dark) — dark counterpart to Forest Calm
+    AppTheme(
+      name: 'Forest Night',
+      primary: Color(0xFF81C784),
+      background: Color(0xFF0D1F0F),
+      surface: Color(0xFF16281A),
+      onBackground: Color(0xFFE8F5E9),
+      primaryContainer: Color(0xFF2E7D32),
+      tertiaryContainer: Color(0xFF66BB6A),
+      onTertiaryContainer: Color(0xFF002204),
+      brightness: Brightness.dark,
+    ),
+    // 10 – Rose Dusk (Dark) — a hue nothing else in this list covers
+    AppTheme(
+      name: 'Rose Dusk',
+      primary: Color(0xFFF48FB1),
+      background: Color(0xFF1A0E14),
+      surface: Color(0xFF2A1620),
+      onBackground: Color(0xFFFCE4EC),
+      primaryContainer: Color(0xFFAD1457),
+      tertiaryContainer: Color(0xFFEC407A),
+      onTertiaryContainer: Color(0xFF3E0018),
+      brightness: Brightness.dark,
+    ),
+    // 11 – Sunset Ember (Dark) — dark counterpart to Sunset Glow
+    AppTheme(
+      name: 'Sunset Ember',
+      primary: Color(0xFFFFB74D),
+      background: Color(0xFF1F1209),
+      surface: Color(0xFF2E1C0F),
+      onBackground: Color(0xFFFFF3E0),
+      primaryContainer: Color(0xFFE65100),
+      tertiaryContainer: Color(0xFFFF8A65),
+      onTertiaryContainer: Color(0xFF3E1400),
+      brightness: Brightness.dark,
+    ),
+    // 12 – Slate Night (Dark) — dark counterpart to Minimalist, a cool
+    // neutral grey-blue for anyone who wants dark mode without a strong
+    // accent color dominating the whole app.
+    AppTheme(
+      name: 'Slate Night',
+      primary: Color(0xFF90A4AE),
+      background: Color(0xFF10151A),
+      surface: Color(0xFF1C242B),
+      onBackground: Color(0xFFECEFF1),
+      primaryContainer: Color(0xFF455A64),
+      tertiaryContainer: Color(0xFF78909C),
+      onTertiaryContainer: Color(0xFF0B0F12),
       brightness: Brightness.dark,
     ),
   ];

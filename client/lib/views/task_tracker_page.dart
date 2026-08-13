@@ -16,24 +16,16 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   DateTime _displayMonth = DateTime.now();
   Map<String, Color> _taskDates = {};
   final Set<String> _outsideMonthTaskDates = {};
-  Timer? _reminderTimer;
-  // Task ids already reminded this session — without this, an overdue,
-  // still-incomplete task re-triggers the dialog every 10s forever, and
-  // dialogs stack if a previous one is still on screen.
-  final Set<String> _remindedTaskIds = {};
-  bool _reminderDialogShowing = false;
+
+  static const List<String> _monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
 
   @override
   void initState() {
     super.initState();
     _loadTasks();
-    _startReminderCheck();
-  }
-
-  @override
-  void dispose() {
-    _reminderTimer?.cancel();
-    super.dispose();
   }
 
   Future<void> _loadTasks() async {
@@ -93,43 +85,14 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
     });
   }
 
-  void _startReminderCheck() {
-    _reminderTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      if (_reminderDialogShowing) return; // one at a time, never stack
-      final now = DateTime.now().millisecondsSinceEpoch;
-      for (final task in _tasks) {
-        final id = task[DatabaseHelper.taskColId] as String;
-        if (task[DatabaseHelper.taskColCompleted] == 0 &&
-            task[DatabaseHelper.taskColDueDate] != null &&
-            (task[DatabaseHelper.taskColDueDate] as int) <= now &&
-            !_remindedTaskIds.contains(id)) {
-          _remindedTaskIds.add(id);
-          _showReminderDialog(task[DatabaseHelper.taskColTitle]);
-          break;
-        }
-      }
-    });
-  }
-
-  void _showReminderDialog(String title) {
-    _reminderDialogShowing = true;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Task Reminder"),
-        content: Text("'$title' is due now!"),
-        actions: [
-          ElevatedButton(
-            onPressed: () {
-              _reminderDialogShowing = false;
-              Navigator.of(ctx).pop();
-            },
-            child: const Text("OK"),
-          ),
-        ],
-      ),
-    );
-  }
+  // Reminder checking used to live here as a per-screen Timer — it only
+  // ever fired while this exact screen was open, and only ever checked
+  // _tasks (whatever date happened to be selected on the calendar), so a
+  // task due today was silently never reminded if you were looking at any
+  // other date, tab, or screen entirely. Moved to hops_app.dart as an
+  // always-on check against every incomplete task, firing a real
+  // notification instead of an in-app dialog that could never have
+  // reached you anywhere else.
 
   // ---------- Add / Edit task form ----------
   Future<void> _openTaskForm({Map<String, dynamic>? existing}) async {
@@ -343,7 +306,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             ),
             Flexible(
               child: Text(
-                "${_displayMonth.month}/${_displayMonth.year}",
+                "${_monthNames[_displayMonth.month - 1]} ${_displayMonth.year}",
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: colors.primary),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -376,8 +339,21 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
               .toList(),
         ),
         const SizedBox(height: 4),
-        // Day grid
-        GridView.builder(
+        // Day grid — swipeable left/right to change month, same gesture as
+        // a normal phone calendar app, in addition to the chevron buttons
+        // above (which stay as the precise/discoverable way to do the same
+        // thing).
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragEnd: (details) {
+            final velocity = details.primaryVelocity ?? 0;
+            if (velocity < -200) {
+              _nextMonth();
+            } else if (velocity > 200) {
+              _previousMonth();
+            }
+          },
+          child: GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7),
@@ -462,6 +438,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             );
           },
         ),
+        ),
       ],
     );
   }
@@ -489,8 +466,10 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color: isOverdue ? Colors.red.withOpacity(0.1) : colors.surface.withOpacity(0.6),
+      // Overdue still gets a distinct tint (real signal worth keeping),
+      // everything else now inherits the theme's card shape/elevation
+      // rather than a flat, translucent wash that fought the shadow.
+      color: isOverdue ? Colors.red.withOpacity(0.12) : null,
       child: ExpansionTile(
         leading: Checkbox(
           value: isComplete,
@@ -585,21 +564,39 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
             padding: const EdgeInsets.all(8.0),
             child: _buildCalendar(),
           ),
-          Divider(color: colors.primary),
+          // Rounded "sheet" transition instead of a hard divider line —
+          // same treatment as the Home tab's friend-request tray.
           Expanded(
-            child: _tasks.isEmpty
-                ? Center(
-              child: Text(
-                "No tasks for this day",
-                style: TextStyle(color: colors.onSurface.withOpacity(0.6)),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(28),
+                  topRight: Radius.circular(28),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 16,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
               ),
-            )
-                : ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              itemCount: _tasks.length,
-              itemBuilder: (context, index) => _buildTaskCard(_tasks[index]),
+              child: _tasks.isEmpty
+                  ? Center(
+                child: Text(
+                  "No tasks for this day",
+                  style: TextStyle(color: colors.onSurface.withOpacity(0.6)),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              )
+                  : ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                itemCount: _tasks.length,
+                itemBuilder: (context, index) => _buildTaskCard(_tasks[index]),
+              ),
             ),
           ),
         ],

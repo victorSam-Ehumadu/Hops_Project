@@ -1,17 +1,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:client/database/database_helper.dart';
-import 'package:client/views/root_gatekeeper.dart';
+import 'package:client/views/account_management_screen.dart';
 import 'package:client/views/theme_picker_screen.dart';
 import 'package:client/views/terms_screen.dart';
 import 'package:client/views/edit_identity_screen.dart';
 import 'package:client/views/walkthrough_screen.dart';
-import 'package:client/views/font_preview_screen.dart';
+import 'package:client/views/admin_requests_screen.dart';
 
 class HopsProfileScreen extends StatefulWidget {
   const HopsProfileScreen({super.key});
@@ -24,6 +19,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
   String _nickname = '';
   String _bio = '';
   String? _avatarPath;
+  String _myRole = 'student';
 
   @override
   void initState() {
@@ -46,6 +42,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
       _nickname = prefs.getString('nickname') ?? '';
       _bio = prefs.getString('bio') ?? '';
       _avatarPath = prefs.getString('avatar_path');
+      _myRole = prefs.getString('my_role') ?? 'student';
     });
   }
 
@@ -104,7 +101,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                     ? FileImage(File(_avatarPath!))
                     : null,
                 child: _avatarPath == null
-                    ? const Icon(Icons.person, size: 48, color: Colors.white)
+                    ? const Icon(Icons.cruelty_free, size: 48, color: Colors.white)
                     : null,
               ),
             ),
@@ -158,13 +155,15 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
               },
             ),
 
-            // App Theme button
+            // Customize button — color theme + font, merged into one
+            // personalization hub rather than two separate, easy-to-miss
+            // entries.
             ListTile(
               contentPadding:
               const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               leading: Icon(Icons.palette_outlined, color: colors.primary),
               title: Text(
-                'App Theme',
+                'Customize Hops',
                 style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 14,
@@ -173,7 +172,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
               subtitle: Text(
-                'Change the color scheme',
+                'Color theme, font & size',
                 style: TextStyle(
                     fontSize: 12,
                     color: colors.onBackground.withOpacity(0.7)),
@@ -190,6 +189,27 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
               },
             ),
             const SizedBox(height: 24),
+
+            // Admin approval queue — student-facing "Request Admin Access"
+            // entry removed per product decision; a replacement admin
+            // onboarding flow is planned separately.
+            if (_myRole == 'admin')
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                leading: Icon(Icons.shield_outlined, color: colors.primary),
+                title: Text(
+                  'Admin Requests',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: colors.primary),
+                ),
+                subtitle: Text(
+                  'Review pending admin-access requests',
+                  style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
+                ),
+                trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface),
+                onTap: () => Navigator.push(
+                    context, MaterialPageRoute(builder: (_) => const AdminRequestsScreen())),
+              ),
+            if (_myRole == 'admin') const SizedBox(height: 24),
 
             // Terms and Conditions button
             ListTile(
@@ -217,16 +237,24 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Help button
+            // Help button — was just "Help" with no subtitle, which is
+            // apparently why people didn't realize tapping it replays the
+            // full app walkthrough; the name alone doesn't say that.
             ListTile(
               contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               leading: Icon(Icons.help_outline, color: colors.primary),
               title: Text(
-                'Help',
+                'Help & Walkthrough',
                 style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 14,
                     color: colors.primary),
+              ),
+              subtitle: Text(
+                'Replay the welcome tour of Hops\' features',
+                style: TextStyle(fontSize: 12, color: colors.onBackground.withOpacity(0.7)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
               trailing: Icon(Icons.chevron_right, size: 18, color: colors.onBackground),
               onTap: () {
@@ -238,92 +266,27 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Temporary: Font Preview
             ListTile(
-              contentPadding:
-              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              leading: Icon(Icons.text_fields, color: colors.primary),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.manage_accounts_outlined, color: colors.primary),
               title: Text(
-                'Font Preview',
-                style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                    color: colors.primary),
+                'Account Management',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: colors.primary),
               ),
-              trailing: Icon(Icons.chevron_right, size: 18,
-                  color: colors.onBackground),
+              subtitle: Text(
+                'Change password, log out, or delete your account',
+                style: TextStyle(fontSize: 12, color: colors.onBackground.withOpacity(0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18, color: colors.onBackground),
               onTap: () {
                 Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const FontPreviewScreen()),
-                );
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AccountManagementScreen()));
               },
             ),
-            const SizedBox(height: 24),
-
-            Card(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-              color: Colors.red.withOpacity(0.05),
-              elevation: 0,
-              child: ListTile(
-                leading:
-                const Icon(Icons.logout, color: Colors.redAccent),
-                title: const Text(
-                  "Log Out / Destroy Identity",
-                  style: TextStyle(
-                      color: Colors.redAccent,
-                      fontWeight: FontWeight.bold),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  "Clears local storage preferences and destroys local keys.",
-                  style: TextStyle(
-                      color: colors.onBackground.withOpacity(0.7)),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                onTap: () async {
-                  // Close our handle before unlinking the file — deleting
-                  // an open sqlite db can leave it locked/corrupted, and
-                  // DatabaseHelper's cached connection must be dropped too
-                  // or every DB call for the rest of this app session keeps
-                  // talking to the now-deleted file instead of the fresh
-                  // one a new sign-up expects.
-                  await DatabaseHelper.instance.close();
-                  final dbPath = await getDatabasesPath();
-                  await deleteDatabase(p.join(dbPath, 'MeshNetwork.db'));
-
-                  final SharedPreferences prefs =
-                  await SharedPreferences.getInstance();
-                  // Clear every locally-scoped identity key, not just the
-                  // session token — otherwise a different person signing
-                  // up on this device inherits the previous account's
-                  // avatar, nickname, bio and feature toggles.
-                  await prefs.remove('saved_hops_token');
-                  await prefs.remove('my_username');
-                  await prefs.remove('my_hops_id');
-                  await prefs.remove('avatar_path');
-                  await prefs.remove('nickname');
-                  await prefs.remove('bio');
-                  await prefs.remove('enabledFeatureIds');
-                  await prefs.remove('watchingBuddies');
-                  await prefs.remove('terms_accepted');
-                  await prefs.remove('walkthrough_seen');
-                  await const FlutterSecureStorage().delete(key: 'private_key');
-                  if (context.mounted) {
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(
-                          builder: (context) =>
-                          const HopsRootGatekeeper()),
-                          (route) => false,
-                    );
-                  }
-                },
-              ),
-            )
           ],
         ),
       ),

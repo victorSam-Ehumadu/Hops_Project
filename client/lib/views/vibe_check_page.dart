@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
+import 'package:client/views/vibe_history_page.dart';
+import 'package:client/widgets/hops_card.dart';
 
 class VibeCheckPage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
@@ -25,8 +27,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
 
   final TextEditingController _locationController = TextEditingController();
   final FocusNode _focusNode = FocusNode();     // explicit focus for the text field
-
-  List<Map<String, dynamic>> _records = [];
 
   final Map<String, _CommunityReport> _communityReports = {};
 
@@ -86,8 +86,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
         }
       }
     });
-
-    _loadRecords();
   }
 
   int _levelToApproxCount(int level) {
@@ -98,13 +96,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
       case 3: return 15;
       default: return 0;
     }
-  }
-
-  Future<void> _loadRecords() async {
-    final records = await DatabaseHelper.instance.getVibeRecords();
-    setState(() {
-      _records = records;
-    });
   }
 
   Future<void> _saveLocation() async {
@@ -131,17 +122,11 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
 
     _locationController.clear();
     _focusNode.unfocus();   // dismiss the keyboard after saving
-    await _loadRecords();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Saved $location as ${_levelNames[level]}")),
       );
     }
-  }
-
-  Future<void> _deleteRecord(String id) async {
-    await DatabaseHelper.instance.deleteVibeRecord(id);
-    await _loadRecords();
   }
 
   static const List<String> _levelNames = [
@@ -195,6 +180,18 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,
+        actions: [
+          TextButton.icon(
+            icon: Icon(Icons.history, color: colors.primary, size: 20),
+            label: Text(
+              "History",
+              style: TextStyle(color: colors.primary, fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const VibeHistoryPage())),
+          ),
+          const SizedBox(width: 4),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
@@ -222,14 +219,21 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                       duration: const Duration(milliseconds: 200),
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                       decoration: BoxDecoration(
-                        color: isSelected
-                            ? _levelColors[i].withOpacity(0.2)
-                            : Colors.white.withOpacity(0.4),
+                        color: isSelected ? _levelColors[i].withOpacity(0.2) : colors.surface,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: isSelected ? _levelColors[i] : Colors.grey.shade300,
+                          color: isSelected ? _levelColors[i] : colors.outline.withOpacity(0.25),
                           width: 2,
                         ),
+                        boxShadow: isSelected
+                            ? null
+                            : [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
                       ),
                       child: Column(
                         children: [
@@ -241,7 +245,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                               _levelNames[i],
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
-                                color: isSelected ? _levelColors[i] : Colors.black54,
+                                color: isSelected ? _levelColors[i] : colors.onSurface.withOpacity(0.6),
                               ),
                               maxLines: 1,
                             ),
@@ -298,122 +302,108 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
               ],
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               "Your report will be visible to nearby Hops users.",
-              style: TextStyle(fontSize: 11, color: Colors.grey),
+              style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.5)),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 24),
-            Text(
-              "📡 Community Reports",
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: colors.primary,
-              ),
+            // Same header treatment as the Home tab's friend-request tray —
+            // icon + title + a count badge that only appears once there's
+            // something to count.
+            Row(
+              children: [
+                Icon(Icons.wifi_tethering, size: 16, color: colors.primary),
+                const SizedBox(width: 6),
+                Text(
+                  "Community Reports",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: colors.primary,
+                  ),
+                ),
+                if (communityList.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: colors.primary,
+                      borderRadius: BorderRadius.circular(100),
+                    ),
+                    child: Text(
+                      "${communityList.length}",
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ],
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               "Reports from other students near you appear here.",
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.5)),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
             if (communityList.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 child: Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Text(
-                      "No reports yet. Walk around to see what others have shared!",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.travel_explore, size: 28, color: colors.onSurface.withOpacity(0.2)),
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: Text(
+                          "No reports yet. Walk around to see what others have shared!",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: colors.onSurface.withOpacity(0.5), fontSize: 12),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               )
             else
               ...communityList.map((report) {
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: _levelColors[report.level],
-                      child: Icon(_levelIcons[report.level],
-                          color: Colors.white),
-                    ),
-                    title: Text(
-                      report.location,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      _levelNames[report.level],
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                );
-              }),
-            const SizedBox(height: 24),
-            Text(
-              "Your Saved History",
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: colors.primary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            if (_records.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(
-                  "No records yet.",
-                  style: TextStyle(color: Colors.grey),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              )
-            else
-              ..._records.map((record) {
-                final loc = record[DatabaseHelper.vibeColLocation];
-                final count = record[DatabaseHelper.vibeColDeviceCount];
-                final ts = record[DatabaseHelper.vibeColTimestamp];
-                final date = DateTime.fromMillisecondsSinceEpoch(ts as int);
-                final id = record[DatabaseHelper.vibeColId];
-                final level = count <= 2 ? 0 : count <= 5 ? 1 : count <= 10 ? 2 : 3;
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: _levelColors[level],
-                      child: Icon(_levelIcons[level], color: Colors.white),
-                    ),
-                    title: Text(
-                      loc.toString(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      _levelNames[level] +
-                          " · ${date.hour}:${date.minute.toString().padLeft(2, '0')}",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline,
-                          color: Colors.redAccent),
-                      onPressed: () => _deleteRecord(id as String),
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: HopsCard(
+                    radius: 16,
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: _levelColors[report.level],
+                          child: Icon(_levelIcons[report.level], color: Colors.white, size: 18),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                report.location,
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                _levelNames[report.level],
+                                style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.5)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 );

@@ -23,17 +23,21 @@ const List<FeatureItem> allFeatures = [
   FeatureItem(
     id: 2,
     name: "Watch Me",
-    shortDesc: "Buddy safety tether with signal strength monitoring.",
+    shortDesc: "Let a friend keep an eye on you while you're out alone.",
     longDesc:
-    "Pair with a trusted friend. If their signal drops below a threshold or vanishes, your phone will alert you.",
+    "Send a watch request to a friend, or accept one from them. Once it's on, your phones quietly track each "
+    "other's Bluetooth signal — if one of you drifts out of range or disappears suddenly, the other gets an "
+    "alert. Handy for a late walk home, meeting up in a crowd, or just wanting someone to know you're okay.",
     icon: Icons.visibility,
   ),
   FeatureItem(
     id: 5,
     name: "Vibe Check",
-    shortDesc: "Real-time crowd density heatmap.",
+    shortDesc: "See which spots nearby are busy before you get there.",
     longDesc:
-    "Shows how crowded areas are based on the number of BLE devices detected. Helps you find quiet spots.",
+    "Tag a location with how crowded it feels right now, and see what other Hoppers nearby have reported. "
+    "Useful for finding a quiet table in the library, checking if the cafeteria line is worth it, or scouting "
+    "out a spot to study before you walk all the way over.",
     icon: Icons.people_outline,
   ),
   // FeatureItem(
@@ -47,17 +51,20 @@ const List<FeatureItem> allFeatures = [
   FeatureItem(
     id: 9,
     name: "Task Tracker",
-    shortDesc: "Offline task list with reminders and calendar.",
+    shortDesc: "A to-do list and calendar that works with zero signal.",
     longDesc:
-    "Create tasks, set due dates, and get reminders – all offline. A simple calendar view helps you stay organized.",
+    "Jot down assignments and deadlines, set a due date, and get a reminder when it's time — everything's "
+    "saved right on your device, so it works with no Wi-Fi or data at all. A built-in calendar view shows "
+    "what's coming up at a glance.",
     icon: Icons.task_alt,
   ),
   FeatureItem(
     id: 11,
     name: "Hops Share",
-    shortDesc: "Share files and notes with friends offline.",
+    shortDesc: "Send files and notes to someone nearby, no internet needed.",
     longDesc:
-    "Send PDFs, images, or quick text notes directly to a friend over Bluetooth – no internet needed.",
+    "Beam a photo, PDF, or quick text note straight to a friend standing near you over Bluetooth. Perfect for "
+    "passing along class notes, swapping a document, or sending a file when there's no Wi-Fi in sight.",
     icon: Icons.file_present,
   ),
 ];

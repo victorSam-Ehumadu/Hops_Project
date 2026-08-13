@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/services/hops_constants.dart';
+import 'package:client/widgets/hops_background_pattern.dart';
+import 'package:client/main.dart' show navBarPillHeightNotifier;
 
 class CommunityMessage {
   final String sender;
@@ -61,12 +63,20 @@ class CommunityChat extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
   final Future<void> Function(String message) onSendMessage;
   final String myUsername;
+  // This device's own rotating-ID seed — used only to recognize (and skip)
+  // our own re-broadcast chunks as they cycle past our own scanner.
+  final List<int>? mySeed;
+  // Known contacts' seeds — resolves an incoming sender token to a real
+  // name; unresolved senders show as anonymous. Same mechanism as Radar.
+  final Map<String, List<int>> contactSeeds;
 
   const CommunityChat({
     super.key,
     required this.radarStream,
     required this.onSendMessage,
     required this.myUsername,
+    this.mySeed,
+    this.contactSeeds = const {},
   });
 
   @override
@@ -137,6 +147,13 @@ class _CommunityChatState extends State<CommunityChat> {
 
   // ── Radar listener — chunk reassembly ─────────────────────────────────────
 
+  String? _resolveSenderToken(String token) {
+    for (final entry in widget.contactSeeds.entries) {
+      if (matchesRotatingToken(entry.value, token)) return entry.key;
+    }
+    return null;
+  }
+
   void _listenToRadar() {
     _streamSub = widget.radarStream.listen((results) {
       bool updated = false;
@@ -146,14 +163,15 @@ class _CommunityChatState extends State<CommunityChat> {
         final mfgBytes = r.advertisementData.manufacturerData[kCommunityManufacturerId];
         if (mfgBytes == null) continue;
         final decoded = decodeCommunityChatChunk(mfgBytes);
-        if (decoded == null || decoded.username.isEmpty) continue;
+        if (decoded == null || decoded.senderToken.isEmpty) continue;
 
-        // Skip our own broadcasts. Both sides derive this tag from the
-        // same communityUsernameTag() function, so there's no separate
-        // string that can drift out of sync between sender and receiver.
-        if (decoded.username == communityUsernameTag(widget.myUsername)) continue;
+        // Skip our own broadcasts — recognized via our own rotating seed
+        // rather than a plain string match, since the tag now changes
+        // every 15 minutes instead of being a fixed username fragment.
+        final mySeed = widget.mySeed;
+        if (mySeed != null && matchesRotatingToken(mySeed, decoded.senderToken)) continue;
 
-        final msgKey = '${decoded.username}:${decoded.msgId}';
+        final msgKey = '${decoded.senderToken}:${decoded.msgId}';
         if (_completedMsgKeys.containsKey(msgKey)) continue; // already shown
 
         final buffer = _pendingChunks.putIfAbsent(
@@ -164,8 +182,12 @@ class _CommunityChatState extends State<CommunityChat> {
         if (buffer.isComplete) {
           _pendingChunks.remove(msgKey);
           _completedMsgKeys[msgKey] = now;
+          // Only a known contact's real name is ever shown — anyone else's
+          // token resolves to nothing, so their message stays anonymous.
+          final resolved = _resolveSenderToken(decoded.senderToken);
           _messages.add(CommunityMessage(
-            sender: decoded.username,
+            sender: resolved ??
+                'Anonymous #${decoded.senderToken.substring(0, decoded.senderToken.length < 4 ? decoded.senderToken.length : 4)}',
             text: buffer.reassembled,
             timestamp: now,
             isMe: false,
@@ -265,34 +287,8 @@ class _CommunityChatState extends State<CommunityChat> {
             ),
           ],
         ),
-        actions: [
-          Container(
-            margin: const EdgeInsets.only(right: 12),
-            padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: colors.tertiaryContainer.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(100),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.wifi_tethering,
-                    size: 11, color: colors.tertiaryContainer),
-                const SizedBox(width: 4),
-                Text(
-                  'BLE Broadcast',
-                  style: TextStyle(
-                    color: colors.tertiaryContainer,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
-      body: Column(
+      body: HopsBackgroundPattern(child: Column(
         children: [
           // ── Messages ──────────────────────────────────────────────────────
           Expanded(
@@ -354,16 +350,48 @@ class _CommunityChatState extends State<CommunityChat> {
           ),
 
           // ── Input ─────────────────────────────────────────────────────────
-          Container(
-            padding: const EdgeInsets.only(
-                left: 16, right: 8, top: 10, bottom: 24),
-            decoration: BoxDecoration(
-              color: colors.surface.withOpacity(0.6),
-              border: Border(
-                  top: BorderSide(
-                      color: colors.outline.withOpacity(0.1))),
+          // The clearance for the floating pill bottom nav (HopsApp's
+          // Scaffold uses extendBody: true, so it otherwise sits directly
+          // on top of this field and swallows every tap meant for it — see
+          // hops_constants.dart's kFloatingNavClearance) lives OUTSIDE the
+          // input bar's own padding, as transparent space, rather than
+          // inside it — stuffing it inside the bar's padding pushed the
+          // actual text field up and left a big dead-looking gap under it
+          // within the same shadowed/colored box.
+          //
+          // kFloatingNavClearance itself is sized generously (with extra
+          // room for larger text-scale nav labels) since it's shared with
+          // other spots that just need "don't get covered." This bar is a
+          // single fixed-height row with nothing below it, so it can safely
+          // sit tighter — trimmed down so it hugs just above the pill
+          // instead of floating with a big gap underneath it.
+          //
+          // Was a fixed offset hand-tuned down from kFloatingNavClearance
+          // (that constant is deliberately oversized "don't get covered"
+          // padding meant for scrollable lists, not a tight fit) — kept
+          // coming back as "still too high" because it was still a guess.
+          // Uses the pill's real measured height instead — see
+          // navBarPillHeightNotifier's doc comment in main.dart.
+          ValueListenableBuilder<double>(
+            valueListenable: navBarPillHeightNotifier,
+            builder: (context, pillHeight, child) => Padding(
+              padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).padding.bottom + pillHeight + 6),
+              child: child,
             ),
-            child: Row(
+            child: Container(
+              padding: const EdgeInsets.only(left: 16, right: 8, top: 10, bottom: 10),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.06),
+                    blurRadius: 12,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
+              ),
+              child: Row(
               children: [
                 Expanded(
                   child: TextField(
@@ -377,7 +405,7 @@ class _CommunityChatState extends State<CommunityChat> {
                       hintText: 'Message everyone nearby…',
                       counterText: '',
                       filled: true,
-                      fillColor: Colors.white.withOpacity(0.7),
+                      fillColor: colors.surfaceContainerHighest,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(100),
                         borderSide: BorderSide.none,
@@ -409,9 +437,10 @@ class _CommunityChatState extends State<CommunityChat> {
                 ),
               ],
             ),
+            ),
           ),
         ],
-      ),
+      )),
     );
   }
 
@@ -545,7 +574,7 @@ class _CommunityChatState extends State<CommunityChat> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Messages broadcast over BLE to every nearby Hops user. '
+              'Messages broadcast over Bluetooth to every nearby Hops user. '
                   'No pairing needed — just type and send.',
               textAlign: TextAlign.center,
               style: TextStyle(

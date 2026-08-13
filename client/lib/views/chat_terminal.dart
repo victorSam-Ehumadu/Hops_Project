@@ -1,14 +1,19 @@
 // chat_terminal.dart
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
 import 'package:client/services/hops_chat_service.dart';
+import 'package:client/services/notification_service.dart';
 import 'package:client/views/contact_profile_screen.dart';
+import 'package:client/main.dart' show nearbyConnectionsSessionCount, chatPingRequest;
 
 class IndividualChatTerminalView extends StatefulWidget {
   final String peerName;
@@ -38,15 +43,36 @@ class _IndividualChatTerminalViewState
 
   HopsChatService? _chatService;
   ChatConnectionState _connState = ChatConnectionState.connecting;
+  // True once we've confirmed the Bluetooth/location/nearby-Wi-Fi runtime
+  // permissions nearby_connections needs are missing — without these,
+  // startAdvertising/startDiscovery silently find nothing and the chat
+  // never connects (see hops_share_page.dart's identical check, which this
+  // mirrors — that screen's file transfer already relies on the same fix).
+  bool _missingPermissions = false;
 
   // The peer's avatar/bio, learned only by direct exchange over this same
   // connection — see HopsChatService.sendProfile. _peerAvatarPath reflects
   // whatever's cached from a previous chat until (if) a fresh one arrives.
   String? _peerAvatarPath;
 
+  // Guards _pingPeerToWakeUp so two overlapping pings (e.g. sending a
+  // couple of messages in a row while still not connected) don't step on
+  // each other's pause/resume of the Nearby Connections session.
+  bool _pingInFlight = false;
+
   @override
   void initState() {
     super.initState();
+    // Tells HopsApp (still alive underneath this pushed screen) to pause
+    // its own background BLE advertising-refresh/scan-cycle timers for as
+    // long as this chat is open — those otherwise keep firing regardless
+    // of what's on top of HopsApp and fight nearby_connections for the
+    // Bluetooth radio. See hops_app.dart's
+    // _pauseBackgroundBleForNearbyConnections and
+    // hops_chat_service.dart's header comment for the full story — this
+    // was the actual reason chat could hang forever even with every
+    // permission granted.
+    nearbyConnectionsSessionCount.value++;
     _init();
 
     // Light periodic fallback — the real-time path is _chatService's
@@ -74,6 +100,7 @@ class _IndividualChatTerminalViewState
       peerUsername: widget.peerName,
       onMessageReceived: _handleIncomingMessage,
       onProfileReceived: _handlePeerProfileReceived,
+      onRotatingSeedReceived: _handlePeerSeedReceived,
       onStateChanged: (state) {
         if (!mounted) return;
         setState(() => _connState = state);
@@ -83,10 +110,58 @@ class _IndividualChatTerminalViewState
           // leaving it stranded until the user notices and re-sends by hand.
           _flushUndeliveredMessages();
           _sendMyProfile();
+          _sendMyRotatingSeed();
         }
       },
     );
+    await _connectWithPermissions();
+  }
+
+  // nearby_connections needs the same permission set hops_share_page.dart
+  // already requests for its (working) file-transfer flow. Skipping this
+  // doesn't throw — startAdvertising/startDiscovery just silently discover
+  // nothing, which used to make every 1:1 chat hang on "Connecting…"
+  // forever with no explanation.
+  Future<void> _connectWithPermissions() async {
+    final statuses = await [
+      Permission.location,
+      Permission.bluetoothScan,
+      Permission.bluetoothAdvertise,
+      Permission.bluetoothConnect,
+      Permission.nearbyWifiDevices,
+    ].request();
+
+    final granted = statuses.values.every(
+      (s) => s == PermissionStatus.granted || s == PermissionStatus.limited,
+    );
+
+    if (!mounted) return;
+    if (!granted) {
+      setState(() {
+        _missingPermissions = true;
+        _connState = ChatConnectionState.failed;
+      });
+      return;
+    }
+
+    setState(() => _missingPermissions = false);
     await _chatService!.connect();
+  }
+
+  Future<void> _sendMyRotatingSeed() async {
+    const storage = FlutterSecureStorage();
+    final seedB64 = await storage.read(key: 'rotating_id_seed');
+    if (seedB64 == null) return; // pre-rotating-ID account — nothing to send yet
+    try {
+      await _chatService?.sendRotatingSeed(base64Decode(seedB64));
+    } catch (_) {
+      // Best-effort — chat itself still works without this.
+    }
+  }
+
+  Future<void> _handlePeerSeedReceived(Uint8List seed) async {
+    await DatabaseHelper.instance
+        .upsertContactRotatingSeed(widget.peerName, base64Encode(seed));
   }
 
   Future<void> _sendMyProfile() async {
@@ -127,7 +202,38 @@ class _IndividualChatTerminalViewState
     if (mounted) setState(() => _peerAvatarPath = savedAvatarPath);
   }
 
+  // Lets the peer know a message is waiting for them even though
+  // nearby_connections alone can't reach them — they're not necessarily
+  // running a matching session at all (e.g. they haven't opened this same
+  // chat screen). Briefly steps the Nearby Connections attempt aside so a
+  // short BLE-peripheral CHT: ping (broadcast by HopsApp, see
+  // chatPingRequest in main.dart) can use the radio instead, then hands
+  // it back. Any Hops device with the app running — foreground or
+  // backgrounded — picks the ping up via its always-on scan and shows a
+  // system notification, regardless of what screen they're on.
+  Future<void> _pingPeerToWakeUp() async {
+    if (_pingInFlight) return;
+    if (_connState == ChatConnectionState.connected) return; // already reachable — nothing to ping for
+    _pingInFlight = true;
+    try {
+      await _chatService?.pauseForPing();
+      chatPingRequest.value = widget.peerName;
+      await Future.delayed(const Duration(seconds: 3));
+      await _chatService?.resumeAfterPing();
+    } finally {
+      _pingInFlight = false;
+    }
+  }
+
   Future<void> _retryConnect() async {
+    if (_missingPermissions) {
+      // Permissions may have been granted from the app-settings screen
+      // since the last attempt (openAppSettings() below sends the user
+      // there) — re-check rather than retrying a connect that's doomed
+      // to hang again.
+      await _connectWithPermissions();
+      return;
+    }
     setState(() => _connState = ChatConnectionState.connecting);
     await _chatService?.connect();
   }
@@ -160,6 +266,17 @@ class _IndividualChatTerminalViewState
     };
     await DatabaseHelper.instance.insertMessage(incomingPayload);
     await _loadPeerMessageLogs();
+
+    // Only while this exact conversation isn't the thing on screen right
+    // now — otherwise every incoming message would double up as both the
+    // live chat bubble appearing AND a redundant notification banner for
+    // the exact same message you're already looking at.
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      await NotificationService.showChatMessageNotification(
+        peerUsername: widget.peerName,
+        message: message,
+      );
+    }
   }
 
   Future<void> _loadPeerMessageLogs() async {
@@ -204,13 +321,19 @@ class _IndividualChatTerminalViewState
     if (delivered) {
       await DatabaseHelper.instance.markMessageDelivered(id);
       await _loadPeerMessageLogs();
+    } else {
+      // Not connected — the bubble's own "not delivered yet" marker
+      // (below) carries that locally, and _flushUndeliveredMessages()
+      // will retry once we do connect, but neither of those helps if the
+      // peer isn't even in range of a matching Nearby Connections session
+      // right now. Ping them so their phone can tell them a message is
+      // waiting, wherever they are in the app (or if it's backgrounded).
+      unawaited(_pingPeerToWakeUp());
     }
-    // If it failed, the bubble's own "not delivered yet" marker (below)
-    // carries that information now — it'll clear itself automatically via
-    // _flushUndeliveredMessages() next time we reconnect.
   }
 
   String get _statusLabel {
+    if (_missingPermissions) return "Bluetooth & location permission needed";
     switch (_connState) {
       case ChatConnectionState.connecting:
         return "Connecting…";
@@ -242,6 +365,7 @@ class _IndividualChatTerminalViewState
 
   @override
   void dispose() {
+    nearbyConnectionsSessionCount.value--;
     _refreshTimer?.cancel();
     _msgInputController.dispose();
     _scrollController.dispose();
@@ -277,7 +401,7 @@ class _IndividualChatTerminalViewState
                 backgroundColor: colors.primary,
                 backgroundImage: _peerAvatarPath != null ? FileImage(File(_peerAvatarPath!)) : null,
                 child: _peerAvatarPath == null
-                    ? const Icon(Icons.person, size: 18, color: Colors.white)
+                    ? const Icon(Icons.cruelty_free, size: 18, color: Colors.white)
                     : null,
               ),
               const SizedBox(width: 10),
@@ -322,9 +446,9 @@ class _IndividualChatTerminalViewState
         children: [
           Expanded(
             child: messageThreadsList.isEmpty
-                ? const Center(
+                ? Center(
                 child: Text("No messages yet.",
-                    style: TextStyle(color: Colors.grey)))
+                    style: TextStyle(color: colors.onSurface.withOpacity(0.5))))
                 : ListView.builder(
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
@@ -362,7 +486,7 @@ class _IndividualChatTerminalViewState
                         child: Text(
                           msg[DatabaseHelper.columnMessage],
                           style: TextStyle(
-                              color: isMe ? Colors.white : Colors.black87),
+                              color: isMe ? Colors.white : colors.onSurface),
                           maxLines: 10,
                           overflow: TextOverflow.ellipsis,
                           softWrap: true,
@@ -406,7 +530,15 @@ class _IndividualChatTerminalViewState
             padding: const EdgeInsets.only(
                 left: 16, right: 8, top: 10, bottom: 24),
             decoration: BoxDecoration(
-                color: colors.surface.withOpacity(0.4)),
+              color: colors.surface,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.06),
+                  blurRadius: 12,
+                  offset: const Offset(0, -4),
+                ),
+              ],
+            ),
             child: Row(
               children: [
                 Expanded(
@@ -418,7 +550,7 @@ class _IndividualChatTerminalViewState
                     decoration: InputDecoration(
                       hintText: "Type a message...",
                       filled: true,
-                      fillColor: Colors.white.withOpacity(0.6),
+                      fillColor: colors.surfaceContainerHighest,
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(100),
                           borderSide: BorderSide.none),

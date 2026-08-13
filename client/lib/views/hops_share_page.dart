@@ -9,6 +9,8 @@ import 'package:client/views/received_files_page.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:client/services/hops_constants.dart';
+import 'package:client/services/notification_service.dart';
+import 'package:client/main.dart' show nearbyConnectionsSessionCount;
 
 class HopsSharePage extends StatefulWidget {
   final String myUsername;
@@ -23,6 +25,10 @@ class _HopsSharePageState extends State<HopsSharePage> {
   bool _isConnected = false;
   PlatformFile? _pickedFile;
   bool _isSending = false;
+  // 0.0–1.0 while a send is in flight, null otherwise — fed by
+  // Nearby Connections' own onPayloadTransferUpdate, not a fake/simulated
+  // timer, so it reflects real bytes-on-the-wire progress.
+  double? _sendProgress;
   bool _hasPermissions = false;
   bool _checkingPermissions = true;
 
@@ -37,6 +43,12 @@ class _HopsSharePageState extends State<HopsSharePage> {
     // Stop BLE advertising while Nearby Connections is active — both compete
     // for Bluetooth Classic resources.
     BlePeripheral.stopAdvertising();
+    // Tells HopsApp (which is still alive underneath this pushed screen) to
+    // pause its own background BLE advertising-refresh/scan-cycle timers
+    // for as long as this session is open — see hops_app.dart's
+    // _pauseBackgroundBleForNearbyConnections for why those otherwise keep
+    // firing regardless of what's on top of it.
+    nearbyConnectionsSessionCount.value++;
     _requestPermissionsAndStart();
   }
 
@@ -49,6 +61,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
       localName: "HPS:${widget.myUsername}",
       services: [HOPS_SERVICE_UUID],
     );
+    nearbyConnectionsSessionCount.value--;
     _textNoteController.dispose();
     super.dispose();
   }
@@ -91,6 +104,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
           id,
           onPayLoadRecieved: (endpointId, payload) =>
               _onPayloadReceived(endpointId, payload),
+          onPayloadTransferUpdate: _onTransferUpdate,
         );
         setState(() {
           _connectedEndpointId = id;
@@ -147,6 +161,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
           id,
           onPayLoadRecieved: (endpointId, payload) =>
               _onPayloadReceived(endpointId, payload),
+          onPayloadTransferUpdate: _onTransferUpdate,
         );
       },
       onConnectionResult: (id, status) {
@@ -194,6 +209,10 @@ class _HopsSharePageState extends State<HopsSharePage> {
         ),
       );
     }
+    // Files can land here well after the sender's transfer finished — a
+    // system notification is what actually tells you it arrived if you've
+    // since backgrounded the app or moved to a different screen.
+    await NotificationService.showFileReceivedNotification(sender: sender, fileName: fileName);
   }
 
   Future<void> _updateReceivedFilesRecord(
@@ -230,25 +249,63 @@ class _HopsSharePageState extends State<HopsSharePage> {
 
   Future<void> _sendPickedFile() async {
     if (_pickedFile == null || _connectedEndpointId == null) return;
-    setState(() => _isSending = true);
+    setState(() {
+      _isSending = true;
+      _sendProgress = 0;
+    });
     try {
       final payload = Uint8List.fromList([
         ...utf8.encode(widget.myUsername), 0,
         ...utf8.encode(_pickedFile!.name), 0,
         ..._pickedFile!.bytes!,
       ]);
+      // sendBytesPayload only confirms the OS accepted the send request —
+      // it resolves almost instantly regardless of file size, well before
+      // the transfer itself finishes. The actual progress (and eventual
+      // completion) arrives later via onPayloadTransferUpdate, so
+      // _isSending/_pickedFile are deliberately NOT reset here; resetting
+      // them right after this await used to make the progress bar vanish
+      // almost immediately no matter how big the file was.
       await Nearby().sendBytesPayload(_connectedEndpointId!, payload);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Transfer failed: $e")),
         );
+        setState(() {
+          _isSending = false;
+          _sendProgress = null;
+        });
       }
-    } finally {
+    }
+  }
+
+  // Nearby Connections reports progress for every payload crossing this
+  // connection, incoming or outgoing — there's no direction flag on the
+  // update itself. Gating on _isSending is safe here because this screen
+  // only ever has one transfer in flight at a time (the UI disables
+  // picking/sending while one's active), so any update that arrives while
+  // we're sending can only be about the file we just started sending.
+  void _onTransferUpdate(String endpointId, PayloadTransferUpdate update) {
+    if (!_isSending) return;
+    if (!mounted) return;
+    if (update.status == PayloadStatus.IN_PROGRESS && update.totalBytes > 0) {
+      setState(() => _sendProgress = update.bytesTransferred / update.totalBytes);
+    } else if (update.status == PayloadStatus.SUCCESS) {
       setState(() {
         _isSending = false;
+        _sendProgress = null;
         _pickedFile = null;
       });
+    } else if (update.status == PayloadStatus.FAILURE ||
+        update.status == PayloadStatus.CANCELED) {
+      setState(() {
+        _isSending = false;
+        _sendProgress = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Transfer failed — try again.")),
+      );
     }
   }
 
@@ -282,13 +339,17 @@ class _HopsSharePageState extends State<HopsSharePage> {
         elevation: 0,
         backgroundColor: Colors.transparent,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            tooltip: "Received Files",
+          TextButton.icon(
+            icon: Icon(Icons.folder_open, color: colors.primary, size: 20),
+            label: Text(
+              "Received Files",
+              style: TextStyle(color: colors.primary, fontSize: 14, fontWeight: FontWeight.w600),
+            ),
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const ReceivedFilesPage()),
             ),
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: _checkingPermissions
@@ -316,12 +377,12 @@ class _HopsSharePageState extends State<HopsSharePage> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               "Hops Share needs Nearby Devices, Location, and Bluetooth "
                   "permissions to find nearby peers. Please grant them in "
                   "Settings → Apps → Hops → Permissions.",
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.black54, fontSize: 13, height: 1.5),
+              style: TextStyle(color: colors.onSurface.withOpacity(0.6), fontSize: 13, height: 1.5),
             ),
             const SizedBox(height: 20),
             ElevatedButton.icon(
@@ -352,15 +413,15 @@ class _HopsSharePageState extends State<HopsSharePage> {
         ),
         Expanded(
           child: _discoveredDevices.isEmpty
-              ? const Center(
+              ? Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
                 Text(
                   "Searching for nearby Hops users…",
-                  style: TextStyle(color: Colors.grey),
+                  style: TextStyle(color: colors.onSurface.withOpacity(0.5)),
                 ),
               ],
             ),
@@ -478,6 +539,28 @@ class _HopsSharePageState extends State<HopsSharePage> {
                 ),
               ),
             ),
+            if (_isSending) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(100),
+                child: LinearProgressIndicator(
+                  // null progress (still 0 or first update hasn't landed
+                  // yet) falls back to an indeterminate bar rather than
+                  // sitting frozen at a misleading 0%.
+                  value: (_sendProgress != null && _sendProgress! > 0) ? _sendProgress : null,
+                  minHeight: 6,
+                  backgroundColor: colors.primary.withOpacity(0.12),
+                  color: colors.primary,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _sendProgress != null
+                    ? "${(_sendProgress! * 100).toStringAsFixed(0)}% sent"
+                    : "Starting transfer…",
+                style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.5)),
+              ),
+            ],
           ],
           const SizedBox(height: 24),
           const Divider(),

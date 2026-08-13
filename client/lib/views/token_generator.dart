@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 class TokenGeneratorWorkspace extends StatefulWidget {
   final Function(String code) onCodeGenerated;
@@ -71,51 +70,32 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.qr_code_2, size: 40, color: colors.primary),
+          Icon(Icons.confirmation_number_outlined, size: 40, color: colors.primary),
           const SizedBox(height: 12),
           Text("Your Pairing Code",
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: colors.onSurface)),
           const SizedBox(height: 16),
           Opacity(
             opacity: _expired ? 0.3 : 1.0,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                // Intentionally always a solid light background regardless
-                // of app theme — QR modules need real light/dark contrast
-                // to stay scannable, they shouldn't invert with dark mode.
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: colors.surfaceContainerHighest),
-              ),
-              child: QrImageView(
-                data: formattedCode,
-                version: QrVersions.auto,
-                size: 160,
-                gapless: true,
-                semanticsLabel: 'Hops pairing code QR',
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Container(
-              padding:
-              const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-              decoration: BoxDecoration(
-                  color: colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12)),
-              child: SelectableText(
-                formattedCode,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 22,
-                    fontFamily: 'monospace',
-                    color: colors.primary,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2,
-                    decoration: _expired ? TextDecoration.lineThrough : null),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Container(
+                padding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                decoration: BoxDecoration(
+                    color: colors.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12)),
+                child: SelectableText(
+                  formattedCode,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontFamily: 'monospace',
+                      color: colors.primary,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 2,
+                      decoration: _expired ? TextDecoration.lineThrough : null),
+                ),
               ),
             ),
           ),

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:client/widgets/hops_card.dart';
+import 'package:client/widgets/hops_background_pattern.dart';
 
 class TermsScreen extends StatelessWidget {
   const TermsScreen({super.key});
@@ -211,57 +213,9 @@ If you do not agree, you must discontinue use of the application immediately.
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final lines = termsText.split('\n');
-    final spans = <TextSpan>[];
-
-    // Default style applied to every span unless overridden
-    final defaultStyle = TextStyle(
-      fontSize: 14,
-      height: 1.5,
-      color: colors.primary,
-    );
-
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      if (line.trim().isEmpty) {
-        spans.add(const TextSpan(text: '\n'));
-        continue;
-      }
-
-      if (i == 0) {
-        // Main title – largest, centred
-        spans.add(TextSpan(
-          text: line.trim(),
-          style: defaultStyle.copyWith(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: colors.primary,
-          ),
-        ));
-        spans.add(const TextSpan(text: '\n\n'));
-        continue;
-      }
-
-      final headingPattern = RegExp(r'^\d+\.\s');
-      if (headingPattern.hasMatch(line.trim())) {
-        // Section heading
-        spans.add(TextSpan(
-          text: line.trim(),
-          style: defaultStyle.copyWith(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: colors.primary,
-          ),
-        ));
-        spans.add(const TextSpan(text: '\n\n'));
-        continue;
-      }
-
-      // Normal body text – uses the default style
-      spans.add(TextSpan(text: '${line.trim()} '));
-      spans.add(const TextSpan(text: '\n\n'));
-    }
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final parsed = _parseTerms(termsText);
 
     return Scaffold(
       appBar: AppBar(
@@ -273,15 +227,173 @@ If you do not agree, you must discontinue use of the application immediately.
         elevation: 0,
         foregroundColor: colors.primary,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: RichText(
-          text: TextSpan(
-            style: defaultStyle,   // fallback for any span that might miss a color
-            children: spans,
-          ),
+      body: HopsBackgroundPattern(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // Intro banner — separate from the numbered sections so the
+            // "here's what you're agreeing to" framing reads before the
+            // itemized detail rather than blending into section 1.
+            HopsCard(
+              radius: 20,
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.description_outlined, color: colors.primary, size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          parsed.mainTitle,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: colors.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    parsed.introText,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.5,
+                      color: colors.onSurface.withOpacity(0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            for (final section in parsed.sections) ...[
+              HopsCard(
+                radius: 20,
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 26,
+                          height: 26,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: colors.primary.withOpacity(0.12),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            '${section.number}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: colors.primary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Text(
+                              section.title,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: colors.primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    for (final line in section.lines)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(
+                          line,
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.5,
+                            color: colors.onSurface.withOpacity(0.75),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ],
         ),
       ),
     );
   }
+}
+
+class _TermsSection {
+  final int number;
+  final String title;
+  final List<String> lines;
+  const _TermsSection({required this.number, required this.title, required this.lines});
+}
+
+class _ParsedTerms {
+  final String mainTitle;
+  final String introText;
+  final List<_TermsSection> sections;
+  const _ParsedTerms({required this.mainTitle, required this.introText, required this.sections});
+}
+
+// Splits the flat terms blob into a title, an intro paragraph, and one
+// entry per "N. Heading" section (each section's body lines kept separate,
+// so bullet points stay on their own line instead of being fused into one
+// run-on paragraph) — purely a presentation-layer parse, termsText itself
+// stays the single source of truth for the legal copy.
+_ParsedTerms _parseTerms(String text) {
+  final rawLines = text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+  final headingPattern = RegExp(r'^(\d+)\.\s*(.*)$');
+
+  final mainTitle = rawLines.isNotEmpty ? rawLines.first : '';
+  final rest = rawLines.length > 1 ? rawLines.sublist(1) : <String>[];
+
+  final introLines = <String>[];
+  var i = 0;
+  while (i < rest.length && !headingPattern.hasMatch(rest[i])) {
+    introLines.add(rest[i]);
+    i++;
+  }
+
+  final sections = <_TermsSection>[];
+  int? currentNumber;
+  String currentTitle = '';
+  var currentLines = <String>[];
+
+  void flush() {
+    if (currentNumber != null) {
+      sections.add(_TermsSection(number: currentNumber!, title: currentTitle, lines: currentLines));
+    }
+  }
+
+  for (; i < rest.length; i++) {
+    final line = rest[i];
+    final match = headingPattern.firstMatch(line);
+    if (match != null) {
+      flush();
+      currentNumber = int.tryParse(match.group(1) ?? '') ?? 0;
+      currentTitle = match.group(2) ?? line;
+      currentLines = [];
+    } else {
+      currentLines.add(line);
+    }
+  }
+  flush();
+
+  return _ParsedTerms(mainTitle: mainTitle, introText: introLines.join(' '), sections: sections);
 }
