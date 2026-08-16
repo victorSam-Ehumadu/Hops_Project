@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -15,17 +16,19 @@ class NotificationService {
   static const int _watchRequestNotificationId = 202;
   static const int _watchAcceptedNotificationId = 203;
   static const int _watchMeAlertNotificationId = 204;
-  static const int _adminRequestSubmittedNotificationId = 205;
+  static const int _accountBannedNotificationId = 205;
   static const int _adminRequestApprovedNotificationId = 206;
   static const int _fileReceivedNotificationId = 207;
   static const int _taskReminderNotificationId = 208;
+  static const int _communityMessageNotificationId = 209;
+  static const int _adminWarningNotificationId = 211;
   static const int _chatNotificationIdBase = 90000;
 
   static final FlutterLocalNotificationsPlugin _plugin =
   FlutterLocalNotificationsPlugin();
 
-  static final AndroidNotificationChannel _emergencyChannel =
-  const AndroidNotificationChannel(
+  static const AndroidNotificationChannel _emergencyChannel =
+  AndroidNotificationChannel(
     'emergency_flare',
     'Emergency Flare',
     description: 'Critical alerts from Hops mesh',
@@ -38,8 +41,8 @@ class NotificationService {
   // Me buddy deserves to cut through more than a routine notification, but
   // shouldn't hijack the screen with a full-screen intent + siren the way
   // an actual Emergency Flare does.
-  static final AndroidNotificationChannel _watchMeChannel =
-  const AndroidNotificationChannel(
+  static const AndroidNotificationChannel _watchMeChannel =
+  AndroidNotificationChannel(
     'watch_me_alert',
     'Watch Me Alerts',
     description: 'Buddy safety alerts from Watch Me',
@@ -52,8 +55,8 @@ class NotificationService {
   // Deliberately one shared channel: these are all "something happened,
   // no rush" events, and giving every kind its own channel would just be
   // extra notification-settings clutter for the user with no real benefit.
-  static final AndroidNotificationChannel _activityChannel =
-  const AndroidNotificationChannel(
+  static const AndroidNotificationChannel _activityChannel =
+  AndroidNotificationChannel(
     'general_activity',
     'Hops Activity',
     description: 'Messages, requests, and other Hops activity',
@@ -61,6 +64,21 @@ class NotificationService {
   );
 
   static AudioPlayer? _alertPlayer;
+
+  /// True while an emergency alarm (a personal Emergency Flare or an
+  /// Official Alert — either kind, own or someone else's, received or
+  /// self-triggered) is actively ringing on THIS device: the notification
+  /// is up and, if the sound loaded, the siren is looping.
+  ///
+  /// Exists so the app can offer an in-app "stop this for me" affordance
+  /// (see hops_app.dart/admin_shell.dart's alarm banner) beyond the
+  /// notification's own action button — that button only helps if someone
+  /// thinks to pull down the notification shade, which isn't obvious mid-
+  /// panic with a phone blaring in your hand. Set true by both show*
+  /// methods below, false by cancelEmergencyNotification — which is the
+  /// ONLY function that touches this, so "ringing" and "the thing that
+  /// actually stops the ringing" can never drift out of sync.
+  static final ValueNotifier<bool> isAlarmRinging = ValueNotifier<bool>(false);
 
   static Future<void> init() async {
     final android = AndroidFlutterLocalNotificationsPlugin();
@@ -76,7 +94,7 @@ class NotificationService {
     await _plugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
-        // User tapped "Deactivate" on the notification itself
+        // User tapped "Stop for me" (or the notification body itself)
         if (response.actionId == 'dismiss' || response.actionId == null) {
           cancelEmergencyNotification();
         }
@@ -188,23 +206,23 @@ class NotificationService {
         body: "$fileName from $sender",
       );
 
-  // Admin-only — see hops_app.dart's periodic admin-request poll. There's
-  // no push-notification infrastructure in this app (no FCM — it's a
-  // peer-to-peer BLE mesh with a minimal Supabase backend), so this can
-  // only ever reflect what a periodic pull found, not a true instant push.
-  static Future<void> showAdminRequestSubmittedNotification({required int pendingCount}) =>
-      _showActivity(
-        id: _adminRequestSubmittedNotificationId,
-        title: "Admin access requested",
-        body: pendingCount == 1
-            ? "1 request is waiting for review"
-            : "$pendingCount requests are waiting for review",
-      );
-
+  // There's no push-notification infrastructure in this app (no FCM — it's
+  // a peer-to-peer BLE mesh with a minimal Supabase backend), so both of
+  // these can only ever reflect what hops_app.dart's periodic identity-sync
+  // poll found, not a true instant push.
   static Future<void> showAdminRequestApprovedNotification() => _showActivity(
         id: _adminRequestApprovedNotificationId,
         title: "Admin access granted",
         body: "You can now issue Official Alerts — see your Profile.",
+      );
+
+  // Fires when the identity-sync poll discovers this account was banned —
+  // see hops_app.dart's _syncIdentityStatus, which shows this then
+  // immediately signs the device out locally.
+  static Future<void> showAccountBannedNotification() => _showActivity(
+        id: _accountBannedNotificationId,
+        title: "Account suspended",
+        body: "A Hops admin has suspended this account. You've been signed out.",
       );
 
   static Future<void> showTaskReminderNotification({required String taskTitle}) =>
@@ -212,6 +230,36 @@ class NotificationService {
         id: _taskReminderNotificationId,
         title: "Task due",
         body: "'$taskTitle' is due now",
+      );
+
+  // Community Chat is a broadcast everyone nearby receives, so unlike a 1:1
+  // chat this reuses ONE id — a busy channel would otherwise stack up a
+  // separate notification per message. Latest message replaces the last.
+  static Future<void> showCommunityMessageNotification({
+    required String sender,
+    required String message,
+  }) =>
+      _showActivity(
+        id: _communityMessageNotificationId,
+        title: "Community Chat · $sender",
+        body: message,
+      );
+
+  // Fired when the identity-sync poll notices the unread count went up (see
+  // hops_app.dart's _syncIdentityStatus) — same pull-based stand-in for
+  // push that everything else here relies on, so it lands on the next poll
+  // rather than instantly.
+  //
+  // Deliberately neutral wording: this fires for any new item in the
+  // inbox, and that's no longer only admin warnings — a "your report was
+  // reviewed" confirmation comes through the same count (see
+  // 0013_notify_reporter_on_resolution.sql). get_my_status returns a count,
+  // not a type, so the notification can't say which without a second round
+  // trip, and guessing "warning" would be alarming and often wrong.
+  static Future<void> showInboxNotification() => _showActivity(
+        id: _adminWarningNotificationId,
+        title: "New Hops notification",
+        body: "Open Notifications to see it.",
       );
 
   // ── Show (called when an EMG: advertisement is first received) ────────────
@@ -222,6 +270,7 @@ class NotificationService {
   }) async {
     // Stop any previous alert still playing before starting a new one
     await _stopAlertSound();
+    isAlarmRinging.value = true;
 
     // Start looping alarm sound. Track success separately from whether
     // _alertPlayer is null — it's assigned unconditionally below, so
@@ -260,7 +309,7 @@ class NotificationService {
           actions: [
             const AndroidNotificationAction(
               'dismiss',
-              'Deactivate',
+              'Stop for me',
               showsUserInterface: true,
               cancelNotification: false, // we cancel manually below
             ),
@@ -304,7 +353,7 @@ class NotificationService {
           actions: [
             const AndroidNotificationAction(
               'dismiss',
-              'Deactivate',
+              'Stop for me',
               showsUserInterface: true,
               cancelNotification: false,
             ),
@@ -327,6 +376,7 @@ class NotificationService {
     String? adminTitle,
   }) async {
     await _stopAlertSound();
+    isAlarmRinging.value = true;
 
     _alertPlayer = AudioPlayer();
     bool customSoundPlaying = false;
@@ -357,7 +407,7 @@ class NotificationService {
           actions: [
             const AndroidNotificationAction(
               'dismiss',
-              'Deactivate',
+              'Stop for me',
               showsUserInterface: true,
               cancelNotification: false,
             ),
@@ -402,7 +452,7 @@ class NotificationService {
           actions: [
             const AndroidNotificationAction(
               'dismiss',
-              'Deactivate',
+              'Stop for me',
               showsUserInterface: true,
               cancelNotification: false,
             ),
@@ -416,6 +466,7 @@ class NotificationService {
   // Stops the looping audio AND removes the persistent notification.
 
   static Future<void> cancelEmergencyNotification() async {
+    isAlarmRinging.value = false;
     await _stopAlertSound();
     await _plugin.cancel(_emgNotificationId);
   }

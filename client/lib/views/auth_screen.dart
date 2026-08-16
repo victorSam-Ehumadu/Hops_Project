@@ -220,7 +220,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                 color: colors.primary,
                 boxShadow: [
                   BoxShadow(
-                    color: colors.primary.withOpacity(0.35),
+                    color: colors.primary.withValues(alpha: 0.35),
                     blurRadius: 24,
                     spreadRadius: 2,
                   ),
@@ -239,7 +239,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
           Text(
             "The offline campus network that lets you chat, share, and stay safe — no Wi‑Fi or data needed.",
             textAlign: TextAlign.center,
-            style: TextStyle(color: colors.onSurface.withOpacity(0.6), fontSize: 14),
+            style: TextStyle(color: colors.onSurface.withValues(alpha: 0.6), fontSize: 14),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
@@ -350,7 +350,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: colors.surface.withOpacity(0.7),
+              color: colors.surface.withValues(alpha: 0.7),
               borderRadius: BorderRadius.circular(24),
             ),
             child: Column(
@@ -411,7 +411,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: isError ? Colors.red.withOpacity(0.1) : colors.primary.withOpacity(0.08),
+          color: isError ? Colors.red.withValues(alpha: 0.1) : colors.primary.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
@@ -683,7 +683,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                   padding: const EdgeInsets.only(left: 16.0, bottom: 6.0),
                   child: Text(
                     requirement,
-                    style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.55), fontStyle: FontStyle.italic),
+                    style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.55), fontStyle: FontStyle.italic),
                   ),
                 )
               : const SizedBox(width: double.infinity),
@@ -703,14 +703,14 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
             // was real content.
             hintText: hasFocus ? bunnyHint : null,
             hintStyle: TextStyle(
-              color: colors.onSurface.withOpacity(0.35),
+              color: colors.onSurface.withValues(alpha: 0.35),
               fontStyle: FontStyle.italic,
               fontSize: 13,
             ),
-            prefixIcon: Icon(icon, color: colors.primary.withOpacity(0.6), size: 20),
+            prefixIcon: Icon(icon, color: colors.primary.withValues(alpha: 0.6), size: 20),
             suffixIcon: isPasswordField
                 ? IconButton(
-              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: colors.primary.withOpacity(0.6), size: 20),
+              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: colors.primary.withValues(alpha: 0.6), size: 20),
               onPressed: onPasswordToggle,
             )
                 : (controller.text.isNotEmpty
@@ -747,7 +747,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6), height: 1.4),
+                  style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6), height: 1.4),
                   // Was maxLines: 2 — at this card width the sentence
                   // reliably needed a 3rd line and was rendering as a
                   // truncated "…" instead of the actual full sentence.
@@ -784,7 +784,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Icon(icon, color: colors.primary, size: 28),
-                  Icon(Icons.flip, size: 13, color: textColor.withOpacity(0.35)),
+                  Icon(Icons.flip, size: 13, color: textColor.withValues(alpha: 0.35)),
                 ],
               ),
               const SizedBox(height: 12),
@@ -816,7 +816,7 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
               Flexible(
                 child: Text(
                   detail,
-                  style: TextStyle(fontSize: 10.5, color: textColor.withOpacity(0.8), height: 1.3),
+                  style: TextStyle(fontSize: 10.5, color: textColor.withValues(alpha: 0.8), height: 1.3),
                   maxLines: 5,
                   overflow: TextOverflow.ellipsis,
                 ),

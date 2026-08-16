@@ -85,8 +85,14 @@ class KeyDirectory {
     await _ensureLoaded();
     final map = _cache ?? {};
     return map.entries.where((e) {
-      final prefix = e.key.length > 8 ? e.key.substring(0, 8) : e.key;
-      return prefix == truncated;
+      if (e.key.length >= 8) return e.key.substring(0, 8) == truncated;
+      // Shorter than the tag width — two callers disagree on what to do
+      // with the remainder, so accept both rather than making one of them
+      // silently unresolvable. Emergency Flare / Official Alert truncate
+      // only (leaving a short tag as-is); Community Chat pads to a fixed
+      // width with '_' because its decoder relies on fixed byte offsets
+      // (see encodeCommunityNameChunk).
+      return e.key == truncated || e.key.padRight(8, '_') == truncated;
     }).toList();
   }
 

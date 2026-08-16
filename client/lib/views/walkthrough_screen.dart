@@ -107,18 +107,18 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
                         const SizedBox(height: 16),
                         Text(
                           page['desc'] as String,
-                          style: TextStyle(fontSize: 16, color: colors.onSurface.withOpacity(0.8)),
+                          style: TextStyle(fontSize: 16, color: colors.onSurface.withValues(alpha: 0.8)),
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 24),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.flip, size: 14, color: colors.primary.withOpacity(0.6)),
+                            Icon(Icons.flip, size: 14, color: colors.primary.withValues(alpha: 0.6)),
                             const SizedBox(width: 6),
                             Text(
                               "Tap card for more",
-                              style: TextStyle(fontSize: 12, color: colors.primary.withOpacity(0.6), fontStyle: FontStyle.italic),
+                              style: TextStyle(fontSize: 12, color: colors.primary.withValues(alpha: 0.6), fontStyle: FontStyle.italic),
                             ),
                           ],
                         ),
@@ -143,18 +143,18 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
                           const SizedBox(height: 14),
                           Text(
                             page['detail'] as String,
-                            style: TextStyle(fontSize: 14, height: 1.4, color: colors.onSurface.withOpacity(0.85)),
+                            style: TextStyle(fontSize: 14, height: 1.4, color: colors.onSurface.withValues(alpha: 0.85)),
                             textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 20),
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.flip, size: 14, color: colors.primary.withOpacity(0.6)),
+                              Icon(Icons.flip, size: 14, color: colors.primary.withValues(alpha: 0.6)),
                               const SizedBox(width: 6),
                               Text(
                                 "Tap to flip back",
-                                style: TextStyle(fontSize: 12, color: colors.primary.withOpacity(0.6), fontStyle: FontStyle.italic),
+                                style: TextStyle(fontSize: 12, color: colors.primary.withValues(alpha: 0.6), fontStyle: FontStyle.italic),
                               ),
                             ],
                           ),

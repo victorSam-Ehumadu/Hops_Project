@@ -103,7 +103,7 @@ class _HopsTipCarouselState extends State<HopsTipCarousel> {
             key: ValueKey(_index),
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(tip.icon, size: 16, color: colors.primary.withOpacity(0.6)),
+              Icon(tip.icon, size: 16, color: colors.primary.withValues(alpha: 0.6)),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -112,7 +112,7 @@ class _HopsTipCarouselState extends State<HopsTipCarousel> {
                     fontSize: 12,
                     height: 1.3,
                     fontStyle: FontStyle.italic,
-                    color: colors.onSurface.withOpacity(0.55),
+                    color: colors.onSurface.withValues(alpha: 0.55),
                   ),
                   // Several of the longer tips (security/privacy ones
                   // especially) didn't actually fit in 2 lines at this font

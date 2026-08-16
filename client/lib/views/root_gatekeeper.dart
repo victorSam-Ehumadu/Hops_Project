@@ -3,14 +3,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:crypton/crypton.dart';
-import 'package:crypto/crypto.dart';
 import 'package:client/views/auth_screen.dart';
 import 'package:client/views/hops_app.dart';
 import 'package:client/views/terms_screen.dart';
 import 'package:client/views/walkthrough_screen.dart';
 import 'package:client/views/email_verification_screen.dart';
 import 'package:client/utils/auth_error_messages.dart';
+import 'package:client/services/hops_engine.dart' show isReservedUsername;
+import 'package:client/utils/mesh_crypto.dart';
 import 'dart:convert';
 import 'dart:math';
 
@@ -61,20 +61,6 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     }
   }
 
-  Map<String, String> _generateLocalMeshKeys() {
-    RSAKeypair keypair = RSAKeypair.fromRandom();
-    return {
-      'public': keypair.publicKey.toString(),
-      'private': keypair.privateKey.toString(),
-    };
-  }
-
-  String _hashPassword(String password) {
-    final bytes = utf8.encode(password);
-    final digest = sha256.convert(bytes);
-    return digest.toString();
-  }
-
   // The private, never-transmitted secret behind the rotating "HPS:<token>"
   // presence beacon (see hops_constants.dart's computeRotatingToken) — kept
   // in secure storage next to private_key, generated once per identity.
@@ -97,14 +83,25 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     required String username,
   }) async {
     try {
+      // Checked before anything else happens — key generation, permission
+      // prompts and a network round trip are all wasted work if the name
+      // can't be used, and this one is knowable offline. The server
+      // enforces it too (0014_reserve_bot_usernames.sql); this is purely
+      // so the person finds out immediately.
+      if (isReservedUsername(username)) {
+        setState(() => authEngineStatus =
+            "Err: That name is reserved for the built-in Hops assistant — please pick another.");
+        return;
+      }
+
       bool permissionsGranted = await _requestMeshPermissionsGate();
       if (!permissionsGranted) return;
 
       setState(() => authEngineStatus = "Generating Crypto Keys...");
-      final meshKeys = _generateLocalMeshKeys();
+      final meshKeys = generateLocalMeshKeys();
 
       setState(() => authEngineStatus = "Registering Identity...");
-      final passwordHash = _hashPassword(password);
+      final passwordHash = hashPassword(password);
 
       await _secureStorage.write(key: 'private_key', value: meshKeys['private']);
       await _ensureRotatingIdSeed(forceNew: true);
@@ -151,11 +148,17 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         if (mounted) _showTermsAcceptanceDialog(username);
       }
     } on PostgrestException catch (e) {
-      print("❌ SIGNUP EXCEPTION: ${e.message}");
+      debugPrint("❌ SIGNUP EXCEPTION: ${e.message}");
       if (e.message.contains('username_taken')) {
         setState(() => authEngineStatus = "Err: That username is already taken — try another one.");
       } else if (e.message.contains('email_taken')) {
         setState(() => authEngineStatus = "Err: An account already exists with that email address.");
+      } else if (e.message.contains('username_reserved')) {
+        // Only reachable if the local list above has drifted from the
+        // server's — kept so the drift surfaces as a clear message rather
+        // than the generic fallback.
+        setState(() => authEngineStatus =
+            "Err: That name is reserved for the built-in Hops assistant — please pick another.");
       } else if (e.message.contains('invalid_username')) {
         setState(() => authEngineStatus = "Err: Username must be 3-20 characters.");
       } else if (e.message.contains('invalid_email')) {
@@ -172,7 +175,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         setState(() => authEngineStatus = "Err: ${describeAuthException(e)}");
       }
     } catch (e) {
-      print("❌ SIGNUP EXCEPTION: $e");
+      debugPrint("❌ SIGNUP EXCEPTION: $e");
       setState(() => authEngineStatus = "Err: ${describeAuthException(e)}");
     }
   }
@@ -204,7 +207,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         'signin_hops_user_by_email',
         params: {
           'p_email': targetedEmail,
-          'p_password_hash': _hashPassword(password),
+          'p_password_hash': hashPassword(password),
         },
       ).maybeSingle();
 
@@ -237,7 +240,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         // verify Emergency Flare signatures) is updated to match it. This
         // used to only happen locally and silently drift the two out of
         // sync — see supabase/migrations/0003_refresh_public_key.sql.
-        final keys = _generateLocalMeshKeys();
+        final keys = generateLocalMeshKeys();
         await _secureStorage.write(key: 'private_key', value: keys['private']);
         await _ensureRotatingIdSeed();
         try {
@@ -249,7 +252,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
           // Best-effort — the new keypair still works locally, and a
           // stale server-side key only affects how *others* verify this
           // device's flares, not this sign-in.
-          print("⚠️ Failed to push refreshed public key: $e");
+          debugPrint("⚠️ Failed to push refreshed public key: $e");
         }
       }
 
@@ -259,7 +262,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         _showTermsAcceptanceDialog(response['username']);
       }
     } on PostgrestException catch (e) {
-      print("❌ SIGNIN EXCEPTION: ${e.message}");
+      debugPrint("❌ SIGNIN EXCEPTION: ${e.message}");
       if (e.code == 'PGRST202' || (e.message.contains('function') && e.message.contains('does not exist'))) {
         setState(() => authEngineStatus =
             "Err: Server not set up yet — run the Supabase migrations (see supabase/migrations/) then try again.");
@@ -267,7 +270,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         setState(() => authEngineStatus = "Err: ${describeAuthException(e)}");
       }
     } catch (e) {
-      print("❌ SIGNIN EXCEPTION: $e");
+      debugPrint("❌ SIGNIN EXCEPTION: $e");
       setState(() => authEngineStatus = "Err: ${describeAuthException(e)}");
     }
   }
@@ -291,6 +294,9 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     bool reachedBottom = false;
     final scrollController = ScrollController();
 
+    // Guarded because the SharedPreferences read above is an await, and
+    // sign-up can be abandoned in that window.
+    if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -387,12 +393,12 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(
                       children: [
-                        Icon(Icons.arrow_downward, size: 14, color: colors.onSurface.withOpacity(0.5)),
+                        Icon(Icons.arrow_downward, size: 14, color: colors.onSurface.withValues(alpha: 0.5)),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             "Scroll down to read the full terms before agreeing",
-                            style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.6), fontStyle: FontStyle.italic),
+                            style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.6), fontStyle: FontStyle.italic),
                           ),
                         ),
                       ],
@@ -418,7 +424,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
                         "I agree to the Terms and Conditions",
                         style: TextStyle(
                           fontSize: 12,
-                          color: reachedBottom ? null : colors.onSurface.withOpacity(0.4),
+                          color: reachedBottom ? null : colors.onSurface.withValues(alpha: 0.4),
                         ),
                       ),
                     ),
@@ -431,8 +437,13 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
                     foregroundColor: Colors.white,
                   ),
                   onPressed: agreed ? () async {
+                    // Captured before the write: this closure's context
+                    // belongs to the dialog route, which is exactly what's
+                    // about to be popped.
+                    final navigator = Navigator.of(context);
                     await prefs.setBool('terms_accepted', true);
-                    Navigator.of(context).pop();
+                    navigator.pop();
+                    if (!mounted) return;
                     _navigateToDashboard();
                   }
                       : null,
@@ -457,7 +468,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         );
       } else {
         // Show walkthrough, then go to dashboard
-        final result = await Navigator.of(context).push(
+        await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => const WalkthroughScreen(showOnboarding: true),
           ),

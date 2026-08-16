@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/views/account_management_screen.dart';
 import 'package:client/views/theme_picker_screen.dart';
+import 'package:client/views/permissions_screen.dart';
 import 'package:client/views/terms_screen.dart';
 import 'package:client/views/edit_identity_screen.dart';
 import 'package:client/views/walkthrough_screen.dart';
-import 'package:client/views/admin_requests_screen.dart';
 
 class HopsProfileScreen extends StatefulWidget {
   const HopsProfileScreen({super.key});
@@ -20,6 +20,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
   String _bio = '';
   String? _avatarPath;
   String _myRole = 'student';
+  String? _myAdminTitle;
 
   @override
   void initState() {
@@ -43,6 +44,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
       _bio = prefs.getString('bio') ?? '';
       _avatarPath = prefs.getString('avatar_path');
       _myRole = prefs.getString('my_role') ?? 'student';
+      _myAdminTitle = prefs.getString('my_admin_title');
     });
   }
 
@@ -116,11 +118,37 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                     color: colors.primary),
               ),
             ),
+            // Admin privilege is granted out-of-band now (a provisioned
+            // device, see 0008_admin_moderation.sql) rather than requested
+            // from inside the app — this badge is the only place the
+            // student app still surfaces role at all, so it's worth
+            // keeping visible rather than silent.
+            if (_myRole == 'admin') ...[
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(100),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.shield, size: 12, color: colors.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      _myAdminTitle?.isNotEmpty == true ? _myAdminTitle! : 'Admin',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: colors.primary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             Text(
               bioText,
               style: TextStyle(
                   fontSize: 14,
-                  color: colors.onBackground.withOpacity(0.6)),
+                  color: colors.onSurface.withValues(alpha: 0.6)),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -141,7 +169,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                     color: colors.primary),
               ),
               trailing: Icon(Icons.chevron_right, size: 18,
-                  color: colors.onBackground),
+                  color: colors.onSurface),
               onTap: () async {
                 final result = await Navigator.push(
                   context,
@@ -175,12 +203,12 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 'Color theme, font & size',
                 style: TextStyle(
                     fontSize: 12,
-                    color: colors.onBackground.withOpacity(0.7)),
+                    color: colors.onSurface.withValues(alpha: 0.7)),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
               trailing: Icon(Icons.chevron_right, size: 18,
-                  color: colors.onBackground),
+                  color: colors.onSurface),
               onTap: () {
                 Navigator.push(
                     context,
@@ -190,26 +218,47 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Admin approval queue — student-facing "Request Admin Access"
-            // entry removed per product decision; a replacement admin
-            // onboarding flow is planned separately.
-            if (_myRole == 'admin')
-              ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                leading: Icon(Icons.shield_outlined, color: colors.primary),
-                title: Text(
-                  'Admin Requests',
-                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: colors.primary),
-                ),
-                subtitle: Text(
-                  'Review pending admin-access requests',
-                  style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
-                ),
-                trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface),
-                onTap: () => Navigator.push(
-                    context, MaterialPageRoute(builder: (_) => const AdminRequestsScreen())),
+            // Permissions — deliberately its own entry rather than buried
+            // in Customize. What Hops can access, and what breaks if you
+            // switch any of it off, is a different kind of decision from
+            // picking a colour theme, and people go looking for it by name.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.lock_outline, color: colors.primary),
+              title: Text(
+                'Permissions',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-            if (_myRole == 'admin') const SizedBox(height: 24),
+              subtitle: Text(
+                'What Hops can access, and what turning it off costs',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const PermissionsScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Admin privilege is granted out-of-band now (a provisioned
+            // device, not a request/approval flow from inside the app —
+            // see supabase/migrations/0008_admin_moderation.sql), so
+            // there's no student-app entry point for it at all anymore;
+            // admin-only screens live in the separate Admin app instead.
 
             // Terms and Conditions button
             ListTile(
@@ -227,7 +276,7 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
               trailing: Icon(Icons.chevron_right, size: 18,
-                  color: colors.onBackground),
+                  color: colors.onSurface),
               onTap: () {
                 Navigator.push(
                     context,
@@ -252,11 +301,11 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
               ),
               subtitle: Text(
                 'Replay the welcome tour of Hops\' features',
-                style: TextStyle(fontSize: 12, color: colors.onBackground.withOpacity(0.7)),
+                style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              trailing: Icon(Icons.chevron_right, size: 18, color: colors.onBackground),
+              trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface),
               onTap: () {
                 Navigator.push(
                   context,
@@ -275,11 +324,11 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
               ),
               subtitle: Text(
                 'Change password, log out, or delete your account',
-                style: TextStyle(fontSize: 12, color: colors.onBackground.withOpacity(0.7)),
+                style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
-              trailing: Icon(Icons.chevron_right, size: 18, color: colors.onBackground),
+              trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface),
               onTap: () {
                 Navigator.push(
                     context,

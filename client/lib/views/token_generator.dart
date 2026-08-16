@@ -102,7 +102,7 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
           const SizedBox(height: 4),
           Text(
             "Share this code with your peer.",
-            style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.6)),
+            style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.6)),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -111,13 +111,13 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.timer_off_outlined, size: 16, color: colors.onSurface.withOpacity(0.5)),
+                Icon(Icons.timer_off_outlined, size: 16, color: colors.onSurface.withValues(alpha: 0.5)),
                 const SizedBox(width: 6),
                 Text(
                   "This code has expired",
                   style: TextStyle(
                       fontWeight: FontWeight.bold,
-                      color: colors.onSurface.withOpacity(0.6),
+                      color: colors.onSurface.withValues(alpha: 0.6),
                       fontSize: 13),
                 ),
               ],
@@ -145,7 +145,7 @@ class _TokenGeneratorWorkspaceState extends State<TokenGeneratorWorkspace> {
             const SizedBox(height: 12),
             Text(
               "Waiting for peer to connect...",
-              style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.45)),
+              style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.45)),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),

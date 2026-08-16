@@ -1,11 +1,8 @@
 // hops_app.dart
 import 'dart:async';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
-import 'package:nearby_connections/nearby_connections.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:ble_peripheral/ble_peripheral.dart';
@@ -15,33 +12,49 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypton/crypton.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:client/main.dart' show shortcutNotifier, nearbyConnectionsSessionCount, chatPingRequest, navBarPillHeightNotifier;
+import 'package:client/main.dart'
+    show
+        shortcutNotifier,
+        nearbyConnectionsSessionCount,
+        chatPingRequest,
+        navBarPillHeightNotifier,
+        bleDirectMessageOutbox,
+        bleDirectMessageInbox,
+        BleDirectMessage;
 import 'package:client/database/database_helper.dart';
 import 'package:client/services/key_directory.dart';
 import 'package:client/utils/hop_id_formatter.dart';
 import 'package:client/views/radar_screen.dart';
 import 'package:client/views/chat_terminal.dart';
 import 'package:client/views/contact_profile_screen.dart';
+import 'package:client/services/hops_engine.dart' show kHopsBotUsername;
+import 'package:client/widgets/hops_bot_avatar.dart';
 import 'package:client/views/token_generator.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/views/root_gatekeeper.dart';
+import 'package:client/views/account_management_screen.dart' show wipeLocalIdentityAndReturnToGatekeeper;
 import 'package:client/models/feature_item.dart';
 import 'package:client/views/vibe_check_page.dart';
 import 'package:client/views/watch_me_page.dart';
-import 'package:client/views/hops_and_robbers.dart';
 import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
 import 'package:client/services/notification_service.dart';
+import 'package:client/services/unread_tracker.dart';
+import 'package:client/services/vibe_report_store.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:flutter/services.dart';
 import 'package:client/views/community_chat.dart';
+import 'package:client/views/notifications_page.dart';
+import 'package:client/utils/report_content.dart' show flushPendingReports;
+import 'package:client/utils/mesh_crypto.dart'
+    show deriveSharedMeshKey, sealDirectMessage, openDirectMessage;
 import 'package:client/widgets/hops_background_pattern.dart';
 import 'package:client/widgets/hops_card.dart';
 
 class HopsApp extends StatefulWidget {
   const HopsApp({super.key});
   @override
-  _HopsAppState createState() => _HopsAppState();
+  State<HopsApp> createState() => _HopsAppState();
 }
 
 class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
@@ -108,11 +121,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // Periodic "did anything about my identity change remotely" check —
   // there's no push-notification infrastructure in this app, so this is
-  // a pull-based stand-in: admins get notified about new pending admin
-  // requests, everyone else gets notified if their own role just became
-  // 'admin'. See _syncIdentityStatus.
+  // a pull-based stand-in: a device gets notified if its own role just
+  // became 'admin' (granted out-of-band, see
+  // supabase/migrations/0008_admin_moderation.sql), or force-logged-out
+  // if it's been banned. See _syncIdentityStatus.
   Timer? _identitySyncTimer;
-  Set<String>? _seenAdminRequestIds; // null until the first poll sets a baseline
 
   // Set when the "Emergency Flare" app-icon shortcut fires — tells the
   // freshly-(re)built RadarScreen to auto-open its confirm dialog once,
@@ -132,27 +145,44 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   bool _presencePausedForBackground = false;
 
   // Discoverable mode — see hops_constants.dart's kDiscoverableProtocolMarker
-  // and _advertisePresenceBeacon/_setDiscoverable below. Off by default and
-  // never persisted as "on" across the initial load being slow — loaded
-  // from SharedPreferences in _loadDiscoverableState so a toggle survives
-  // an app restart, but the beacon never goes out with it before that load
-  // resolves.
+  // and _advertisePresenceBeacon/_setDiscoverable below.
+  //
+  // Timed rather than a plain toggle: this broadcasts your real username
+  // to everyone in Bluetooth range, and a switch someone can forget to flip
+  // back off is exactly the kind of thing that stays on for the rest of
+  // the day without anyone meaning it to. It now turns itself off
+  // _discoverableAutoOffDuration after being switched on, same idea as a
+  // screen timeout.
+  //
+  // No longer persisted to SharedPreferences across app restarts — it used
+  // to be, specifically so a toggle survived a relaunch, but that's now
+  // the wrong default: someone who turns it on then force-closes the app
+  // seconds later would come back to it silently still broadcasting,
+  // having outlived the very timer meant to prevent that. Discoverable
+  // mode always starts off on a cold launch.
   bool _isDiscoverable = false;
+  Timer? _discoverableAutoOffTimer;
+  static const Duration _discoverableAutoOffDuration = Duration(seconds: 10);
 
   // This account's role, refreshed at every sign-in (see
-  // root_gatekeeper.dart). Gates the Official Alert trigger UI — students
-  // never see it at all, not just "see it disabled".
+  // root_gatekeeper.dart) and by the periodic identity-sync poll — drives
+  // the "Admin" badge on the profile screen. Broadcasting an Official
+  // Alert itself no longer happens from this app at all (moved to the
+  // separate Admin app — see lib/main_admin.dart /
+  // lib/services/official_alert_service.dart); this device only ever
+  // *receives* ADM:/ADM_OFF: broadcasts from an admin's device, same as
+  // any other student's.
   String _myRole = 'student';
-  String? _myAdminTitle;
-  bool get _isAdmin => _myRole == 'admin';
 
-  // Admin Official Alert tier (ADM:/ADM_OFF:) — mirrors the Emergency
-  // Flare fields above exactly, kept separate so a personal SOS and an
-  // Official Alert can be independently active without clobbering each
-  // other's cancel/cycle timers.
-  bool _isOfficialAlertActive = false;
-  Timer? _officialAlertCancelTimer;
-  Timer? _officialAlertSigCycleTimer;
+  // Unread count for the Notifications bell on the Contacts tab (see
+  // _buildNotificationsBellButton) — refreshed alongside role/ban status
+  // by the same _syncIdentityStatus poll rather than a separate round trip,
+  // since get_my_status already returns it (0010_notifications_and_logging.sql).
+  int _unreadNotifications = 0;
+
+  // Dedup sets for *receiving* Official Alerts (ADM:/ADM_OFF:) — every
+  // student's device still needs these regardless of its own role, since
+  // seeing an admin's broadcast is not admin-gated, only sending one is.
   final Set<String> _handledAdmNames = {};
   final Set<String> _handledAdmOffNames = {};
 
@@ -170,6 +200,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   String? _activePairingCode;
   Timer? _pairingTimeout;
+  // True for the duration of _startPairingClient — the code-*entering*
+  // side of a pairing handshake, as opposed to _activePairingCode above
+  // (the code-*generating*/hosting side). _updateBleDeviceCount and
+  // _scanRestartTimer already skip their own stop/restart scan cycles
+  // while _activePairingCode is set, so the host never misses the
+  // incoming ACK; the client side had no matching guard, so a periodic
+  // scan cycle landing mid-handshake could silently make the client miss
+  // the host's HOP: advertisement (or the host miss the client's ACK, if
+  // it lands during the client's brief resumed-scan window) — a plausible
+  // cause of "only one side ended up with the new contact."
+  bool _pairingClientActive = false;
 
   int _nearbyBleCount = 0;
   Timer? _bleCountTimer;
@@ -177,6 +218,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // Community Chat chunk-cycling state.
   int _communityMsgCounter = 0;
   Timer? _communityChunkCycleTimer;
+
+  // 1:1 direct-message-over-BLE state (RFCOMM fallback — see
+  // _broadcastDirectMessage / _handleDirectMessageChunk). Reuses
+  // _FlareSigBuffer's shape for reassembly, same as the watch-seed buffer.
+  int _directMsgCounter = 0;
+  Timer? _directMsgCycleTimer;
+  final Map<String, _FlareSigBuffer> _pendingDirectMsgChunks = {};
+  final Set<String> _handledDirectMsgKeys = {};
 
   // Rotating presence-beacon identity (see hops_constants.dart). Loaded
   // once from secure storage; _presenceBeaconName() derives the current
@@ -244,7 +293,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // Watch Me state
   Set<String> _watchingBuddies = {};
-  Set<String> _addedFriends = {};
+  final Set<String> _addedFriends = {};
   final List<String> pendingWatchRequests = [];
   final Set<String> _processingWatchAccepts = {};
 
@@ -262,12 +311,22 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       onListen: () => _watchingBuddiesStreamController.add(Set<String>.from(_watchingBuddies)),
     );
 
+    // Restores badges persisted from a previous run — a notification that
+    // arrived while the app was closed should still have somewhere to
+    // point once it's reopened.
+    UnreadTracker.instance.load();
+    // Same reason: reports heard before the app was last closed should
+    // still be on the list (within their lifetime) when it reopens.
+    VibeReportStore.instance.load();
     _loadCurrentIdentityMetrics();
     _captureOriginalBluetoothName();
     _loadEnabledFeatures();
     _loadFeatureOrderAndPins();
     _loadWatchState();
-    _loadDiscoverableState();
+    // No _loadDiscoverableState() call anymore — discoverable mode is no
+    // longer restored from a previous session. See _isDiscoverable's own
+    // comment for why: it now always starts off, and a timer is what turns
+    // it off again, not app-restart amnesia.
     _checkPermissionsAndStartBLE();
     _refreshContactsTrayList();
     _maybeShowHelpHint();
@@ -279,8 +338,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _keyDirectorySyncTimer = Timer.periodic(const Duration(minutes: 30), (_) => KeyDirectory.sync());
 
     _startTaskReminderCheck();
-    _identitySyncTimer = Timer.periodic(const Duration(minutes: 3), (_) => _syncIdentityStatus());
-    _syncIdentityStatus(); // also run once immediately rather than waiting 3 minutes
+    // Was 3 minutes — a ban (or promotion) could sit unreflected on a
+    // signed-in device for up to that long. Shortened to close that gap;
+    // still a poll, not a push (see the field comment above), but a much
+    // tighter one. Also fired again on every foreground (see
+    // _handleAppForegrounded) so reopening the app after being away checks
+    // immediately rather than waiting out the rest of this interval.
+    _identitySyncTimer = Timer.periodic(const Duration(seconds: 30), (_) => _syncIdentityStatus());
+    _syncIdentityStatus(); // also run once immediately rather than waiting for the first interval
 
     // Dense-BLE-environment insurance (campus vs. home testing showed a
     // real difference here): Android's continuous-scan callback can go
@@ -295,12 +360,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // window and doesn't need a second source of contention added to it.
     _scanRestartTimer = Timer.periodic(const Duration(minutes: 4), (_) async {
       if (nearbyConnectionsSessionCount.value > 0) return;
+      if (_activePairingCode != null || _pairingClientActive) return;
       await FlutterBluePlus.stopScan();
       await _startContinuousScan();
     });
 
     _diagTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      print('📡 [DIAG] BLE scan: ${_totalScanResults} total packets, '
+      debugPrint('📡 [DIAG] BLE scan: $_totalScanResults total packets, '
           '${_uniqueHopsDevices.length} unique Hops devices in last 5s');
       _totalScanResults = 0;
       _uniqueHopsDevices.clear();
@@ -309,6 +375,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     nearbyConnectionsSessionCount.addListener(_onNearbyConnectionsSessionCountChanged);
     chatPingRequest.addListener(_onChatPingRequested);
+    bleDirectMessageOutbox.addListener(_onBleDirectMessageRequested);
     shortcutNotifier.addListener(_onShortcutTriggered);
     // Cold start: the app-icon shortcut may have already set this before
     // HopsApp even existed (app launched fresh via a shortcut tap) — the
@@ -374,7 +441,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // state.
     if (_bleBackgroundPausedForNearbyConnections) return;
     _bleCountTimer?.cancel(); // purely local UI refresh — nothing to update while backgrounded anyway
-    if (_watchingBuddies.isEmpty && !_isFlareActive && !_isOfficialAlertActive) {
+    if (_watchingBuddies.isEmpty && !_isFlareActive) {
       _presencePausedForBackground = true;
       _rotatingIdRefreshTimer?.cancel();
       BlePeripheral.stopAdvertising();
@@ -382,6 +449,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   }
 
   void _handleAppForegrounded() {
+    // Check immediately on every return to the app rather than waiting out
+    // whatever's left of the periodic interval — the case that actually
+    // matters is coming back to a device that was banned while backgrounded.
+    _syncIdentityStatus();
     if (_bleBackgroundPausedForNearbyConnections) return;
     _bleCountTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _updateBleDeviceCount();
@@ -398,7 +469,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     nearbyConnectionsSessionCount.removeListener(_onNearbyConnectionsSessionCountChanged);
     chatPingRequest.removeListener(_onChatPingRequested);
+    bleDirectMessageOutbox.removeListener(_onBleDirectMessageRequested);
     shortcutNotifier.removeListener(_onShortcutTriggered);
+    _directMsgCycleTimer?.cancel();
+    _discoverableAutoOffTimer?.cancel();
     _flareCancelTimer?.cancel();
     _bleScanResultsSubscription?.cancel();
     FlutterBluePlus.stopScan();
@@ -414,8 +488,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _communityChunkCycleTimer?.cancel();
     _rotatingIdRefreshTimer?.cancel();
     _keyDirectorySyncTimer?.cancel();
-    _officialAlertCancelTimer?.cancel();
-    _officialAlertSigCycleTimer?.cancel();
     _watchSeedCycleTimer?.cancel();
     _taskReminderTimer?.cancel();
     _identitySyncTimer?.cancel();
@@ -447,40 +519,41 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text("Tip: replay this walkthrough anytime from Profile → Help & Walkthrough."),
-          duration: const Duration(seconds: 5),
+        const SnackBar(
+          content: Text("Tip: replay this walkthrough anytime from Profile → Help & Walkthrough."),
+          duration: Duration(seconds: 5),
         ),
       );
     });
   }
 
   // ---------- Discoverable mode ----------
-  Future<void> _loadDiscoverableState() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getBool('discoverable_mode') ?? false;
-    if (saved && mounted) {
-      setState(() => _isDiscoverable = true);
-      // BLE init may or may not have already sent the first beacon by the
-      // time this resolves — re-advertise to make sure a "was on last
-      // time" toggle actually goes out, rather than silently staying off
-      // until the next unrelated re-advertise happens to fire.
-      if (_activePairingCode == null && !_isFlareActive && !_isOfficialAlertActive) {
-        _advertisePresenceBeacon();
-      }
-    }
-  }
-
+  //
   // Mirrors _setGameRunnerTag's shape — toggled from Radar's discoverable
-  // button. Persisted so it survives an app restart, and re-advertises
-  // immediately so turning it on/off is reflected within seconds rather
-  // than waiting for the next incidental beacon refresh.
+  // button. Re-advertises immediately so turning it on/off is reflected
+  // within seconds rather than waiting for the next incidental beacon
+  // refresh.
   Future<void> _setDiscoverable(bool value) async {
+    _discoverableAutoOffTimer?.cancel();
+    _discoverableAutoOffTimer = null;
     setState(() => _isDiscoverable = value);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('discoverable_mode', value);
-    if (_activePairingCode == null && !_isFlareActive && !_isOfficialAlertActive) {
+    if (_activePairingCode == null && !_isFlareActive) {
       _advertisePresenceBeacon();
+    }
+
+    if (value) {
+      // Auto-off. Recurses through _setDiscoverable(false) rather than
+      // duplicating the state/re-advertise logic, so "the timer expired"
+      // and "the user tapped the toggle off" are the exact same code path
+      // and can never drift apart.
+      _discoverableAutoOffTimer = Timer(_discoverableAutoOffDuration, () {
+        if (!mounted) return;
+        _setDiscoverable(false);
+        // The switch itself is enough feedback for a manual tap, but an
+        // auto-off happening with no page open to see the toggle flip
+        // would otherwise look like it silently stopped working.
+        _showToastFeedbackAlert("Discoverable turned off automatically.");
+      });
     }
   }
 
@@ -526,9 +599,19 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   void _resumeBackgroundBleAfterNearbyConnections() {
     if (!_bleBackgroundPausedForNearbyConnections) return;
     _bleBackgroundPausedForNearbyConnections = false;
-    // The closing chat/share screen already restores the plain presence
-    // beacon itself (see hops_chat_service.dart/hops_share_page.dart
-    // dispose()) — this just picks the two paused timers back up.
+    // Restore the real presence beacon (rotating token, game-runner tag,
+    // discoverable mode — whichever applies) ourselves, immediately,
+    // rather than relying on the closing chat/share screen's own dispose()
+    // to do it: rfcomm_chat_service.dart's dispose() only restores the
+    // classic-Bluetooth adapter name it temporarily changed (see that
+    // file's header comment), it doesn't know about rotating tokens/game
+    // tags at all, and hops_share_page.dart's own restore predates the
+    // rotating-ID scheme too. Without this, the beacon would silently stay
+    // off for up to a minute until _startRotatingIdRefreshTimer's next
+    // tick happened to fire.
+    if (_activePairingCode == null && !_isFlareActive) {
+      _advertisePresenceBeacon();
+    }
     _startRotatingIdRefreshTimer();
     _bleCountTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _updateBleDeviceCount();
@@ -575,15 +658,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // after this same delay via resumeAfterPing().
     if (nearbyConnectionsSessionCount.value == 0 &&
         _activePairingCode == null &&
-        !_isFlareActive &&
-        !_isOfficialAlertActive) {
+        !_isFlareActive) {
       await _advertisePresenceBeacon();
     }
   }
 
   Future<void> _updateBleDeviceCount() async {
-    // Don't interrupt an active pairing handshake
-    if (_activePairingCode != null) return;
+    // Don't interrupt an active pairing handshake — either side of it.
+    if (_activePairingCode != null || _pairingClientActive) return;
 
     await FlutterBluePlus.stopScan();
 
@@ -615,67 +697,173 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _startContinuousScan();
   }
 
-  // Splits a message into chunks that fit the manufacturer-data budget
-  // (see hops_constants.dart) and cycles the peripheral through them via
-  // scan-response manufacturer data, keeping the ordinary "HPS:<token>"
-  // beacon name unchanged throughout — receivers detect a chunk purely by
-  // the presence of our manufacturer ID, not by any change to the name.
-  Future<void> _advertiseCommunityMessage(String message) async {
+  // Splits a message into chunks that fit the advertisement local-name
+  // budget (see hops_constants.dart's v3 Community Chat format) and cycles
+  // the peripheral through them, one chunk per advertised name — the exact
+  // same mechanism EMG:/FR:/HOP:/VBT: use, which is the one BLE channel
+  // this app has confirmed working on real hardware. v2's scan-response
+  // manufacturer-data encoding never delivered a message in testing; see
+  // the long comment on kCommunityNameBudget for the full reasoning.
+  //
+  // Unlike v2, this *replaces* the advertised name for the duration of the
+  // broadcast (v2 kept "HPS:<token>" up and rode alongside it), so this
+  // reverts to the presence beacon when done — same shape as
+  // _broadcastEmergencyFlare's own revert.
+  /// Returns the 6-bit msgId this message was broadcast under, so
+  /// CommunityChat can tag its own local copy with the same wire identity
+  /// every receiver keys it by — without it, an admin deletion cleared the
+  /// message everywhere except the device that posted it.
+  Future<int?> _advertiseCommunityMessage(String message) async {
     _communityChunkCycleTimer?.cancel();
     await _ensureRotatingSeedLoaded();
 
     final msgId = _communityMsgCounter;
-    _communityMsgCounter = (_communityMsgCounter + 1) % 256;
+    // 64, not 256 — msgId is one 6-bit character in the v3 name format.
+    _communityMsgCounter = (_communityMsgCounter + 1) % 64;
 
-    // Computed once and reused for every chunk of this message — the tag
-    // has to stay the same across the whole (multi-second) broadcast cycle
-    // even if a 15-minute rotation window happens to roll over mid-send,
-    // or receivers would see chunks that look like they're from two
-    // different senders.
-    final senderToken = _myRotatingSeed != null
-        ? computeRotatingToken(_myRotatingSeed!)
-        : myUsername; // pre-rotating-ID fallback — see _presenceBeaconName()
+    // The sender tag is this account's real (truncated) username, not a
+    // rotating token — see kCommunityNameSenderTagChars' comment for the
+    // reasoning and what it does/doesn't give up. Being static, it also
+    // can't drift mid-broadcast the way a rotating token could if a
+    // 15-minute window rolled over partway through the cycle.
+    final senderTag = myUsername.length > kCommunityNameSenderTagChars
+        ? myUsername.substring(0, kCommunityNameSenderTagChars)
+        : myUsername.padRight(kCommunityNameSenderTagChars, '_');
 
-    final chunks = <String>[];
-    for (var i = 0;
-        i < message.length && chunks.length < kCommunityMaxChunks;
-        i += kCommunityChunkTextBudget) {
-      final end = (i + kCommunityChunkTextBudget < message.length)
-          ? i + kCommunityChunkTextBudget
-          : message.length;
-      chunks.add(message.substring(i, end));
-    }
-    if (chunks.isEmpty) chunks.add('');
+    final chunks = splitCommunityMessage(message);
 
-    const perChunkDuration = Duration(milliseconds: 1800);
-    const totalCycles = 2; // rebroadcast the full sequence twice for reliability
+    const perChunkDuration = Duration(milliseconds: 1500);
+    // Short messages (the overwhelming majority) get an extra full pass —
+    // they're cheap to repeat and every extra pass is another chance for a
+    // receiver whose scan was mid-cycle to catch them. A max-length
+    // 8-chunk message would otherwise spend nearly a minute on the air.
+    final totalCycles = chunks.length <= 3 ? 3 : 2;
 
     Future<void> advertiseChunk(int index) => _advertiseWithName(
-      _presenceBeaconName(),
-      [],
-      manufacturerData: ManufacturerData(
-        manufacturerId: kCommunityManufacturerId,
-        data: encodeCommunityChatChunk(
-          senderToken: senderToken,
-          msgId: msgId,
-          chunkIndex: index,
-          totalChunks: chunks.length,
-          chunkText: chunks[index],
-        ),
+      encodeCommunityNameChunk(
+        senderTag: senderTag,
+        msgId: msgId,
+        chunkIndex: index,
+        totalChunks: chunks.length,
+        chunkText: chunks[index],
       ),
-      manufacturerDataInScanResponse: true,
+      [],
     );
 
     void step(int chunkIndex, int cycle) {
-      advertiseChunk(chunkIndex);
+      // Later chunks stay best-effort — the message is already going out and
+      // the repeat cycles exist to cover a dropped one — but the error is no
+      // longer swallowed entirely: a chunk that can't be advertised is the
+      // difference between a delivered message and a silent one.
+      advertiseChunk(chunkIndex).catchError((e) {
+        debugPrint('Community chunk $chunkIndex failed to advertise: $e');
+      });
       _communityChunkCycleTimer = Timer(perChunkDuration, () {
         if (chunkIndex + 1 < chunks.length) {
           step(chunkIndex + 1, cycle);
         } else if (cycle + 1 < totalCycles) {
           step(0, cycle + 1);
         } else {
-          // Done — drop the manufacturer data and revert to the plain
-          // presence beacon.
+          // Done — back to the ordinary presence beacon.
+          BlePeripheral.stopAdvertising();
+          _advertisePresenceBeacon();
+        }
+      });
+    }
+
+    // The first chunk is awaited and checked rather than fired blindly.
+    //
+    // This is what hid an over-long name for so long: every chunk was
+    // dispatched without await or catch, so a platform rejection
+    // (ADVERTISE_FAILED_DATA_TOO_LARGE for a name that won't fit the packet)
+    // became an unhandled async error nobody ever saw. The message appeared
+    // in the sender's own list and simply never reached anyone — which looks
+    // identical to "nobody was in range".
+    try {
+      await advertiseChunk(0);
+    } catch (e) {
+      debugPrint('Community message failed to start advertising: $e');
+      _advertisePresenceBeacon();
+      return null;
+    }
+
+    _communityChunkCycleTimer = Timer(perChunkDuration, () {
+      if (chunks.length > 1) {
+        step(1, 0);
+      } else if (totalCycles > 1) {
+        step(0, 1);
+      } else {
+        BlePeripheral.stopAdvertising();
+        _advertisePresenceBeacon();
+      }
+    });
+    return msgId;
+  }
+
+  // ---------- 1:1 direct message over BLE (RFCOMM fallback) ----------
+  //
+  // Requested by an open chat screen via bleDirectMessageOutbox (see
+  // main.dart) when RFCOMM couldn't connect. Encrypts with the key derived
+  // from this device's and the peer's rotating-ID seeds, then cycles the
+  // ciphertext across chunked advertisement names — the same proven
+  // channel Community Chat v3 and Emergency Flare use.
+  //
+  // Returns false if the message can't be sent at all: no seed exchanged
+  // with this peer yet (they've never chatted successfully, so there's no
+  // shared key to derive), or no local seed. The chat screen surfaces that
+  // rather than silently pretending it went out.
+  Future<bool> _broadcastDirectMessage(String peerUsername, String text) async {
+    await _ensureRotatingSeedLoaded();
+    final mySeed = _myRotatingSeed;
+    final peerSeed = _contactSeeds[peerUsername];
+    if (mySeed == null || peerSeed == null) return false;
+
+    final key = deriveSharedMeshKey(mySeed, peerSeed);
+    final sealed = sealDirectMessage(key: key, plaintext: text);
+    final payload = base64Url.encode(sealed).replaceAll('=', '');
+
+    final recipientTag = directMessageTag(computeRotatingToken(peerSeed));
+    final senderTag = directMessageTag(computeRotatingToken(mySeed));
+
+    final msgId = _directMsgCounter;
+    _directMsgCounter = (_directMsgCounter + 1) % 64;
+
+    final chunks = <String>[];
+    for (var i = 0;
+        i < payload.length && chunks.length < kDirectMessageMaxChunks;
+        i += kDirectMessageTextBudget) {
+      final end = (i + kDirectMessageTextBudget < payload.length)
+          ? i + kDirectMessageTextBudget
+          : payload.length;
+      chunks.add(payload.substring(i, end));
+    }
+    if (chunks.isEmpty) return false;
+
+    _directMsgCycleTimer?.cancel();
+    const perChunkDuration = Duration(milliseconds: 1500);
+    // One more pass than Community Chat gets: a direct message has exactly
+    // one intended recipient, so unlike a broadcast there's no "someone
+    // else probably caught it" consolation if every pass is missed.
+    const totalCycles = 3;
+
+    void step(int chunkIndex, int cycle) {
+      _advertiseWithName(
+        encodeDirectMessageChunk(
+          recipientTag: recipientTag,
+          senderTag: senderTag,
+          msgId: msgId,
+          chunkIndex: chunkIndex,
+          totalChunks: chunks.length,
+          chunkPayload: chunks[chunkIndex],
+        ),
+        [],
+      );
+      _directMsgCycleTimer = Timer(perChunkDuration, () {
+        if (chunkIndex + 1 < chunks.length) {
+          step(chunkIndex + 1, cycle);
+        } else if (cycle + 1 < totalCycles) {
+          step(0, cycle + 1);
+        } else {
           BlePeripheral.stopAdvertising();
           _advertisePresenceBeacon();
         }
@@ -683,6 +871,80 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     }
 
     step(0, 0);
+    return true;
+  }
+
+  // Reassembles an incoming DM: chunk. Only messages addressed to this
+  // device's own current rotating tag are even buffered — everything else
+  // on the air is someone else's conversation and is dropped immediately,
+  // before any decryption is attempted.
+  void _handleDirectMessageChunk(DecodedDirectMessageChunk decoded) {
+    final mySeed = _myRotatingSeed;
+    if (mySeed == null) return;
+    if (directMessageTag(computeRotatingToken(mySeed)) != decoded.recipientTag &&
+        !matchesRotatingTokenPrefix(mySeed, decoded.recipientTag)) {
+      return; // not addressed to us
+    }
+
+    // Which contact does this sender tag belong to? Without a match there's
+    // no key to derive, so there's nothing useful to do with the message.
+    String? senderUsername;
+    for (final entry in _contactSeeds.entries) {
+      if (matchesRotatingTokenPrefix(entry.value, decoded.senderTag)) {
+        senderUsername = entry.key;
+        break;
+      }
+    }
+    if (senderUsername == null) return;
+
+    final key = '${decoded.senderTag}:${decoded.msgId}';
+    if (_handledDirectMsgKeys.contains(key)) return;
+
+    final buffer = _pendingDirectMsgChunks.putIfAbsent(
+        key, () => _FlareSigBuffer(decoded.totalChunks));
+    buffer.chunks[decoded.chunkIndex] = utf8.encode(decoded.payload);
+    buffer.lastSeen = DateTime.now();
+
+    if (buffer.isComplete) {
+      _pendingDirectMsgChunks.remove(key);
+      _handledDirectMsgKeys.add(key);
+      Future.delayed(const Duration(minutes: 2),
+          () => _handledDirectMsgKeys.remove(key));
+
+      // Safe to decode the joined bytes in one go: the payload is base64,
+      // so every chunk is pure ASCII and no character can straddle a
+      // chunk boundary.
+      final payload = utf8.decode(buffer.reassembled, allowMalformed: true);
+      try {
+        // Re-pad: base64Url.encode's '=' padding is stripped on the wire to
+        // save the scarce name bytes, and the decoder requires it back.
+        final padded = payload.padRight((payload.length + 3) ~/ 4 * 4, '=');
+        final sealed = base64Url.decode(padded);
+        final peerSeed = _contactSeeds[senderUsername]!;
+        final text = openDirectMessage(
+          key: deriveSharedMeshKey(mySeed, peerSeed),
+          sealed: sealed,
+        );
+        if (text == null || text.isEmpty) return;
+        bleDirectMessageInbox.add(
+            BleDirectMessage(peerUsername: senderUsername, text: text));
+      } catch (_) {
+        // Malformed base64 or a chunk lost to the air — drop it; the
+        // sender's remaining cycles may still deliver a clean copy.
+      }
+    }
+
+    final staleCutoff = DateTime.now().subtract(const Duration(seconds: 45));
+    _pendingDirectMsgChunks.removeWhere((_, b) => b.lastSeen.isBefore(staleCutoff));
+  }
+
+  void _onBleDirectMessageRequested() {
+    final request = bleDirectMessageOutbox.value;
+    if (request == null) return;
+    bleDirectMessageOutbox.value = null; // one-shot, same as chatPingRequest
+    _broadcastDirectMessage(request.peerUsername, request.text).then((ok) {
+      if (!(request.sent?.isCompleted ?? true)) request.sent!.complete(ok);
+    });
   }
 
   Future<void> _captureOriginalBluetoothName() async {
@@ -793,8 +1055,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _flareCancelTimer?.cancel();
     _flareCancelTimer = null;
 
-    final maxSenderLen = 8;
-    final maxReasonLen = 14;
+    const maxSenderLen = 8;
+    const maxReasonLen = 14;
     final sender = myUsername.length > maxSenderLen
         ? myUsername.substring(0, maxSenderLen)
         : myUsername;
@@ -825,7 +1087,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     }
 
     if (!started) {
-      print("❌ Emergency flare failed to broadcast: $lastError");
+      debugPrint("❌ Emergency flare failed to broadcast: $lastError");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -843,7 +1105,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       }
       return; // never claim it's active when it isn't
     }
-    print("🚨 Broadcasting emergency: $advName");
+    debugPrint("🚨 Broadcasting emergency: $advName");
 
     setState(() => _isFlareActive = true);
     // Fail-open, verify-after: the alert above is already live and audible
@@ -856,18 +1118,24 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       isActive: () => _isFlareActive,
       setCycleTimer: (t) => _flareSigCycleTimer = t,
     );
+    // Best-effort, fire-and-forget — mirrors official_alert_service.dart's
+    // _logAlert for the admin tier. The flare itself already went out over
+    // BLE regardless of whether this succeeds; only the admin app's Action
+    // Log/Dashboard record of it would be missing on failure.
+    _logEmergencyFlare(reason);
 
-    // Auto-cancel after 30 seconds
-    _flareCancelTimer = Timer(const Duration(seconds: 30), () {
+    // Auto-cancel after kEmergencyFlareDuration.
+    _flareCancelTimer = Timer(kEmergencyFlareDuration, () {
       _cancelEmergencyFlare(silent: true);
     });
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text("Emergency flare active for 30 seconds"),
+          content: Text(
+              "Emergency flare active for ${kEmergencyFlareDuration.inSeconds} seconds"),
           backgroundColor: Colors.red,
-          duration: const Duration(seconds: 30),
+          duration: kEmergencyFlareDuration,
           action: SnackBarAction(
             label: "CANCEL",
             textColor: Colors.white,
@@ -878,120 +1146,23 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     }
   }
 
-  // ---------- Admin Official Alert (ADM:/ADM_OFF:) ----------
-  // Deliberately near-identical in shape to _cancelEmergencyFlare/
-  // _broadcastEmergencyFlare above rather than parametrized into one
-  // implementation — the two tiers' trigger paths, timers, and UI text
-  // are independent by design (see _isAdmin gating the trigger itself),
-  // and keeping them as separate, readable methods matches this file's
-  // existing style (FR/FA/WR/WA are all separate too) rather than adding
-  // a layer of indirection for two call sites.
-
-  void _cancelOfficialAlert({bool silent = false}) {
-    _officialAlertCancelTimer?.cancel();
-    _officialAlertCancelTimer = null;
-    _officialAlertSigCycleTimer?.cancel();
-    _officialAlertSigCycleTimer = null;
-
-    final sender = myUsername.length > 8 ? myUsername.substring(0, 8) : myUsername;
-    _advertiseWithName("ADM_OFF:$sender", []);
-
-    Future.delayed(const Duration(seconds: 5), () {
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
-    });
-
-    setState(() => _isOfficialAlertActive = false);
-
-    if (!silent && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Official alert cancelled"),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
+  Future<void> _logEmergencyFlare(String reason) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('saved_hops_token');
+    if (token == null) return;
+    try {
+      await Supabase.instance.client.rpc('log_emergency_flare', params: {
+        'p_hops_token': token,
+        'p_reason': reason,
+      });
+    } catch (_) {
+      // Offline/unreachable — not fatal, see the call site's comment.
     }
   }
 
-  Future<void> _broadcastOfficialAlert(String reason) async {
-    if (!_isAdmin) return; // UI already gates this, but never trust that alone
-    _officialAlertCancelTimer?.cancel();
-    _officialAlertCancelTimer = null;
-
-    final maxSenderLen = 8;
-    final maxReasonLen = 14;
-    final sender = myUsername.length > maxSenderLen
-        ? myUsername.substring(0, maxSenderLen)
-        : myUsername;
-    final shortReason = reason.length > maxReasonLen
-        ? reason.substring(0, maxReasonLen)
-        : reason;
-
-    final advName = "ADM:$sender:$shortReason";
-
-    // Same retry-then-report treatment as _broadcastEmergencyFlare above —
-    // see its comment for why an unguarded single await here was a real
-    // "silently does nothing" failure mode.
-    bool started = false;
-    Object? lastError;
-    for (var attempt = 0; attempt < 3 && !started; attempt++) {
-      try {
-        await _advertiseWithName(advName, []);
-        started = true;
-      } catch (e) {
-        lastError = e;
-        if (attempt < 2) await Future.delayed(const Duration(milliseconds: 400));
-      }
-    }
-
-    if (!started) {
-      print("❌ Official alert failed to broadcast: $lastError");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text(
-                "⚠️ Official alert failed to start. Check Bluetooth is on and try again."),
-            backgroundColor: Colors.red.shade900,
-            duration: const Duration(seconds: 8),
-            action: SnackBarAction(
-              label: "RETRY",
-              textColor: Colors.white,
-              onPressed: () => _broadcastOfficialAlert(reason),
-            ),
-          ),
-        );
-      }
-      return;
-    }
-    print("🔴 Broadcasting official alert: $advName");
-
-    setState(() => _isOfficialAlertActive = true);
-    _startSignatureCycle(
-      advName,
-      isActive: () => _isOfficialAlertActive,
-      setCycleTimer: (t) => _officialAlertSigCycleTimer = t,
-    );
-
-    _officialAlertCancelTimer = Timer(const Duration(seconds: 30), () {
-      _cancelOfficialAlert(silent: true);
-    });
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text("Official alert active for 30 seconds"),
-          backgroundColor: Colors.red.shade900,
-          duration: const Duration(seconds: 30),
-          action: SnackBarAction(
-            label: "CANCEL",
-            textColor: Colors.white,
-            onPressed: _cancelOfficialAlert,
-          ),
-        ),
-      );
-    }
-  }
+  // Official Alert (ADM:/ADM_OFF:) is composed and broadcast from the
+  // separate Admin app now — see lib/services/official_alert_service.dart
+  // — not from here. This app only ever receives one (below).
 
   // Signs [advName] (the exact alert string already being broadcast — a
   // flare or an Official Alert, both share this) with this device's own
@@ -1064,7 +1235,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
       step(0, 0);
     } catch (e) {
-      print("⚠️ Failed to sign alert: $e");
+      debugPrint("⚠️ Failed to sign alert: $e");
     }
   }
 
@@ -1344,6 +1515,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     );
     // The SnackBar only ever reached someone already looking at this
     // screen — this is what reaches them anywhere else in the app.
+    UnreadTracker.instance.mark(UnreadSource.watchMe);
     NotificationService.showWatchAcceptedNotification(username: buddy);
   }
 
@@ -1401,10 +1573,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     setState(() {
       myUsername = prefs.getString('my_username') ?? 'Unknown_User';
       _myAvatarPath = avatarPath;
-      // Refreshed at every sign-in (see root_gatekeeper.dart) — gates
-      // whether the Official Alert trigger UI shows on Radar/Home at all.
+      // Refreshed at every sign-in (see root_gatekeeper.dart) — drives the
+      // "Admin" badge on the profile screen (profile_screen.dart reads
+      // 'my_role'/'my_admin_title' from prefs itself, so this app doesn't
+      // need to keep its own copy of admin_title beyond writing it below).
       _myRole = prefs.getString('my_role') ?? 'student';
-      _myAdminTitle = prefs.getString('my_admin_title');
     });
   }
 
@@ -1425,6 +1598,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             (task[DatabaseHelper.taskColDueDate] as int) <= now &&
             !_remindedTaskIds.contains(id)) {
           _remindedTaskIds.add(id);
+          UnreadTracker.instance.mark(UnreadSource.taskReminder);
           await NotificationService.showTaskReminderNotification(
               taskTitle: task[DatabaseHelper.taskColTitle] as String);
         }
@@ -1435,39 +1609,56 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // Pull-based stand-in for push notifications (see field comments above).
   // Best-effort — a failed/offline poll just tries again next cycle
   // rather than surfacing an error for what's meant to be invisible
-  // background housekeeping.
+  // background housekeeping. Admin privilege is granted out-of-band now
+  // (see supabase/migrations/0008_admin_moderation.sql) rather than
+  // requested from inside the app, so this no longer branches on
+  // _isAdmin to poll a request queue — every signed-in device just asks
+  // about its own current role/ban status, which also doubles as how an
+  // already-signed-in student finds out they've been banned mid-session
+  // (get_my_status raises account_banned exactly like sign-in does).
   Future<void> _syncIdentityStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('saved_hops_token');
     if (token == null) return;
+    // Best-effort, fire-and-forget — see report_content.dart's queueReport/
+    // flushPendingReports. Piggybacked on this same periodic "do we have a
+    // connection" checkpoint rather than its own separate timer.
+    unawaited(flushPendingReports());
     try {
-      if (_isAdmin) {
-        final rows = await Supabase.instance.client
-            .rpc('list_pending_admin_requests', params: {'p_hops_token': token});
-        final ids = (rows as List).map((r) => (r as Map)['id'] as String).toSet();
-        final previouslySeen = _seenAdminRequestIds;
-        if (previouslySeen != null) {
-          final newOnes = ids.difference(previouslySeen);
-          if (newOnes.isNotEmpty) {
-            await NotificationService.showAdminRequestSubmittedNotification(
-                pendingCount: ids.length);
-          }
+      final response = await Supabase.instance.client
+          .rpc('get_my_status', params: {'p_hops_token': token}).maybeSingle();
+      if (response != null) {
+        final unread = (response['unread_notifications'] as num?)?.toInt() ?? 0;
+        // Only fire on an actual *increase* — this poll runs every 30s, so
+        // reacting to any non-zero count would re-notify forever until the
+        // user opened the page.
+        if (unread > _unreadNotifications) {
+          UnreadTracker.instance.mark(UnreadSource.notifications);
+          await NotificationService.showInboxNotification();
         }
-        _seenAdminRequestIds = ids;
-      } else {
-        final response = await Supabase.instance.client
-            .rpc('get_my_status', params: {'p_hops_token': token}).maybeSingle();
-        if (response != null && response['role'] == 'admin' && _myRole != 'admin') {
+        if (unread != _unreadNotifications && mounted) {
+          setState(() => _unreadNotifications = unread);
+        }
+        if (response['role'] == 'admin' && _myRole != 'admin') {
           await prefs.setString('my_role', 'admin');
           final adminTitle = response['admin_title'] as String?;
           if (adminTitle != null) await prefs.setString('my_admin_title', adminTitle);
           setState(() {
             _myRole = 'admin';
-            _myAdminTitle = adminTitle;
           });
           await NotificationService.showAdminRequestApprovedNotification();
         }
       }
+    } on PostgrestException catch (e) {
+      if (e.message.contains('account_banned') && mounted) {
+        await NotificationService.showAccountBannedNotification();
+        // Re-checked: the notification above is itself an await, and this
+        // runs on a background poll that can easily outlive the screen.
+        if (!mounted) return;
+        await wipeLocalIdentityAndReturnToGatekeeper(context);
+      }
+      // Any other Postgrest error: offline or Supabase unreachable, try
+      // again on the next cycle.
     } catch (_) {
       // Offline or Supabase unreachable — try again on the next cycle.
     }
@@ -1540,13 +1731,20 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // Called by HopsAndRobbersPage when this device becomes (or stops being)
   // a runner in an active game — see hops_and_robbers.dart's onSetGameRunnerTag.
+  // Kept, not deleted: this is the *sending* half of the Hops & Robbers
+  // runner tag, and the receiving half is still live further down (the
+  // "TAG:"/"GAME_" branches in the scan handler). The game itself is
+  // currently commented out of models/feature_item.dart's catalog, so
+  // nothing calls this — dormant rather than dead. Deleting it would leave
+  // a protocol with a parser and no writer.
+  // ignore: unused_element
   void _setGameRunnerTag(bool active) {
     _isGameRunnerTagActive = active;
     _gameRunnerUsername = active ? myUsername : null;
     // Re-advertise immediately rather than waiting for the next periodic
     // refresh — a robber's proximity scan should pick up a fresh runner
     // (or stop seeing a caught one) without a up-to-1-minute lag.
-    if (_activePairingCode == null && !_isFlareActive && !_isOfficialAlertActive) {
+    if (_activePairingCode == null && !_isFlareActive) {
       _advertisePresenceBeacon();
     }
   }
@@ -1559,9 +1757,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _rotatingIdRefreshTimer?.cancel();
     _rotatingIdRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       // Skip while something more important is actively advertising —
-      // pairing, Emergency Flare, and Official Alert all run their own
-      // short-lived advertisement windows that this shouldn't clobber.
-      if (_activePairingCode != null || _isFlareActive || _isOfficialAlertActive) return;
+      // pairing and Emergency Flare both run their own short-lived
+      // advertisement windows that this shouldn't clobber.
+      if (_activePairingCode != null || _isFlareActive) return;
       _advertisePresenceBeacon();
     });
   }
@@ -1574,9 +1772,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     try {
       await _advertisePresenceBeacon();
       _startRotatingIdRefreshTimer();
-      print('✅ Advertising started successfully');
+      debugPrint('✅ Advertising started successfully');
     } catch (e) {
-      print('❌ Advertising failed: $e');
+      debugPrint('❌ Advertising failed: $e');
     }
     _bleScanResultsSubscription = FlutterBluePlus.scanResults.listen((results) async {
       _totalScanResults += results.length;
@@ -1608,6 +1806,36 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
       for (final r in results) {
         final name = r.advertisementData.advName;
+        // 1:1 direct message (BLE fallback for RFCOMM) — checked first and
+        // `continue`d because, unlike the prefix checks below, its payload
+        // is base64 that could otherwise coincidentally match another
+        // prefix's shape.
+        if (name.startsWith(kDirectMessagePrefix)) {
+          final decoded = decodeDirectMessageChunk(name);
+          if (decoded != null) _handleDirectMessageChunk(decoded);
+          continue;
+        }
+        // Vibe Check crowd report. Handled here, in the always-on scan
+        // handler, rather than inside VibeCheckPage — that page is a
+        // pushed route, so detection living there meant nothing was heard
+        // unless it happened to be open, and the red dot could therefore
+        // only ever appear *after* you'd already gone and looked. See
+        // vibe_report_store.dart.
+        if (name.startsWith("VBT:")) {
+          final parts = name.substring(4).split(":");
+          if (parts.length == 2) {
+            final level = int.tryParse(parts[1]);
+            if (level != null && level >= 0 && level <= 3) {
+              final isNew = VibeReportStore.instance
+                  .record(key: name, location: parts[0], level: level);
+              // Badge only — deliberately no system notification. A popup
+              // for every crowd report nearby is noise, not information;
+              // the dot is enough to say "there's something new to look
+              // at" without interrupting.
+              if (isNew) UnreadTracker.instance.mark(UnreadSource.vibeCheck);
+            }
+          }
+        }
         // ACK
         if (name.startsWith("ACK:") && _activePairingCode != null) {
           final parts = name.substring(4).split(":");
@@ -1680,6 +1908,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               _addRecentWatchSender(sender);
               setState(() => pendingWatchRequests.add(sender));
               _notifyWatchRequestsChanged();
+              UnreadTracker.instance.mark(UnreadSource.watchMe);
               await NotificationService.showWatchRequestNotification(sender: sender);
             }
             // The sender's rotating-ID seed rides alongside the WR: name
@@ -1712,6 +1941,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           final parts = name.substring(4).split(":");
           if (parts.length == 2 && parts[0] == myUsername) {
             final tagger = parts[1];
+            // `continue`, not `return`: this sits inside the loop over scan
+            // results, and bailing out entirely would drop every remaining
+            // advertisement in the batch.
+            if (!mounted) continue;
             showDialog(
               context: context,
               barrierDismissible: false,
@@ -1757,9 +1990,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             // Set dedup: same advertisement name → processed exactly once
             if (!_handledEmgNames.contains(name)) {
               _handledEmgNames.add(name);
-              // Allow the same emergency to alert again after 35 s
-              // (covers the 30 s flare window + 5 s margin)
-              Future.delayed(const Duration(seconds: 35), () {
+              // Allow the same emergency to alert again once it's had time
+              // to genuinely end — kEmergencyFlareDuration plus a 5s
+              // margin, not a hardcoded number that has to be remembered
+              // to update every time that constant does.
+              Future.delayed(kEmergencyFlareDuration + const Duration(seconds: 5), () {
                 _handledEmgNames.remove(name);
               });
 
@@ -1932,45 +2167,54 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   }
 
   Future<void> _startPairingClient(String code) async {
-    await FlutterBluePlus.stopScan();
-
-    final completer = Completer<String?>();
-    StreamSubscription<List<ScanResult>>? sub;
-
-    sub = FlutterBluePlus.scanResults.listen((results) {
-      for (final r in results) {
-        final name = r.advertisementData.advName;
-        if (name.startsWith("HOP:$code:")) {
-          final remoteUsername = name.substring("HOP:$code:".length);
-          if (!completer.isCompleted) completer.complete(remoteUsername);
-        }
-      }
-    });
-
-    await FlutterBluePlus.startScan(
-      androidUsesFineLocation: true,
-      withServices: [Guid(HOPS_SERVICE_UUID)], // ← hardware filter
-    );
-
-    String? remoteUsername;
+    // See _pairingClientActive's field comment — guards _updateBleDeviceCount
+    // and _scanRestartTimer off for the whole handshake, not just the scan
+    // below, since _sendAck's own brief advertise window afterward is just
+    // as vulnerable to one of those landing mid-handshake.
+    _pairingClientActive = true;
     try {
-      remoteUsername =
-      await completer.future.timeout(const Duration(seconds: 30));
-    } catch (_) {}
+      await FlutterBluePlus.stopScan();
 
-    await sub.cancel();
-    await FlutterBluePlus.stopScan();
+      final completer = Completer<String?>();
+      StreamSubscription<List<ScanResult>>? sub;
 
-    if (remoteUsername == null) {
-      _showToastFeedbackAlert(
-          "Device not found. Ensure the code is active on the other device.");
-      return;
+      sub = FlutterBluePlus.scanResults.listen((results) {
+        for (final r in results) {
+          final name = r.advertisementData.advName;
+          if (name.startsWith("HOP:$code:")) {
+            final remoteUsername = name.substring("HOP:$code:".length);
+            if (!completer.isCompleted) completer.complete(remoteUsername);
+          }
+        }
+      });
+
+      await FlutterBluePlus.startScan(
+        androidUsesFineLocation: true,
+        withServices: [Guid(HOPS_SERVICE_UUID)], // ← hardware filter
+      );
+
+      String? remoteUsername;
+      try {
+        remoteUsername =
+        await completer.future.timeout(const Duration(seconds: 30));
+      } catch (_) {}
+
+      await sub.cancel();
+      await FlutterBluePlus.stopScan();
+
+      if (remoteUsername == null) {
+        _showToastFeedbackAlert(
+            "Device not found. Ensure the code is active on the other device.");
+        return;
+      }
+
+      await _writeContactLogToDatabase(remoteUsername, "Mutual pairing via code");
+      await _sendAck(code);
+      _showToastFeedbackAlert("Connected with $remoteUsername!");
+      await _startContinuousScan();
+    } finally {
+      _pairingClientActive = false;
     }
-
-    await _writeContactLogToDatabase(remoteUsername, "Mutual pairing via code");
-    await _sendAck(code);
-    _showToastFeedbackAlert("Connected with $remoteUsername!");
-    await _startContinuousScan();
   }
 
   Future<void> _sendAck(String code) async {
@@ -2023,6 +2267,20 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       }
     }
 
+    // The built-in assistant is a contact for everyone, on every device,
+    // from first launch — nobody adds it and nobody can remove it (see
+    // _deleteContact). Written after the two loops above so that once
+    // there's a real conversation, its last message drives the preview like
+    // any other thread; `time` is overwritten either way because the
+    // message loop stamps "Nearby", which is meaningless for something
+    // running on this phone.
+    final existingBotThread = contactThreads[kHopsBotUsername];
+    contactThreads[kHopsBotUsername] = {
+      'username': kHopsBotUsername,
+      'lastMsg': existingBotThread?['lastMsg'] ?? 'Ask me anything — I work offline.',
+      'time': '',
+    };
+
     // Attach whatever avatar we've cached for each contact — populated the
     // first time you've actually chatted with them (see chat_terminal.dart
     // / HopsChatService.sendProfile), absent until then.
@@ -2036,8 +2294,18 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // invalidates one should invalidate the other.
     final seeds = await DatabaseHelper.instance.getAllContactRotatingSeeds();
 
+    // Bot pinned to the top. Pulled out and prepended rather than sorted
+    // with a comparator — Dart's List.sort isn't stable, so a comparator
+    // that returns 0 for every other pair would be free to reshuffle the
+    // real contacts on each refresh.
+    final botEntry = contactThreads.remove(kHopsBotUsername);
+    final ordered = [
+      if (botEntry != null) botEntry,
+      ...contactThreads.values,
+    ];
+
     setState(() {
-      localActiveContacts = contactThreads.values.toList();
+      localActiveContacts = ordered;
       _contactSeeds = seeds;
     });
   }
@@ -2062,6 +2330,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // friend-request-added contact would silently reappear on the very next
   // refresh (_refreshContactsTrayList re-adds anyone still in that set).
   Future<void> _deleteContact(String peerName) async {
+    // The assistant isn't removable — it ships with the app rather than
+    // being something you added. Deleting is reinterpreted as clearing the
+    // conversation, which is the only part of it that's actually the
+    // user's, so the action still does something honest instead of being
+    // silently ignored.
+    if (peerName == kHopsBotUsername) {
+      await DatabaseHelper.instance.deleteConversationWithPeer(peerName);
+      await _refreshContactsTrayList();
+      _showToastFeedbackAlert("Cleared your chat with $kHopsBotUsername.");
+      return;
+    }
     await DatabaseHelper.instance.deleteConversationWithPeer(peerName);
     await DatabaseHelper.instance.deleteContactProfile(peerName);
     _addedFriends.remove(peerName);
@@ -2192,7 +2471,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         MaterialPageRoute(
           builder: (_) => WatchMePage(
             radarStream: radarStream,
-            friendUsernames: friendUsernames,
+            // The bot is a permanent entry in localActiveContacts (see
+            // _refreshContactsTrayList), which is what friendUsernames is
+            // built from — so without this filter it showed up as a
+            // selectable buddy here too. It can't reciprocate a watch
+            // request or drift out of Bluetooth range, so "watching" it
+            // was never a real state, just an option that did nothing.
+            friendUsernames:
+                friendUsernames.where((u) => u != kHopsBotUsername).toSet(),
             watchingBuddies: _watchingBuddies,
             contactSeeds: _contactSeeds,
             watchingBuddiesStream: watchingBuddiesStream,
@@ -2234,13 +2520,19 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   }
 
   // ---------- UI (fully dynamic theme) ----------
-  PreferredSizeWidget _buildSharedCustomAppBar(String title) {
+  // [showMeta] controls the BLE-density chip + profile-avatar button block
+  // below — the Contacts tab turns it off in favor of a notifications bell
+  // instead (see _buildContactsTab), since neither the ambient BLE count
+  // nor a shortcut to your own profile is particularly relevant while
+  // you're looking at your contacts, and a bell needed a home somewhere.
+  // Every other tab keeps the default.
+  PreferredSizeWidget _buildSharedCustomAppBar(String title, {bool showMeta = true}) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return AppBar(
       elevation: 0,
       scrolledUnderElevation: 0,
-      backgroundColor: theme.scaffoldBackgroundColor.withOpacity(0.8),
+      backgroundColor: theme.scaffoldBackgroundColor.withValues(alpha: 0.8),
       title: Row(
         children: [
           Icon(Icons.bluetooth_audio, color: colors.primary),
@@ -2257,11 +2549,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           ),
         ],
       ),
-      actions: [
+      actions: !showMeta
+          ? [_buildNotificationsBellButton(colors)]
+          : [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            color: _bleMeshColor(_nearbyBleCount).withOpacity(0.12),
+            color: _bleMeshColor(_nearbyBleCount).withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(100),
           ),
           child: Row(
@@ -2276,7 +2570,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: _bleMeshColor(_nearbyBleCount).withOpacity(0.6),
+                      color: _bleMeshColor(_nearbyBleCount).withValues(alpha: 0.6),
                       blurRadius: 6,
                     ),
                   ],
@@ -2320,6 +2614,52 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildNotificationsBellButton(ColorScheme colors) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          icon: const Icon(Icons.notifications_outlined),
+          color: colors.primary,
+          tooltip: "Notifications",
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const NotificationsPage()),
+            ).then((_) {
+              // Clear locally so the badge goes immediately, then
+              // reconcile against the server rather than trusting the
+              // optimistic zero forever. NotificationsPage awaits its
+              // mark-all-read before popping, so this re-read returns 0
+              // too — previously it didn't await, and the next poll would
+              // read a stale non-zero count and re-light the dot.
+              if (mounted) setState(() => _unreadNotifications = 0);
+              UnreadTracker.instance.clear(UnreadSource.notifications);
+              _syncIdentityStatus();
+            });
+          },
+        ),
+        if (_unreadNotifications > 0)
+          Positioned(
+            right: 6,
+            top: 6,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade700,
+                borderRadius: BorderRadius.circular(100),
+              ),
+              constraints: const BoxConstraints(minWidth: 16),
+              child: Text(
+                _unreadNotifications > 99 ? '99+' : '$_unreadNotifications',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2336,8 +2676,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         friendUsernames: friendUsernames,
         contactSeeds: _contactSeeds,
         onActivateFlare: (String reason) => _broadcastEmergencyFlare(reason),
-        onActivateOfficialAlert: (String reason) => _broadcastOfficialAlert(reason),
-        isAdmin: _isAdmin,
         onRescan: () {
           FlutterBluePlus.stopScan();
           _startContinuousScan();
@@ -2353,7 +2691,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         radarStream: radarStream,
         onSendMessage: _advertiseCommunityMessage,
         myUsername: myUsername,
-        mySeed: _myRotatingSeed,
+        isVisible: _currentIndex == 2,
+        // Student app stays anonymous — contacts by name, everyone else
+        // as an anonymous tag. Only the admin app sets showRealNames.
         contactSeeds: _contactSeeds,
       ), // index 2 — NEW: BT peer chat
       _buildFeaturesTab(),             // index 3
@@ -2368,7 +2708,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       extendBody: true,
       body: PageView(
         controller: _pageController,
-        onPageChanged: (index) => setState(() => _currentIndex = index),
+        onPageChanged: (index) {
+          setState(() => _currentIndex = index);
+          // Landing on a tab counts as reading whatever it holds. Feature-
+          // scoped sources (index 4) are deliberately NOT cleared here —
+          // those clear when the individual feature page is opened, so the
+          // dot survives long enough to point at which card to tap.
+          for (final source in UnreadTracker.navTabSources[index] ?? const []) {
+            if (UnreadTracker.featureIds.containsKey(source)) continue;
+            UnreadTracker.instance.clear(source);
+          }
+        },
         children: tabs,
       ),
       floatingActionButton: _currentIndex == 1
@@ -2383,6 +2733,15 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         ),
       )
           : null,
+      // Keyed on the OUTSIDE of the SafeArea, deliberately — see
+      // navBarPillHeightNotifier's doc comment in main.dart. Measuring the
+      // pill alone (inside the SafeArea) reported a height that excluded
+      // the gesture-nav inset, so Community Chat's input bar had to add
+      // MediaQuery.padding.bottom back itself — and on a Scaffold with
+      // extendBody: true that inset is also still present in the body's own
+      // MediaQuery, so it got counted twice and the bar floated well above
+      // the pill. This reports the one number every caller actually wants:
+      // total height occupied at the bottom of the screen, inset included.
       bottomNavigationBar: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 220),
@@ -2413,25 +2772,55 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     );
   }
 
+  // Re-measured every frame the nav area lays out — its height changes
+  // when the pill is tucked away/restored, at different text scales, and
+  // when a badge wraps a label to a second line.
+  void _reportNavAreaHeight() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // Measure whichever nav content is actually on screen, NOT the
+      // Scaffold's bottomNavigationBar slot.
+      //
+      // This used to key a Container wrapping the AnimatedSwitcher, whose
+      // layoutBuilder Stack takes the full height the Scaffold offers that
+      // slot — a height the comment on that layoutBuilder already describes
+      // as "often much taller than either child actually needs". Community
+      // Chat reserved that inflated number as clearance, which is where the
+      // stubborn gap between its input bar and the nav pill came from:
+      // it was clearing empty slot, not the pill.
+      //
+      // Two keys rather than one because both children exist at once during
+      // the switcher's 220ms transition, and a single GlobalKey on both
+      // would be a duplicate-key error.
+      final ctx = _navBarHidden
+          ? _navHiddenKey.currentContext
+          : _navPillKey.currentContext;
+      final content = ctx?.size?.height;
+      if (content == null || content <= 0) return;
+
+      // Content height plus the inset the SafeArea adds beneath it: the one
+      // number every caller wants is total space occupied at the bottom of
+      // the screen. Callers live under extendBody: true, so the inset is
+      // still in their own MediaQuery and must not be added again there.
+      final total = content + MediaQuery.of(context).padding.bottom;
+      if ((navBarPillHeightNotifier.value - total).abs() > 0.5) {
+        navBarPillHeightNotifier.value = total;
+      }
+    });
+  }
+
   // The pill itself — swiping down on it tucks it away (see
   // _buildHiddenNavIndicator for how it comes back). The small down-arrow
   // riding just above it is the visual hint that this is possible at all —
   // nothing about a normal-looking nav bar otherwise suggests it's
   // swipeable.
+  // One key per nav state — see _reportNavAreaHeight for why there are two
+  // and why neither sits on the bottomNavigationBar slot itself.
   final GlobalKey _navPillKey = GlobalKey();
+  final GlobalKey _navHiddenKey = GlobalKey();
 
   Widget _buildFloatingNavBar(ColorScheme colors) {
-    // Reports this widget's actual rendered height once it's laid out, so
-    // anything positioned above it elsewhere (Community Chat's input bar)
-    // can clear it exactly rather than guessing — see navBarPillHeightNotifier
-    // in main.dart. Re-measures every build (font-scale changes, badge
-    // counts wrapping to a second line, etc. can all change this height).
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final height = _navPillKey.currentContext?.size?.height;
-      if (height != null && height > 0 && navBarPillHeightNotifier.value != height) {
-        navBarPillHeightNotifier.value = height;
-      }
-    });
+    _reportNavAreaHeight();
     return Padding(
       key: _navPillKey,
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -2466,7 +2855,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                   borderRadius: BorderRadius.circular(100),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.10),
+                      color: Colors.black.withValues(alpha: 0.10),
                       blurRadius: 10,
                       offset: const Offset(0, 3),
                     ),
@@ -2483,21 +2872,31 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                 borderRadius: BorderRadius.circular(32),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.12),
+                    color: Colors.black.withValues(alpha: 0.12),
                     blurRadius: 24,
                     offset: const Offset(0, 8),
                   ),
                 ],
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _buildNavItem(0, Icons.home_outlined, Icons.home, "Home", badgeCount: pendingRequests.length),
-                  _buildNavItem(1, Icons.people_outline,  Icons.people,    "Contacts"),
-                  _buildNavItem(2, Icons.campaign_outlined, Icons.campaign, "Community"),
-                  _buildNavItem(3, Icons.grid_view_outlined, Icons.grid_view, "Features"),
-                  _buildNavItem(4, Icons.star_outline,    Icons.star,      "My Features"),
-                ],
+              // Rebuilds just the row of nav items when unread state
+              // changes — nothing else in this screen depends on it, so a
+              // full setState on every incoming message would be wasteful.
+              child: ValueListenableBuilder<Set<UnreadSource>>(
+                valueListenable: UnreadTracker.instance.unread,
+                builder: (context, _, __) => Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildNavItem(0, Icons.home_outlined, Icons.home, "Home",
+                        badgeCount: pendingRequests.length),
+                    _buildNavItem(1, Icons.people_outline, Icons.people, "Contacts",
+                        showDot: UnreadTracker.instance.hasForNavTab(1)),
+                    _buildNavItem(2, Icons.campaign_outlined, Icons.campaign, "Community",
+                        showDot: UnreadTracker.instance.hasForNavTab(2)),
+                    _buildNavItem(3, Icons.grid_view_outlined, Icons.grid_view, "Features"),
+                    _buildNavItem(4, Icons.star_outline, Icons.star, "My Features",
+                        showDot: UnreadTracker.instance.hasForNavTab(4)),
+                  ],
+                ),
               ),
             ),
           ],
@@ -2515,8 +2914,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // AnimatedSwitcher's own Stack (bottomCenter-aligned, see above) is what
   // actually positions this now.
   Widget _buildHiddenNavIndicator(ColorScheme colors) {
+    // Also re-measures: tucking the pill away shrinks the bottom area to
+    // just this little arrow, and anything clearing it (Community Chat's
+    // input bar) should move down to match rather than keep a pill-sized
+    // gap under it.
+    _reportNavAreaHeight();
     return Padding(
-      key: const ValueKey('navBarHidden'),
+      // Doubles as the AnimatedSwitcher's discriminator (it replaces a
+      // ValueKey that was here for exactly that): the pill carries
+      // _navPillKey, so the two children still compare as different and
+      // the transition still runs.
+      key: _navHiddenKey,
       padding: const EdgeInsets.only(bottom: 10),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -2534,7 +2942,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             borderRadius: BorderRadius.circular(100),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.12),
+                color: Colors.black.withValues(alpha: 0.12),
                 blurRadius: 16,
                 offset: const Offset(0, 4),
               ),
@@ -2546,7 +2954,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label, {int badgeCount = 0}) {
+  Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label,
+      {int badgeCount = 0, bool showDot = false}) {
     bool isSelected = _currentIndex == index;
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -2575,7 +2984,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               clipBehavior: Clip.none,
               children: [
                 Icon(isSelected ? activeIcon : icon,
-                    color: isSelected ? Colors.white : colors.primary.withOpacity(0.6)),
+                    color: isSelected ? Colors.white : colors.primary.withValues(alpha: 0.6)),
                 if (badgeCount > 0)
                   Positioned(
                     right: -6,
@@ -2595,6 +3004,24 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                             color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold, height: 1.3),
                       ),
                     ),
+                  )
+                // Countless dot, for "something arrived here" sources where
+                // a precise number isn't meaningful (a broadcast chat, a
+                // feature that fired). Deliberately else-if: a tab already
+                // showing a real count doesn't also need a dot.
+                else if (showDot)
+                  Positioned(
+                    right: -3,
+                    top: -1,
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: theme.scaffoldBackgroundColor, width: 1.5),
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -2606,7 +3033,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                 style: TextStyle(
                   fontSize: 9,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                  color: isSelected ? Colors.white : colors.primary.withOpacity(0.6),
+                  color: isSelected ? Colors.white : colors.primary.withValues(alpha: 0.6),
                 ),
                 maxLines: 1,
               ),
@@ -2621,11 +3048,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return Scaffold(
-      appBar: _buildSharedCustomAppBar("Contacts"),
+      appBar: _buildSharedCustomAppBar("Contacts", showMeta: false),
       body: Container(
         decoration: BoxDecoration(
           gradient: RadialGradient(
-            center: Alignment(1.0, -1.0),
+            center: const Alignment(1.0, -1.0),
             radius: 1.5,
             colors: [colors.surface, theme.scaffoldBackgroundColor],
           ),
@@ -2635,12 +3062,12 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.cruelty_free, size: 64, color: colors.primary.withOpacity(0.18)),
+                    Icon(Icons.cruelty_free, size: 64, color: colors.primary.withValues(alpha: 0.18)),
                     const SizedBox(height: 16),
                     Text(
                       "No contacts yet.\nEnter a pairing code to connect.",
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: colors.onSurface.withOpacity(0.5), height: 1.4),
+                      style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5), height: 1.4),
                     ),
                   ],
                 ),
@@ -2658,12 +3085,12 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                   style: const TextStyle(fontSize: 14),
                   decoration: InputDecoration(
                     hintText: "Search contacts…",
-                    hintStyle: TextStyle(color: colors.onSurface.withOpacity(0.4)),
-                    prefixIcon: Icon(Icons.search, size: 20, color: colors.onSurface.withOpacity(0.5)),
+                    hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.4)),
+                    prefixIcon: Icon(Icons.search, size: 20, color: colors.onSurface.withValues(alpha: 0.5)),
                     suffixIcon: _contactSearchQuery.isEmpty
                         ? null
                         : IconButton(
-                            icon: Icon(Icons.close, size: 18, color: colors.onSurface.withOpacity(0.5)),
+                            icon: Icon(Icons.close, size: 18, color: colors.onSurface.withValues(alpha: 0.5)),
                             onPressed: () => setState(() {
                               _contactSearchController.clear();
                               _contactSearchQuery = '';
@@ -2685,7 +3112,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                       child: Text(
                         "No contacts match \"$_contactSearchQuery\".",
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: colors.onSurface.withOpacity(0.5)),
+                        style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
                       ),
                     )
                   : ListView.builder(
@@ -2693,12 +3120,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           // extendBody: true so the body draws underneath it, and without
           // this the last one or two contacts end up permanently hidden
           // behind the pill with no way to scroll past it.
-          padding: EdgeInsets.fromLTRB(0, 8, 0, kFloatingNavClearance),
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, kFloatingNavClearance),
           itemCount: _filteredContacts.length,
           itemBuilder: (context, index) {
             final contact = _filteredContacts[index];
             final username = contact['username'] as String;
             final avatarPath = contact['avatarPath'] as String?;
+            final isBot = username == kHopsBotUsername;
             return Container(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               child: HopsCard(
@@ -2710,6 +3138,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                     builder: (_) => IndividualChatTerminalView(
                       peerName: username,
                       onDeleteContact: _deleteContact,
+                      isBot: isBot,
                     ),
                   ),
                 ).then((_) => _refreshContactsTrayList()),
@@ -2720,22 +3149,31 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                 // the photo, or the default person icon if none is
                 // cached yet (only known once you've chatted with them).
                 leading: GestureDetector(
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ContactProfileScreen(
-                        peerUsername: username,
-                        onDeleteContact: _deleteContact,
-                      ),
-                    ),
-                  ).then((_) => _refreshContactsTrayList()),
-                  child: CircleAvatar(
-                    radius: 24,
-                    backgroundColor: colors.primary.withOpacity(0.1),
-                    backgroundImage: avatarPath != null ? FileImage(File(avatarPath)) : null,
-                    child: avatarPath == null
-                        ? Icon(Icons.cruelty_free, color: colors.primary)
-                        : null,
-                  ),
+                  // The assistant has no profile card to open — no bio, no
+                  // avatar exchange, and its delete action would offer to
+                  // remove something that can't be removed. Tapping the
+                  // circle just opens the chat, same as the row.
+                  onTap: isBot
+                      ? null
+                      : () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ContactProfileScreen(
+                                peerUsername: username,
+                                onDeleteContact: _deleteContact,
+                              ),
+                            ),
+                          ).then((_) => _refreshContactsTrayList()),
+                  child: isBot
+                      ? const HopsBotAvatar(radius: 24)
+                      : CircleAvatar(
+                          radius: 24,
+                          backgroundColor: colors.primary.withValues(alpha: 0.1),
+                          backgroundImage:
+                              avatarPath != null ? FileImage(File(avatarPath)) : null,
+                          child: avatarPath == null
+                              ? Icon(Icons.cruelty_free, color: colors.primary)
+                              : null,
+                        ),
                 ),
                 title: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2750,7 +3188,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                     const SizedBox(width: 8),
                     Text(
                       contact['time'] as String,
-                      style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.4)),
+                      style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.4)),
                     ),
                   ],
                 ),
@@ -2760,7 +3198,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                     contact['lastMsg'] as String,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 13, color: colors.onSurface.withOpacity(0.6)),
+                    style: TextStyle(fontSize: 13, color: colors.onSurface.withValues(alpha: 0.6)),
                   ),
                 ),
               ),
@@ -2799,11 +3237,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: colors.onSurface.withOpacity(0.2), borderRadius: BorderRadius.circular(100)))),
+                Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: colors.onSurface.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(100)))),
                 const SizedBox(height: 20),
                 Text("Add Peer Node", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: colors.primary)),
                 const SizedBox(height: 6),
-                Text("Enter the 6‑character pairing code shown on your classmate's device.", style: TextStyle(fontSize: 13, color: colors.onSurface.withOpacity(0.6))),
+                Text("Enter the 6‑character pairing code shown on your classmate's device.", style: TextStyle(fontSize: 13, color: colors.onSurface.withValues(alpha: 0.6))),
                 const SizedBox(height: 24),
                 Text("ENTER PAIRING CODE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: colors.primary, letterSpacing: 1.2)),
                 const SizedBox(height: 6),
@@ -2870,8 +3308,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   }
 
   void _showTokenGeneratorDialog(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
     showDialog(context: context, builder: (context) => TokenGeneratorWorkspace(
       onCodeGenerated: (code) {
         _startPairingServer(code);
@@ -2929,7 +3365,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         subtitle: Text(
           feature.shortDesc,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6)),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
           // Was maxLines: 1 — several of the rewritten shortDesc strings
           // don't fit on one line at this width/font size and were
           // rendering as a truncated "…" instead of the actual sentence.
@@ -2940,7 +3376,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
               feature.longDesc,
-              style: TextStyle(fontSize: 13, color: colors.onSurface.withOpacity(0.85)),
+              style: TextStyle(fontSize: 13, color: colors.onSurface.withValues(alpha: 0.85)),
             ),
           ),
           Align(
@@ -2955,7 +3391,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                 label: Text(isEnabled ? "Remove" : "Add"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: isEnabled
-                      ? colors.tertiaryContainer.withOpacity(0.3)
+                      ? colors.tertiaryContainer.withValues(alpha: 0.3)
                       : colors.primary,
                   foregroundColor: isEnabled ? colors.primary : Colors.white,
                   shape: RoundedRectangleBorder(
@@ -2988,7 +3424,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         title: Text("My Features",
             style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary)),
         elevation: 0,
-        backgroundColor: theme.scaffoldBackgroundColor.withOpacity(0.8),
+        backgroundColor: theme.scaffoldBackgroundColor.withValues(alpha: 0.8),
         actions: [
           TextButton.icon(
             icon: Icon(Icons.add_circle_outline, size: 18, color: colors.primary),
@@ -3001,7 +3437,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       body: Container(
         decoration: BoxDecoration(
           gradient: RadialGradient(
-            center: Alignment(1.0, -1.0),
+            center: const Alignment(1.0, -1.0),
             radius: 1.5,
             colors: [colors.surface, theme.scaffoldBackgroundColor],
           ),
@@ -3011,10 +3447,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           child: Text(
             "No features added yet.\nGo to 'Features' to enable some!",
             textAlign: TextAlign.center,
-            style: TextStyle(color: colors.onSurface.withOpacity(0.5)),
+            style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
           ),
         )
-            : GridView.builder(
+            // Rebuilds the grid when a feature's unread state changes, so a
+            // dot appears/clears without needing the tab to be reopened.
+            : ValueListenableBuilder<Set<UnreadSource>>(
+          valueListenable: UnreadTracker.instance.unread,
+          builder: (context, _, __) => GridView.builder(
           // Same floating-nav-pill clearance as Features/Contacts.
           padding: const EdgeInsets.fromLTRB(16, 16, 16, kFloatingNavClearance),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -3045,7 +3485,31 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                   Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(feature.icon, size: 36, color: colors.primary),
+                      // Dot rides the icon's top-right rather than the
+                      // card's — the card's own top-right corner is
+                      // already the pin toggle's tap target, and this also
+                      // matches how the bottom-nav items badge their icons.
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Icon(feature.icon, size: 36, color: colors.primary),
+                          if (UnreadTracker.instance.hasForFeature(feature.id))
+                            Positioned(
+                              right: -2,
+                              top: -2,
+                              child: Container(
+                                width: 11,
+                                height: 11,
+                                decoration: BoxDecoration(
+                                  color: Colors.redAccent,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                      color: theme.cardColor, width: 1.5),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                       const SizedBox(height: 8),
                       FittedBox(
                         fit: BoxFit.scaleDown,
@@ -3076,7 +3540,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                           size: 16,
                           color: isPinned
                               ? colors.primary
-                              : colors.primary.withOpacity(0.35),
+                              : colors.primary.withValues(alpha: 0.35),
                         ),
                       ),
                     ),
@@ -3118,6 +3582,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               },
             );
           },
+        ),
         )),
       ),
     );

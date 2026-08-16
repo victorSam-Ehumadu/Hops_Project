@@ -158,9 +158,9 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
               style: TextStyle(color: colors.onSurface),   // typed text
               decoration: InputDecoration(
                 labelText: 'Nickname',
-                labelStyle: TextStyle(color: colors.primary.withOpacity(0.7)),
+                labelStyle: TextStyle(color: colors.primary.withValues(alpha: 0.7)),
                 hintText: 'Your display name',
-                hintStyle: TextStyle(color: colors.onSurface.withOpacity(0.4)),
+                hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.4)),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(color: colors.primary, width: 1.5),
@@ -183,9 +183,9 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
               style: TextStyle(color: colors.onSurface),   // typed text
               decoration: InputDecoration(
                 labelText: 'Bio',
-                labelStyle: TextStyle(color: colors.onSurface.withOpacity(0.7)),
+                labelStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.7)),
                 hintText: 'Tell people about yourself',
-                hintStyle: TextStyle(color: colors.onSurface.withOpacity(0.4)),
+                hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.4)),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(color: colors.primary, width: 1.5),

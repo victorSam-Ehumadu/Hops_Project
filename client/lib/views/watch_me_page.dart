@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:client/services/notification_service.dart';
+import 'package:client/services/unread_tracker.dart';
 
 class WatchMePage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
@@ -62,6 +63,7 @@ class _WatchMePageState extends State<WatchMePage> {
   @override
   void initState() {
     super.initState();
+    UnreadTracker.instance.clear(UnreadSource.watchMe);
     _watchingBuddies = Set<String>.from(widget.watchingBuddies);
     _pendingSub = widget.pendingWatchStream
         .listen((requests) => setState(() => _pendingRequests = requests));
@@ -135,8 +137,9 @@ class _WatchMePageState extends State<WatchMePage> {
         return;
       }
       if (_lastSeen != null && now.difference(_lastSeen!).inSeconds >= 10) {
-        if (!_alertCooldown && !_alertActive)
+        if (!_alertCooldown && !_alertActive) {
           _triggerAlert("Buddy disappeared!");
+        }
       } else if (_lastRssi < -80 &&
           !_alertActive &&
           !_alertCooldown &&
@@ -162,6 +165,7 @@ class _WatchMePageState extends State<WatchMePage> {
     // the screen on top, which defeats the point of a *safety* alert. This
     // is what actually reaches someone elsewhere in the app or with it
     // backgrounded.
+    UnreadTracker.instance.mark(UnreadSource.watchMe);
     NotificationService.showWatchMeAlertNotification(message: message);
     if (!mounted) return;
     showDialog(
@@ -222,7 +226,7 @@ class _WatchMePageState extends State<WatchMePage> {
         const SizedBox(height: 6),
         Text(
           "Signal: $rssi dBm",
-          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6)),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
@@ -230,7 +234,7 @@ class _WatchMePageState extends State<WatchMePage> {
         LinearProgressIndicator(
           value: everSeen ? ratio : 0,
           color: proximity.color,
-          backgroundColor: colors.onSurface.withOpacity(0.15),
+          backgroundColor: colors.onSurface.withValues(alpha: 0.15),
           minHeight: 12,
         ),
         const SizedBox(height: 8),
@@ -245,7 +249,7 @@ class _WatchMePageState extends State<WatchMePage> {
         const SizedBox(height: 4),
         Text(
           "Rough estimate from Bluetooth signal strength — not an exact distance.",
-          style: TextStyle(fontSize: 10, color: colors.onSurface.withOpacity(0.5), fontStyle: FontStyle.italic),
+          style: TextStyle(fontSize: 10, color: colors.onSurface.withValues(alpha: 0.5), fontStyle: FontStyle.italic),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -263,7 +267,7 @@ class _WatchMePageState extends State<WatchMePage> {
     if (available.isEmpty) {
       return Text(
         "No friends available to watch — add some from the Home tab first.",
-        style: TextStyle(color: colors.onSurface.withOpacity(0.5), fontSize: 12),
+        style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5), fontSize: 12),
       );
     }
     return Wrap(
@@ -286,7 +290,7 @@ class _WatchMePageState extends State<WatchMePage> {
                 CircleAvatar(
                   radius: 10,
                   backgroundColor:
-                      selected ? Colors.white.withOpacity(0.25) : colors.primary.withOpacity(0.15),
+                      selected ? Colors.white.withValues(alpha: 0.25) : colors.primary.withValues(alpha: 0.15),
                   child: Text(
                     f.isNotEmpty ? f[0].toUpperCase() : '?',
                     style: TextStyle(
@@ -385,7 +389,7 @@ class _WatchMePageState extends State<WatchMePage> {
                 padding: const EdgeInsets.only(left: 16, top: 4),
                 child: Text(
                   "No pending requests",
-                  style: TextStyle(color: colors.onSurface.withOpacity(0.5), fontSize: 13),
+                  style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5), fontSize: 13),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -405,7 +409,7 @@ class _WatchMePageState extends State<WatchMePage> {
                           CircleAvatar(
                             radius: 16,
                             backgroundColor:
-                            colors.primary.withOpacity(0.1),
+                            colors.primary.withValues(alpha: 0.1),
                             child: Text(sender.isNotEmpty ? sender[0] : '?',
                                 style: TextStyle(
                                     fontWeight: FontWeight.bold,
@@ -491,10 +495,14 @@ class _WatchMePageState extends State<WatchMePage> {
               ),
               onPressed: _selectedBuddy != null && !_isRequesting
                   ? () async {
+                final messenger = ScaffoldMessenger.of(context);
                 setState(() => _isRequesting = true);
                 await widget.onSendWatchRequest(_selectedBuddy!);
+                // The request goes out over Bluetooth and can take a while;
+                // this screen is closable the whole time.
+                if (!mounted) return;
                 setState(() => _isRequesting = false);
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.showSnackBar(
                   SnackBar(
                       content:
                       Text("Request sent to $_selectedBuddy")),

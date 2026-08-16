@@ -47,9 +47,9 @@ class _ThemePickerScreenState extends State<ThemePickerScreen> {
             ),
             subtitle: Text(
               currentThemeName,
-              style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
             ),
-            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withOpacity(0.4)),
+            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.4)),
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const ColorThemePage()),
@@ -65,9 +65,9 @@ class _ThemePickerScreenState extends State<ThemePickerScreen> {
             ),
             subtitle: Text(
               currentFontName,
-              style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
             ),
-            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withOpacity(0.4)),
+            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.4)),
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const FontPickerPage()),
@@ -83,9 +83,9 @@ class _ThemePickerScreenState extends State<ThemePickerScreen> {
             ),
             subtitle: Text(
               "${(fontScaleNotifier.value * 100).round()}%",
-              style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
             ),
-            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withOpacity(0.4)),
+            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.4)),
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const FontSizePage()),

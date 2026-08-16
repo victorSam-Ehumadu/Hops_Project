@@ -2,10 +2,12 @@ package com.example.client
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
@@ -21,9 +23,16 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         lateinit var context: Context
+        private const val REQUEST_DISCOVERABLE = 4201
     }
 
     private val activeServices = mutableMapOf<String, RfcommChatService>()
+
+    // Pending result for ensureDiscoverable — startActivityForResult is
+    // asynchronous (the system "make this device discoverable" dialog),
+    // so the MethodChannel.Result has to be held here and completed once
+    // onActivityResult actually fires, not returned inline.
+    private var discoverableResult: MethodChannel.Result? = null
 
     // ── Discovery (from YT tutorial approach) ────────────────────────────────
     // EventChannel streams found devices to Flutter as they are discovered.
@@ -53,6 +62,19 @@ class MainActivity : FlutterActivity() {
         if (receiverRegistered) {
             unregisterReceiver(foundDeviceReceiver)
             receiverRegistered = false
+        }
+    }
+
+    // Completes ensureDiscoverable's pending result. resultCode from
+    // ACTION_REQUEST_DISCOVERABLE is the granted duration in seconds on
+    // success (a positive int, NOT Activity.RESULT_OK), or
+    // Activity.RESULT_CANCELED (0) if the user declined.
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_DISCOVERABLE) {
+            val granted = resultCode != Activity.RESULT_CANCELED
+            discoverableResult?.success(granted)
+            discoverableResult = null
         }
     }
 
@@ -168,6 +190,31 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     } catch (e: Exception) {
                         result.error("STOP_ERROR", e.message, null)
+                    }
+                }
+
+                // ── Classic BT discoverability ──────────────────────────────────
+                // RFCOMM chat (see rfcomm_chat_service.dart) needs the OTHER
+                // device to see this one during classic Bluetooth discovery —
+                // for two devices that have never bonded before, that requires
+                // this device to be actively "discoverable," which (unlike BLE
+                // scanning/advertising permissions) Android requires an explicit
+                // user-facing system dialog for; it can't be silently granted.
+                // [seconds] argument controls how long discoverability lasts
+                // (Android caps this at 300s); result completes once the user
+                // responds to that dialog (or immediately with -1/"denied" if
+                // Bluetooth is already off or the intent can't be launched).
+                "ensureDiscoverable" -> {
+                    val seconds = call.argument<Int>("seconds") ?: 120
+                    try {
+                        discoverableResult = result
+                        val intent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+                            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, seconds)
+                        }
+                        startActivityForResult(intent, REQUEST_DISCOVERABLE)
+                    } catch (e: Exception) {
+                        discoverableResult = null
+                        result.error("DISCOVERABLE_ERROR", e.message, null)
                     }
                 }
 

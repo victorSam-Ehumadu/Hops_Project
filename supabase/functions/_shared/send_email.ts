@@ -17,6 +17,12 @@ export async function sendEmail(opts: {
   to: string;
   subject: string;
   html: string;
+  // Where a reply actually goes. Unset for OTP mail (nobody should reply to
+  // a verification code). Moderation email sets this to a real inbox so
+  // "reply to appeal" in the email body is a genuine instruction, not a
+  // dead end — see send-moderation-email, which is the one caller that
+  // passes it.
+  replyTo?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   if (!RESEND_API_KEY) {
     console.error("RESEND_API_KEY is not set — cannot send email. Run: supabase secrets set RESEND_API_KEY=...");
@@ -34,6 +40,7 @@ export async function sendEmail(opts: {
       to: [opts.to],
       subject: opts.subject,
       html: opts.html,
+      ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
     }),
   });
 

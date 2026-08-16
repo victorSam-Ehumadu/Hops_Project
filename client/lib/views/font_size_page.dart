@@ -82,7 +82,7 @@ class _FontSizePageState extends State<FontSizePage> {
                   Text(
                     'This is what regular text will look like around the app.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14 * _scale, color: colors.onSurface.withOpacity(0.75)),
+                    style: TextStyle(fontSize: 14 * _scale, color: colors.onSurface.withValues(alpha: 0.75)),
                   ),
                 ],
               ),
@@ -102,7 +102,7 @@ class _FontSizePageState extends State<FontSizePage> {
           const SizedBox(height: 8),
           Text(
             "This changes text size within Hops only — it doesn't affect your phone's system font size.",
-            style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.5)),
+            style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.5)),
           ),
         ],
       ),
@@ -127,7 +127,7 @@ class _FontSizeOptionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return Card(
-      color: selected ? colors.primaryContainer.withOpacity(0.3) : null,
+      color: selected ? colors.primaryContainer.withValues(alpha: 0.3) : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: selected ? BorderSide(color: colors.primary, width: 2) : BorderSide.none,

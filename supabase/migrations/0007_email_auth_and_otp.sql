@@ -66,7 +66,13 @@ alter table public.profiles
 --    the client can tell the user which field to change, instead of one
 --    generic "something's taken" for both.
 -- ---------------------------------------------------------------------------
+-- Both signatures: the pre-email 3-argument form this migration replaces,
+-- and the 4-argument form it creates below. Dropping only the former means
+-- re-running this file hits 42723 ("function already exists with same
+-- argument types") on the CREATE, since the thing actually in the way is
+-- the version this file made last time.
 drop function if exists public.signup_hops_user(text, text, text);
+drop function if exists public.signup_hops_user(text, text, text, text);
 
 create function public.signup_hops_user(
   p_username text,

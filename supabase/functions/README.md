@@ -1,12 +1,18 @@
 # Hops Edge Functions
 
-Two functions, both purely "generate a one-time code and email it" — the
-actual verification (does the code match?) happens entirely in Postgres via
-RPCs in `supabase/migrations/0007_email_auth_and_otp.sql`, so these are the
-only two places in the whole backend that make an outbound network call.
+Three functions — every outbound network call this backend makes. The first
+two are purely "generate a one-time code and email it"; the actual
+verification (does the code match?) happens entirely in Postgres via RPCs in
+`supabase/migrations/0007_email_auth_and_otp.sql`. The third notifies a
+student their account status changed, after the Postgres side (ban_user/
+suspend_user/etc., `0016_moderation_email_and_log_detail.sql`) already did
+the actual work — same shape as the other two: the client calls this only
+after the database call it depends on has already succeeded.
 
 - `send-password-reset-otp` — forgot-password flow
 - `send-verification-email` — signup / change-email verification
+- `send-moderation-email` — ban/suspend/reinstatement notice, with an
+  appeal path on the two restrictive kinds (see `HOPS_APPEALS_EMAIL` below)
 
 Both send through [Resend](https://resend.com) by default (see
 `_shared/send_email.ts`) purely because it needs nothing but an API key to
@@ -38,11 +44,18 @@ nothing else needs to change.
    ```
    supabase secrets set HOPS_EMAIL_FROM="Hops <noreply@yourdomain.com>"
    ```
+   And for `send-moderation-email` specifically, an inbox that actually
+   reads appeals — without this, "reply to this email to appeal" in a ban/
+   suspend notice is a promise nobody's checking:
+   ```
+   supabase secrets set HOPS_APPEALS_EMAIL=appeals@yourdomain.com
+   ```
 
-4. Deploy both functions:
+4. Deploy all three functions:
    ```
    supabase functions deploy send-password-reset-otp
    supabase functions deploy send-verification-email
+   supabase functions deploy send-moderation-email
    ```
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` don't need to be set manually

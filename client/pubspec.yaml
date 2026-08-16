@@ -38,6 +38,8 @@ dependencies:
   image_picker: ^1.0.0
   google_fonts: ^6.1.0
   quick_actions: ^1.0.7
+  flutter_tts: ^4.2.5
+  tflite_flutter: ^0.12.1
 
 
 dev_dependencies:
@@ -51,3 +53,17 @@ flutter:
   assets:
     - .env
     - assets/sounds/alert.wav
+    # Directory form, not a single file: anything dropped into assets/data/
+    # later (extra knowledge packs, offline lookup tables) is bundled without
+    # another pubspec edit. Only files directly in the folder — subfolders
+    # each need their own line.
+    - assets/data/
+    # Optional TFLite models (see hops_engine.dart). Currently holds only a
+    # .gitkeep — the engine treats a missing model as a normal state and
+    # falls back to its heuristic, so the app runs fine with this empty.
+    - assets/models/
+    # hops_bunny.png — the splash sprite (hops_splash_screen.dart), a 145×160
+    # downscale of android/.../res/drawable/splash_bunny.png. The full-size
+    # original is 1390×1536 / 2.5MB and stays where it is for the native
+    # launch screen; bundling it again for a 50px sprite would be pure APK.
+    - assets/images/

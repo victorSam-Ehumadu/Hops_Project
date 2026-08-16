@@ -66,13 +66,13 @@ class _VibeHistoryPageState extends State<VibeHistoryPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.history, size: 40, color: colors.primary.withOpacity(0.25)),
+                    Icon(Icons.history, size: 40, color: colors.primary.withValues(alpha: 0.25)),
                     const SizedBox(height: 12),
                     Text(
                       "No saved reports yet",
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: colors.onSurface.withOpacity(0.5),
+                        color: colors.onSurface.withValues(alpha: 0.5),
                       ),
                     ),
                   ],
@@ -111,7 +111,7 @@ class _VibeHistoryPageState extends State<VibeHistoryPage> {
                                 overflow: TextOverflow.ellipsis),
                             Text(
                               "${_levelNames[level]} · ${date.hour}:${date.minute.toString().padLeft(2, '0')}",
-                              style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.5)),
+                              style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
                             ),
                           ],
                         ),

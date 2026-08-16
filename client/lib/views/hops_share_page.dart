@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:client/services/notification_service.dart';
+import 'package:client/services/unread_tracker.dart';
 import 'package:client/main.dart' show nearbyConnectionsSessionCount;
 
 class HopsSharePage extends StatefulWidget {
@@ -20,7 +21,7 @@ class HopsSharePage extends StatefulWidget {
 }
 
 class _HopsSharePageState extends State<HopsSharePage> {
-  List<NearbyDevice> _discoveredDevices = [];
+  final List<NearbyDevice> _discoveredDevices = [];
   String? _connectedEndpointId;
   bool _isConnected = false;
   PlatformFile? _pickedFile;
@@ -40,6 +41,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
   @override
   void initState() {
     super.initState();
+    UnreadTracker.instance.clear(UnreadSource.hopsShare);
     // Stop BLE advertising while Nearby Connections is active — both compete
     // for Bluetooth Classic resources.
     BlePeripheral.stopAdvertising();
@@ -212,6 +214,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
     // Files can land here well after the sender's transfer finished — a
     // system notification is what actually tells you it arrived if you've
     // since backgrounded the app or moved to a different screen.
+    UnreadTracker.instance.mark(UnreadSource.hopsShare);
     await NotificationService.showFileReceivedNotification(sender: sender, fileName: fileName);
   }
 
@@ -369,7 +372,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.wifi_off, size: 48, color: colors.primary.withOpacity(0.4)),
+            Icon(Icons.wifi_off, size: 48, color: colors.primary.withValues(alpha: 0.4)),
             const SizedBox(height: 16),
             const Text(
               "Permissions required",
@@ -382,7 +385,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
                   "permissions to find nearby peers. Please grant them in "
                   "Settings → Apps → Hops → Permissions.",
               textAlign: TextAlign.center,
-              style: TextStyle(color: colors.onSurface.withOpacity(0.6), fontSize: 13, height: 1.5),
+              style: TextStyle(color: colors.onSurface.withValues(alpha: 0.6), fontSize: 13, height: 1.5),
             ),
             const SizedBox(height: 20),
             ElevatedButton.icon(
@@ -421,7 +424,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
                 const SizedBox(height: 16),
                 Text(
                   "Searching for nearby Hops users…",
-                  style: TextStyle(color: colors.onSurface.withOpacity(0.5)),
+                  style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
                 ),
               ],
             ),
@@ -432,7 +435,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
               final device = _discoveredDevices[index];
               return ListTile(
                 leading: CircleAvatar(
-                  backgroundColor: colors.primary.withOpacity(0.1),
+                  backgroundColor: colors.primary.withValues(alpha: 0.1),
                   child: Text(
                     device.name.isNotEmpty ? device.name[0] : '?',
                     style: TextStyle(color: colors.primary),
@@ -468,7 +471,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.circle, size: 10, color: Colors.green),
+              const Icon(Icons.circle, size: 10, color: Colors.green),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
@@ -549,7 +552,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
                   // sitting frozen at a misleading 0%.
                   value: (_sendProgress != null && _sendProgress! > 0) ? _sendProgress : null,
                   minHeight: 6,
-                  backgroundColor: colors.primary.withOpacity(0.12),
+                  backgroundColor: colors.primary.withValues(alpha: 0.12),
                   color: colors.primary,
                 ),
               ),
@@ -558,7 +561,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
                 _sendProgress != null
                     ? "${(_sendProgress! * 100).toStringAsFixed(0)}% sent"
                     : "Starting transfer…",
-                style: TextStyle(fontSize: 11, color: colors.onSurface.withOpacity(0.5)),
+                style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
               ),
             ],
           ],

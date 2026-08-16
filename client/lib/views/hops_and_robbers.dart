@@ -3,7 +3,6 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:uuid/uuid.dart';
-import 'package:client/theme/hops_theme.dart';
 import 'package:client/services/hops_constants.dart';
 
 enum GameRole { runner, robber }
@@ -75,7 +74,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
           final lobbyId = data['lobby_id'];
           final host = data['host'];
           final lobbyName = data['name'] ?? '$host\'s Lobby';
-          print("📡 Lobby seen: $lobbyName by $host");
+          debugPrint("📡 Lobby seen: $lobbyName by $host");
           if (lobbyId != null && host != null && host != widget.myUsername) {
             _lobbies[lobbyId] = _Lobby(
               id: lobbyId,
@@ -91,7 +90,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
           final data = _parseActionData(name.substring(14));
           final lobbyId = data['lobby_id'];
           final player = data['player'];
-          print("📩 Join request for lobby $lobbyId from $player");
+          debugPrint("📩 Join request for lobby $lobbyId from $player");
           if (lobbyId != null && player != null && _myLobbyId == lobbyId && _isHost) {
             setState(() {
               _lobbies[lobbyId]?.players.add(player);
@@ -140,7 +139,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
       'host': widget.myUsername,
       'name': safeName,
     });
-    print("📢 Broadcasting lobby: $safeName");
+    debugPrint("📢 Broadcasting lobby: $safeName");
 
     _lobbyAdTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       widget.onSendGameAction('LOBBY_AD', {
@@ -179,7 +178,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
       'lobby_id': lobbyId,
       'player': widget.myUsername,
     });
-    print("📩 Sending join request to lobby $lobbyId");
+    debugPrint("📩 Sending join request to lobby $lobbyId");
 
     _myLobbyId = lobbyId;
     _isHost = false;
@@ -356,8 +355,8 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
             Container(
               padding: const EdgeInsets.all(16),
               color: _myRole == GameRole.robber
-                  ? Colors.red.withOpacity(0.2)
-                  : Colors.green.withOpacity(0.2),
+                  ? Colors.red.withValues(alpha: 0.2)
+                  : Colors.green.withValues(alpha: 0.2),
               child: Row(
                 children: [
                   Icon(
@@ -422,7 +421,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
             if (_myRole == GameRole.robber && _nearbyRunners.isNotEmpty)
               Container(
                 padding: const EdgeInsets.all(12),
-                color: Colors.red.withOpacity(0.1),
+                color: Colors.red.withValues(alpha: 0.1),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -482,8 +481,8 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
             Container(
               padding: const EdgeInsets.all(16),
               color: _isHost
-                  ? Colors.blue.withOpacity(0.1)
-                  : Colors.green.withOpacity(0.1),
+                  ? Colors.blue.withValues(alpha: 0.1)
+                  : Colors.green.withValues(alpha: 0.1),
               child: Row(
                 children: [
                   Icon(
@@ -496,7 +495,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
                       _isHost
                           ? "You are the host"
                           : "Waiting for host to start...",
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
@@ -512,7 +511,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
                 padding: const EdgeInsets.all(16),
                 children: [
                   ListTile(
-                    leading: CircleAvatar(
+                    leading: const CircleAvatar(
                       backgroundColor: Colors.blue,
                       child: Icon(Icons.star, color: Colors.white),
                     ),
@@ -524,7 +523,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
                     subtitle: const Text("Host"),
                   ),
                   ...players.map((p) => ListTile(
-                    leading: CircleAvatar(
+                    leading: const CircleAvatar(
                       backgroundColor: Colors.green,
                       child: Icon(Icons.person, color: Colors.white),
                     ),
@@ -587,7 +586,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
         child: Text(
           "No lobbies found.\nCreate one with the + button.",
           textAlign: TextAlign.center,
-          style: TextStyle(color: colors.onSurface.withOpacity(0.5)),
+          style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
         ),
@@ -604,7 +603,7 @@ class _HopsAndRobbersPageState extends State<HopsAndRobbersPage> {
             child: ListTile(
               leading: CircleAvatar(
                 backgroundColor:
-                colors.primary.withOpacity(0.1),
+                colors.primary.withValues(alpha: 0.1),
                 child: Icon(Icons.person,
                     color: colors.primary),
               ),

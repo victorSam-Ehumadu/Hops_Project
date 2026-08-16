@@ -38,6 +38,7 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
     final dir = await getApplicationDocumentsDirectory();
     final path = '${dir.path}/$fileName';
     final result = await OpenFilex.open(path);
+    if (!mounted) return;
     if (result.type != ResultType.done) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Could not open file: ${result.message}")),
@@ -52,8 +53,9 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
     if (await file.exists()) {
       await Share.shareXFiles([XFile(path)], text: 'Received via Hops');
     } else {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("File not found")),
+        const SnackBar(content: Text("File not found")),
       );
     }
   }
@@ -101,7 +103,7 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: ListTile(
               leading: CircleAvatar(
-                backgroundColor: colors.primary.withOpacity(0.1),
+                backgroundColor: colors.primary.withValues(alpha: 0.1),
                 child: Icon(icon, color: colors.primary),
               ),
               title: Text(

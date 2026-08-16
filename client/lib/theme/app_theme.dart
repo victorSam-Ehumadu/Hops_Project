@@ -23,10 +23,10 @@ class AppFonts {
   // Not const — GoogleFonts.xyz are themselves functions (tear-offs), not
   // compile-time constants.
   static final List<FontPairing> all = [
-    FontPairing(name: 'Poppins + Nunito', headlineFont: GoogleFonts.poppins, bodyFont: GoogleFonts.nunito),
-    FontPairing(name: 'Montserrat + Inter', headlineFont: GoogleFonts.montserrat, bodyFont: GoogleFonts.inter),
-    FontPairing(name: 'Rubik + Roboto', headlineFont: GoogleFonts.rubik, bodyFont: GoogleFonts.roboto),
-    FontPairing(name: 'Lato + Merriweather', headlineFont: GoogleFonts.lato, bodyFont: GoogleFonts.merriweather),
+    const FontPairing(name: 'Poppins + Nunito', headlineFont: GoogleFonts.poppins, bodyFont: GoogleFonts.nunito),
+    const FontPairing(name: 'Montserrat + Inter', headlineFont: GoogleFonts.montserrat, bodyFont: GoogleFonts.inter),
+    const FontPairing(name: 'Rubik + Roboto', headlineFont: GoogleFonts.rubik, bodyFont: GoogleFonts.roboto),
+    const FontPairing(name: 'Lato + Merriweather', headlineFont: GoogleFonts.lato, bodyFont: GoogleFonts.merriweather),
   ];
 }
 
@@ -82,7 +82,7 @@ class AppTheme {
       onTertiary: onTertiaryContainer,
       surface: surface,
       onSurface: onBackground,
-      surfaceContainerHighest: isDark ? surface : surface.withOpacity(0.8),
+      surfaceContainerHighest: isDark ? surface : surface.withValues(alpha: 0.8),
       error: Colors.red.shade400,
       onError: Colors.white,
     );
@@ -129,7 +129,7 @@ class AppTheme {
       // same consistent look for free.
       cardTheme: CardThemeData(
         elevation: 3,
-        shadowColor: Colors.black.withOpacity(0.25),
+        shadowColor: Colors.black.withValues(alpha: 0.25),
         color: surface,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -314,4 +314,26 @@ class AppThemes {
       brightness: Brightness.dark,
     ),
   ];
+
+  // ── Plain dark-mode switching ─────────────────────────────────────────
+  //
+  // The catalog above is a flat list a user picks from by name, which is
+  // fine for "make it look nice" but has no answer for "just turn dark
+  // mode on". These give a simple switch something to aim at.
+  //
+  // No light↔dark pairing table on purpose: the themes are named by
+  // feeling rather than paired one-to-one (Sunset Glow's counterpart is
+  // Sunset Ember, five entries later, while Neon Vibes has no obvious
+  // twin), so any arithmetic mapping would be wrong for some of them.
+  // Callers remember the last index used at each brightness instead — see
+  // admin_settings_screen.dart's _setDarkMode.
+
+  /// Hops Default.
+  static const int defaultLightIndex = 0;
+
+  /// Midnight.
+  static const int defaultDarkIndex = 6;
+
+  static bool isDark(int index) =>
+      index >= 0 && index < all.length && all[index].brightness == Brightness.dark;
 }

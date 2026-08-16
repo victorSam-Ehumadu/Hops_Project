@@ -262,7 +262,7 @@ If you do not agree, you must discontinue use of the application immediately.
                     style: TextStyle(
                       fontSize: 13,
                       height: 1.5,
-                      color: colors.onSurface.withOpacity(0.7),
+                      color: colors.onSurface.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -284,7 +284,7 @@ If you do not agree, you must discontinue use of the application immediately.
                           height: 26,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: colors.primary.withOpacity(0.12),
+                            color: colors.primary.withValues(alpha: 0.12),
                             shape: BoxShape.circle,
                           ),
                           child: Text(
@@ -321,7 +321,7 @@ If you do not agree, you must discontinue use of the application immediately.
                           style: TextStyle(
                             fontSize: 13,
                             height: 1.5,
-                            color: colors.onSurface.withOpacity(0.75),
+                            color: colors.onSurface.withValues(alpha: 0.75),
                           ),
                         ),
                       ),
@@ -377,7 +377,7 @@ _ParsedTerms _parseTerms(String text) {
 
   void flush() {
     if (currentNumber != null) {
-      sections.add(_TermsSection(number: currentNumber!, title: currentTitle, lines: currentLines));
+      sections.add(_TermsSection(number: currentNumber, title: currentTitle, lines: currentLines));
     }
   }
 

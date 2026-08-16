@@ -63,7 +63,7 @@ class _FontPickerPageState extends State<FontPickerPage> {
                   borderRadius: BorderRadius.circular(16),
                   side: isSelected
                       ? BorderSide(color: colors.primary, width: 2)
-                      : BorderSide(color: colors.outline.withOpacity(0.15)),
+                      : BorderSide(color: colors.outline.withValues(alpha: 0.15)),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -89,7 +89,7 @@ class _FontPickerPageState extends State<FontPickerPage> {
                               style: f.bodyFont(
                                 textStyle: TextStyle(
                                   fontSize: 13,
-                                  color: colors.onSurface.withOpacity(0.7),
+                                  color: colors.onSurface.withValues(alpha: 0.7),
                                 ),
                               ),
                             ),
@@ -99,7 +99,7 @@ class _FontPickerPageState extends State<FontPickerPage> {
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: colors.onSurface.withOpacity(0.5),
+                                color: colors.onSurface.withValues(alpha: 0.5),
                               ),
                             ),
                           ],

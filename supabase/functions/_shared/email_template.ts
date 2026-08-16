@@ -61,3 +61,58 @@ export function otpBodyHtml(opts: { intro: string; code: string; minutes: number
     <p style="margin:0;color:#6b7280;">This code expires in ${opts.minutes} minutes. If you didn't request this, you can ignore this email — your account is still safe.</p>
   `;
 }
+
+// Ban/suspend/reinstatement body — used by send-moderation-email. One
+// function handling all four kinds (not four near-identical templates)
+// so the wording can't quietly drift between them.
+//
+// Every restrictive kind (ban, suspend) includes an appeal path — that's
+// the whole reason this template exists rather than reusing a bare
+// user_notifications row: a suspension with no way to contest it is just
+// a wall, and reply_to on the send call (see send-moderation-email) is
+// what makes "reply to this email" a real instruction instead of one that
+// bounces.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export function moderationBodyHtml(opts: {
+  kind: "ban" | "suspend" | "unban" | "unsuspend";
+  reason?: string | null;
+  suspendedUntil?: string | null; // ISO, "suspend" only
+}): string {
+  const reasonHtml = opts.reason && opts.reason.trim().length > 0
+    ? `<p style="margin:0 0 16px 0;"><strong>Reason given:</strong> ${escapeHtml(opts.reason)}</p>`
+    : "";
+
+  if (opts.kind === "unban" || opts.kind === "unsuspend") {
+    const what = opts.kind === "unban" ? "ban" : "suspension";
+    return `
+      <p style="margin:0 0 16px 0;">Good news — the ${what} on your Hops account has been lifted. You can sign in normally.</p>
+      <p style="margin:0;color:#6b7280;">If you have any questions, just reply to this email.</p>
+    `;
+  }
+
+  const untilHtml = opts.kind === "suspend" && opts.suspendedUntil
+    ? `<p style="margin:0 0 16px 0;"><strong>Suspended until:</strong> ${
+        new Date(opts.suspendedUntil).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+      }</p>`
+    : "";
+
+  const headline = opts.kind === "ban"
+    ? "Your Hops account has been permanently suspended (banned)."
+    : "Your Hops account has been temporarily suspended.";
+
+  return `
+    <p style="margin:0 0 16px 0;">${headline}</p>
+    ${reasonHtml}
+    ${untilHtml}
+    <div style="margin:20px 0;padding:16px;background:#f4f6f5;border-radius:12px;">
+      <p style="margin:0;font-weight:700;color:#111827;">Think this is a mistake?</p>
+      <p style="margin:6px 0 0 0;color:#374151;">Reply directly to this email to appeal — a real person on the Hops admin team will read it and follow up with you.</p>
+    </div>
+  `;
+}

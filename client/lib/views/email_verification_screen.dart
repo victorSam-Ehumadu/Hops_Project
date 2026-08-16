@@ -132,13 +132,13 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
                     _sending
                         ? "Sending a code to ${widget.email}…"
                         : "We sent a 6-digit code to ${widget.email}. Enter it below to confirm it's really yours.",
-                    style: TextStyle(fontSize: 14, color: colors.onSurface.withOpacity(0.65), height: 1.4),
+                    style: TextStyle(fontSize: 14, color: colors.onSurface.withValues(alpha: 0.65), height: 1.4),
                   ),
                   const SizedBox(height: 28),
                   if (_error != null) ...[
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(color: Colors.red.withOpacity(0.08), borderRadius: BorderRadius.circular(12)),
+                      decoration: BoxDecoration(color: Colors.red.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12)),
                       child: Row(
                         children: [
                           const Icon(Icons.error_outline, color: Colors.redAccent, size: 18),
@@ -192,7 +192,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
                   Center(
                     child: TextButton(
                       onPressed: _busy ? null : () => Navigator.of(context).pop(false),
-                      child: Text("Skip for now", style: TextStyle(color: colors.onSurface.withOpacity(0.5), fontSize: 13)),
+                      child: Text("Skip for now", style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5), fontSize: 13)),
                     ),
                   ),
                 ],

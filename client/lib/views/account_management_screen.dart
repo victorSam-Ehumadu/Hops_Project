@@ -3,9 +3,7 @@
 // Replaces the old standalone "Log Out / Destroy Identity" card on the
 // profile screen with a dedicated hub for the three things people actually
 // mean by "manage my account": change password, log out, delete account.
-import 'dart:convert';
 import 'package:ble_peripheral/ble_peripheral.dart';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -16,17 +14,15 @@ import 'package:client/database/database_helper.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/utils/auth_error_messages.dart';
 import 'package:client/utils/password_policy.dart';
+import 'package:client/utils/mesh_crypto.dart';
 import 'package:client/widgets/password_strength_bar.dart';
 import 'package:client/views/email_verification_screen.dart';
-
-String _hashPassword(String password) =>
-    sha256.convert(utf8.encode(password)).toString();
 
 /// Clears every locally-scoped identity key and the cached sqlite db, then
 /// drops the caller onto the gatekeeper. Shared by both "Log Out" and
 /// "Delete Account" (deletion also needs the server-side row gone first,
 /// which the caller does before calling this).
-Future<void> _wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async {
+Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async {
   // Belt-and-suspenders: HopsApp's own dispose() already stops advertising
   // once pushAndRemoveUntil below tears its route down, but that's an
   // indirect consequence of widget disposal timing, not something this
@@ -112,7 +108,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     );
     if (confirmed != true || !mounted) return;
     setState(() => _busy = true);
-    await _wipeLocalIdentityAndReturnToGatekeeper(context);
+    await wipeLocalIdentityAndReturnToGatekeeper(context);
   }
 
   Future<void> _openChangePassword() async {
@@ -232,7 +228,7 @@ class _ManagementTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return Card(
-      color: destructive ? Colors.red.withOpacity(0.05) : null,
+      color: destructive ? Colors.red.withValues(alpha: 0.05) : null,
       child: ListTile(
         leading: Icon(icon, color: iconColor),
         title: Text(
@@ -245,9 +241,9 @@ class _ManagementTile extends StatelessWidget {
         ),
         subtitle: Text(
           subtitle,
-          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6)),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
         ),
-        trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withOpacity(0.4)),
+        trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.4)),
         onTap: onTap,
       ),
     );
@@ -314,8 +310,8 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
 
       final ok = await Supabase.instance.client.rpc('change_hops_password', params: {
         'p_hops_token': token,
-        'p_old_password_hash': _hashPassword(current),
-        'p_new_password_hash': _hashPassword(next),
+        'p_old_password_hash': hashPassword(current),
+        'p_new_password_hash': hashPassword(next),
       }) as bool;
 
       if (!mounted) return;
@@ -356,7 +352,7 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.08),
+                  color: Colors.red.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
@@ -464,7 +460,7 @@ class _ChangeEmailScreenState extends State<_ChangeEmailScreen> {
 
       final ok = await Supabase.instance.client.rpc('change_hops_email', params: {
         'p_hops_token': token,
-        'p_password_hash': _hashPassword(password),
+        'p_password_hash': hashPassword(password),
         'p_new_email': newEmail.toLowerCase(),
       }) as bool;
 
@@ -525,7 +521,7 @@ class _ChangeEmailScreenState extends State<_ChangeEmailScreen> {
             if (_currentEmail != null) ...[
               Text(
                 "Current email: $_currentEmail",
-                style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6)),
+                style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
               ),
               const SizedBox(height: 16),
             ],
@@ -533,7 +529,7 @@ class _ChangeEmailScreenState extends State<_ChangeEmailScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.08),
+                  color: Colors.red.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
@@ -613,7 +609,7 @@ class _DeleteAccountScreenState extends State<_DeleteAccountScreen> {
 
       final ok = await Supabase.instance.client.rpc('delete_hops_user', params: {
         'p_hops_token': token,
-        'p_password_hash': _hashPassword(password),
+        'p_password_hash': hashPassword(password),
       }) as bool;
 
       if (!mounted) return;
@@ -627,7 +623,7 @@ class _DeleteAccountScreenState extends State<_DeleteAccountScreen> {
 
       // Server-side row is gone — now wipe everything local and drop back
       // to the gatekeeper, same as logging out.
-      await _wipeLocalIdentityAndReturnToGatekeeper(context);
+      await wipeLocalIdentityAndReturnToGatekeeper(context);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -639,7 +635,6 @@ class _DeleteAccountScreenState extends State<_DeleteAccountScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: const Text("Delete Account", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
@@ -655,7 +650,7 @@ class _DeleteAccountScreenState extends State<_DeleteAccountScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.08),
+                color: Colors.red.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: const Row(

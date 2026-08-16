@@ -77,9 +77,23 @@ class RfcommChatService(private val channel: MethodChannel) {
     }
 
     // ── Shared socket setup ───────────────────────────────────────────────────
-    private fun onSocketReady(socket: BluetoothSocket) {
+    // suspend, not a plain fun — every call site is already inside a
+    // scope.launch { } coroutine (running on Dispatchers.IO), and
+    // MethodChannel.invokeMethod must run on the main thread, same
+    // requirement listenForMessages' own invokeMethod call below already
+    // follows.
+    private suspend fun onSocketReady(socket: BluetoothSocket) {
         clientSocket = socket
         writer = PrintWriter(socket.outputStream, true)
+        // Only meaningful for the server (startServer) side — the client
+        // already knows the MAC it dialed via connectToDevice's own
+        // argument. This is what lets the *host* side also learn (and
+        // persist, on the Dart side) the peer's address, so a future chat
+        // with this same contact can skip requesting discoverability
+        // entirely — see rfcomm_chat_service.dart's onMacLearned.
+        withContext(Dispatchers.Main) {
+            channel.invokeMethod("onConnected", socket.remoteDevice.address)
+        }
         listenForMessages(socket)
     }
 

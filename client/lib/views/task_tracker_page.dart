@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:client/services/unread_tracker.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
 
@@ -25,6 +26,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   @override
   void initState() {
     super.initState();
+    UnreadTracker.instance.clear(UnreadSource.taskReminder);
     _loadTasks();
   }
 
@@ -242,6 +244,9 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                           ? (endTime!.hour * 3600000 + endTime!.minute * 60000)
                           : null,
                     };
+                    // Captured up front — every branch below awaits a
+                    // database write before popping.
+                    final navigator = Navigator.of(context);
                     if (existing != null) {
                       await DatabaseHelper.instance.updateTask(existing[DatabaseHelper.taskColId], task);
                     } else {
@@ -250,7 +255,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                       task[DatabaseHelper.taskColCreatedAt] = DateTime.now().millisecondsSinceEpoch;
                       await DatabaseHelper.instance.insertTask(task);
                     }
-                    Navigator.of(context).pop(true);
+                    navigator.pop(true);
                   },
                   child: Text(existing != null ? "Update Task" : "Add Task"),
                 ),
@@ -265,10 +270,6 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   }
 
   // ---------- Calendar ----------
-  int _daysInMonth(DateTime month) {
-    return DateTime(month.year, month.month + 1, 0).day;
-  }
-
   DateTime _firstDayOfGrid(DateTime month) {
     final first = DateTime(month.year, month.month, 1);
     return first.subtract(Duration(days: first.weekday - 1));
@@ -291,7 +292,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
   Widget _buildCalendar() {
     final colors = Theme.of(context).colorScheme;
     final start = _firstDayOfGrid(_displayMonth);
-    final totalDays = 42;
+    const totalDays = 42;
     final today = DateTime.now();
 
     return Column(
@@ -386,8 +387,8 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                   color: isSelected
                       ? colors.primary
                       : isCurrentMonth
-                      ? colors.surface.withOpacity(0.4)
-                      : colors.surface.withOpacity(0.1),
+                      ? colors.surface.withValues(alpha: 0.4)
+                      : colors.surface.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                   border: isToday ? Border.all(color: colors.primary, width: 2) : null,
                 ),
@@ -402,7 +403,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                               ? Colors.white
                               : isCurrentMonth
                               ? colors.onSurface
-                              : colors.onSurface.withOpacity(0.4),
+                              : colors.onSurface.withValues(alpha: 0.4),
                         ),
                       ),
                     ),
@@ -469,7 +470,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
       // Overdue still gets a distinct tint (real signal worth keeping),
       // everything else now inherits the theme's card shape/elevation
       // rather than a flat, translucent wash that fought the shadow.
-      color: isOverdue ? Colors.red.withOpacity(0.12) : null,
+      color: isOverdue ? Colors.red.withValues(alpha: 0.12) : null,
       child: ExpansionTile(
         leading: Checkbox(
           value: isComplete,
@@ -495,14 +496,14 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
         subtitle: timeStr.isNotEmpty
             ? Text(
           timeStr,
-          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         )
             : (dueDateMs != null
             ? Text(
           DateTime.fromMillisecondsSinceEpoch(dueDateMs).toString().substring(0, 10),
-          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.7)),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         )
@@ -577,7 +578,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 16,
                     offset: const Offset(0, -4),
                   ),
@@ -587,7 +588,7 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
                   ? Center(
                 child: Text(
                   "No tasks for this day",
-                  style: TextStyle(color: colors.onSurface.withOpacity(0.6)),
+                  style: TextStyle(color: colors.onSurface.withValues(alpha: 0.6)),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),

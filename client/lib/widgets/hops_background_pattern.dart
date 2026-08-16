@@ -41,7 +41,7 @@ class _HopTrailPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color.withOpacity(0.05);
+    final paint = Paint()..color = color.withValues(alpha: 0.05);
     // A grid of paired dots (like a little footprint), staggered every
     // other row so it reads as scattered rather than a rigid lattice.
     for (double y = -_spacing; y < size.height + _spacing; y += _spacing) {

@@ -23,114 +23,436 @@ const String HOPS_SERVICE_UUID = "0000FA57-0000-1000-8000-00805F9B34FB";
 // label at larger text-scale settings too.
 const double kFloatingNavClearance = 92;
 
-// ── Community Chat wire format (v2: manufacturer-data, chunked) ────────────
-// Replaces the old "CM:<4charUser>:<21charMsg>" local-name encoding, which
-// was capped by the ~29-byte BLE local-name budget and forced username
-// collisions at 4 characters. The payload now rides in the scan-response
-// packet's Manufacturer Specific Data AD structure instead — that packet
-// starts every broadcast completely empty (nothing else in this app uses
-// it), giving a dedicated byte budget rather than fighting the primary
-// packet's flags + service-UUID + "HPS:username" beacon for space. Long
-// messages are split across multiple chunks and reassembled on arrival, so
-// there's no hard length wall — just diminishing propagation speed.
+// ── Shared manufacturer-data channel ────────────────────────────────────
 //
 // 0xFFFF is the Bluetooth SIG's reserved "for testing" company ID —
 // appropriate here since Hops isn't a SIG-registered manufacturer.
+//
+// Community Chat used to ride this channel too (the v2 wire format,
+// removed — see the v3 block below for why). What still uses it: Emergency
+// Flare / Official Alert signature chunks, Watch Me seed exchange, the
+// discoverable-name tag, and the Hops & Robbers runner tag. Those are all
+// *supplementary* — every one of them enriches something whose primary
+// signal already rides the advertisement name, so if this channel silently
+// drops on a given handset the feature degrades (an alert shows as
+// unverified) instead of disappearing. That's exactly why Community Chat,
+// which had no such fallback, was the one feature that broke outright.
 const int kCommunityManufacturerId = 0xFFFF;
 
-// Distinguishes our chunks from any unrelated manufacturer data another
-// app might broadcast on the same (very commonly reused) test ID.
-const int kCommunityProtocolMarker = 0x43; // ascii 'C'
+// Legacy BLE scan-response packets are spec-capped at 31 bytes total, and
+// a Manufacturer Specific Data structure costs 4 of those for its own
+// header (1 length + 1 AD-type + 2 company-ID). Budgeted well under the
+// resulting ~27-byte ceiling since several Android chipsets append their
+// own AD structures (e.g. TX Power Level) to a scan response regardless of
+// what the app asked for, and an overflowing packet is dropped whole.
+const int kCommunityChunkBudgetBytes = 20;
 
-// The legacy BLE scan-response packet is spec-capped at 31 bytes total; a
-// Manufacturer Specific Data structure costs 4 of those for its own header
-// (1 length + 1 AD-type + 2 company-ID), leaving a theoretical ceiling
-// around 27 bytes if the scan response carries nothing else. Budgeted a
-// few bytes under that as a safety margin — the exact real-world ceiling
-// hasn't been verified against physical hardware, and scan-response
-// reliability is a known flaky spot across Android OEMs. Tune down here
-// if on-device testing shows drops.
-const int kCommunityChunkBudgetBytes = 24;
+// ── Community Chat wire format v3: advertisement LOCAL NAME, chunked ────
+//
+// Replaces a v2 encoding that put chunks in scan-response manufacturer
+// data (since removed). Why the change, concretely:
+//
+// Every feature in this app that is *confirmed working on real hardware*
+// rides the BLE advertisement local name — "HPS:" presence beacons
+// (Radar), "EMG:"/"EMG_OFF:" (Emergency Flare), "FR:"/"FA:" (friend
+// requests), "HOP:"/"ACK:" (pairing codes), "VBT:" (Vibe Check). Every
+// feature that rides manufacturer data in the *scan response* is either
+// unconfirmed or outright broken, and Community Chat — the one feature
+// that depends on that channel entirely, with no name-based fallback —
+// was the one that never delivered a single message across two rounds of
+// tuning the byte budget. Scan-response manufacturer data is a known
+// weak spot across Android OEMs (whether it's emitted at all, and whether
+// a filtered scan even performs the active-scan request needed to receive
+// it, both vary), and this app has no way to make it more reliable.
+//
+// So: same chunk-and-reassemble idea, moved onto the channel that
+// demonstrably works. The tradeoff is a much tighter per-chunk budget
+// (the name shares one 31-byte advertisement packet with flags and the
+// 128-bit Hops service UUID), so messages take more chunks and arrive
+// over more seconds — acceptable for a broadcast chat, and vastly
+// preferable to not arriving.
+//
+// Budget: 24 characters, and the history of this number matters because
+// getting it wrong fails silently.
+//
+// It was 27, derived by assuming "EMG:<8-char sender>:<14-char reason>"
+// transmits — an upper bound nobody had actually observed at full length.
+// Messages whose first chunk landed on exactly 27 never arrived, while
+// shorter ones did: a 21-character message chunks to 27 + 20, and only the
+// 20 got out, so reassembly could never complete and the message vanished
+// with no error anywhere.
+//
+// The arithmetic behind the real ceiling: a legacy BLE packet is 31 bytes.
+// The name can't share the advertisement with the 128-bit Hops service
+// UUID (3 flags + 18 UUID = 21, leaving 10 — less than this format's own
+// 13-byte overhead), so it rides the scan response instead. That gives
+// 31 - 2 (the name's AD header) = 29, minus the 3-byte TX Power structure
+// many Android stacks append whether asked to or not = 26.
+//
+// 24, not 26, deliberately: two characters of margin for a handset that
+// adds one more AD structure of its own. This is a broadcast chat in a
+// safety app — a message that arrives beats a longer one that doesn't, and
+// the cost is only that long messages take one more chunk.
+const int kCommunityNameBudget = 24;
 
-// Sender tag length — exactly matches computeRotatingToken's fixed output
-// length (6 HMAC bytes -> 8 base64url chars, no padding). Community Chat
-// messages are tagged with the sender's *rotating token*, not their
-// username — this used to be a truncated-but-still-readable fragment of
-// the real username (barely obscured, and static forever), which defeated
-// the point once presence beacons stopped doing the same thing. Recipients
-// resolve the sender the same way Radar does: a known contact's name if
-// their seed matches this window's token, an anonymous entry otherwise.
-const int kCommunitySenderTagBytes = 8;
+const String kCommunityChatPrefix = 'CM:';
+// Admin-originated — same layout, different prefix, so one decode path
+// handles both; only the styling and the role check on resolution differ.
+const String kAdminCommunityChatPrefix = 'CA:';
 
-// Chunk index/count are packed into a single nibble each (see
-// encodeCommunityChatChunk), so 16 is the hard ceiling.
-const int kCommunityMaxChunks = 16;
+// prefix(3) + senderTag(8) + msgId(1) + chunkInfo(1)
+//
+// The sender tag is the first 8 characters of the sender's real USERNAME,
+// not their rotating presence token. This is a deliberate, scoped
+// departure from the rotating-ID anonymity the "HPS:" presence beacon
+// uses, for two reasons:
+//
+//   1. Moderation requires attribution. A reported Community Chat message
+//      has to name an actual account for an admin to warn or ban — a
+//      rotating token resolves to a name only on the devices that already
+//      hold that sender's seed (i.e. people they've chatted with), so
+//      reports from anyone else arrived carrying a useless "Anonymous
+//      #xxxx" as the target, and the admin app's warn/ban then failed
+//      against an account that doesn't exist.
+//   2. Nobody else could read names either. Non-contacts saw every
+//      message as "Anonymous #xxxx", which is poor for a feature whose
+//      whole purpose is talking to people nearby.
+//
+// What this does NOT change: the presence beacon keeps its rotating
+// token, so passive BLE scanners still can't follow a device around
+// campus over time — that's the threat the rotating-ID scheme actually
+// exists to defeat. This only attaches a name to a message someone chose
+// to broadcast publicly, in a feature already labelled as broadcasting to
+// everyone nearby.
+//
+// 8 characters matches the sender-tag width EMG:/ADM: already use, so
+// KeyDirectory.candidatesForTruncatedUsername resolves these for free.
+const int kCommunityNameSenderTagChars = 8;
+const int kCommunityNameOverhead = 13;
+const int kCommunityNameTextBudget = kCommunityNameBudget - kCommunityNameOverhead; // 11
 
-// Fixed now that the tag is always exactly kCommunitySenderTagBytes long
-// (a rotating token, not a variable-length truncated username).
-const int kCommunityChunkTextBudget = kCommunityChunkBudgetBytes - 4 - kCommunitySenderTagBytes;
+// chunkIndex and (totalChunks-1) are packed into 3 bits each inside one
+// character, so 8 is the hard ceiling — 8 × 18 = 144 bytes per message.
+const int kCommunityNameMaxChunks = 8;
 
-/// Builds one chunk of a (possibly multi-chunk) Community Chat message.
-/// [senderToken] must be the caller's current rotating presence token
-/// (see computeRotatingToken) — callers compute it once per outgoing
-/// message and reuse it across every chunk, so all chunks of one message
-/// stay attributable to the same sender even if a window rollover happens
-/// mid-broadcast.
-Uint8List encodeCommunityChatChunk({
-  required String senderToken,
+// Single-character encoding alphabet for msgId/chunkInfo. Deliberately
+// excludes ':' so it can never be confused with the prefix separator, and
+// is exactly 64 characters so one char carries a clean 6 bits.
+const String _kNameFieldAlphabet =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+/// Builds one chunk of a Community Chat message as a BLE advertisement
+/// local name. [senderTag] is the sender's username — truncated/padded to
+/// kCommunityNameSenderTagChars below, and resolved back to the full
+/// account via KeyDirectory on receipt.
+String encodeCommunityNameChunk({
+  required String senderTag,
   required int msgId,
   required int chunkIndex,
   required int totalChunks,
   required String chunkText,
+  bool isAdmin = false,
 }) {
-  var tagBytes = utf8.encode(senderToken);
-  if (tagBytes.length > kCommunitySenderTagBytes) {
-    tagBytes = tagBytes.sublist(0, kCommunitySenderTagBytes);
-  }
-  final textBytes = utf8.encode(chunkText);
-  final packedChunkInfo = ((chunkIndex & 0x0F) << 4) | (((totalChunks - 1) & 0x0F));
-  return Uint8List.fromList([
-    kCommunityProtocolMarker,
-    msgId & 0xFF,
-    packedChunkInfo,
-    tagBytes.length,
-    ...tagBytes,
-    ...textBytes,
-  ]);
+  final prefix = isAdmin ? kAdminCommunityChatPrefix : kCommunityChatPrefix;
+  // Padded as well as truncated — a short tag would otherwise shift every
+  // fixed offset the decoder relies on.
+  final tag = senderTag.length >= kCommunityNameSenderTagChars
+      ? senderTag.substring(0, kCommunityNameSenderTagChars)
+      : senderTag.padRight(kCommunityNameSenderTagChars, '_');
+  final id = _kNameFieldAlphabet[msgId & 0x3F];
+  final info = _kNameFieldAlphabet[
+      ((chunkIndex & 0x07) << 3) | ((totalChunks - 1) & 0x07)];
+  return '$prefix$tag$id$info$chunkText';
 }
 
-class DecodedCommunityChunk {
-  final String senderToken;
+class DecodedCommunityNameChunk {
+  final String senderTag;
   final int msgId;
   final int chunkIndex;
   final int totalChunks;
   final String text;
-  const DecodedCommunityChunk({
-    required this.senderToken,
+  final bool isAdmin;
+  const DecodedCommunityNameChunk({
+    required this.senderTag,
     required this.msgId,
     required this.chunkIndex,
     required this.totalChunks,
     required this.text,
+    required this.isAdmin,
   });
 }
 
-DecodedCommunityChunk? decodeCommunityChatChunk(List<int> bytes) {
-  if (bytes.length < 4 || bytes[0] != kCommunityProtocolMarker) return null;
-  final msgId = bytes[1];
-  final packed = bytes[2];
-  final chunkIndex = (packed >> 4) & 0x0F;
-  final totalChunks = (packed & 0x0F) + 1;
-  final tagLen = bytes[3];
-  if (bytes.length < 4 + tagLen) return null;
-  final senderToken = utf8.decode(bytes.sublist(4, 4 + tagLen), allowMalformed: true);
-  final text = utf8.decode(bytes.sublist(4 + tagLen), allowMalformed: true);
-  return DecodedCommunityChunk(
-    senderToken: senderToken,
+// Field offsets, DERIVED from the tag width rather than written as
+// literals. They were hardcoded (7, 8, substring(3, 7)) for an earlier
+// 4-character tag; widening the tag to 8 updated the overhead constant but
+// not those literals, so the decoder went on reading msgId and the chunk
+// index/count out of the middle of the sender's username. Every chunk
+// decoded to a nonsense chunkIndex/totalChunks, reassembly never completed,
+// and Community Chat stopped delivering anything at all. Deriving them
+// means the layout can only ever be changed in one place.
+// ── Admin message deletion (CX:) ────────────────────────────────────────
+//
+// An admin removing a Community Chat message from everyone's device.
+//
+// There is no server to delete from — Community Chat is a broadcast that
+// only ever exists as a local copy on each phone that heard it. So a
+// deletion is itself a broadcast: every device that receives one replaces
+// its own copy with a tombstone carrying the reason.
+//
+// Layout, well inside the 27-char name budget:
+//   prefix(3) + senderTag(8) + msgId(1) + reason(1) = 13 chars
+//
+// senderTag + msgId is exactly the pair the receiver already keys messages
+// by (see community_chat.dart's msgKey), so a deletion identifies its
+// target with no new identifier on the wire.
+//
+// Honest limits, since this is moderation and the gap matters: a device
+// that is out of range when the deletion goes out keeps its copy, and a
+// device that never heard the original ignores the deletion. This removes
+// a message from the devices that are around to hear it, which is the most
+// a serverless broadcast can promise.
+const String kCommunityDeletePrefix = 'CX:';
+
+/// Why a message was removed. Ordinal is what travels on the wire, so
+/// entries may be appended but never reordered or removed — an older build
+/// would render a shifted index as the wrong reason.
+enum CommunityDeleteReason { spam, harassment, inappropriate, misinformation, other }
+
+const Map<CommunityDeleteReason, String> kCommunityDeleteReasonLabels = {
+  CommunityDeleteReason.spam: 'spam',
+  CommunityDeleteReason.harassment: 'harassment',
+  CommunityDeleteReason.inappropriate: 'inappropriate content',
+  CommunityDeleteReason.misinformation: 'misinformation',
+  CommunityDeleteReason.other: 'breaking the rules',
+};
+
+String encodeCommunityDeletion({
+  required String senderTag,
+  required int msgId,
+  required CommunityDeleteReason reason,
+}) {
+  final tag = senderTag.length > kCommunityNameSenderTagChars
+      ? senderTag.substring(0, kCommunityNameSenderTagChars)
+      : senderTag.padRight(kCommunityNameSenderTagChars, '_');
+  return '$kCommunityDeletePrefix$tag'
+      '${_kNameFieldAlphabet[msgId & 0x3F]}'
+      '${_kNameFieldAlphabet[reason.index & 0x3F]}';
+}
+
+class DecodedCommunityDeletion {
+  final String senderTag;
+  final int msgId;
+  final CommunityDeleteReason reason;
+  const DecodedCommunityDeletion({
+    required this.senderTag,
+    required this.msgId,
+    required this.reason,
+  });
+}
+
+DecodedCommunityDeletion? decodeCommunityDeletion(String advName) {
+  if (!advName.startsWith(kCommunityDeletePrefix)) return null;
+  // 3 + 8 + 1 + 1
+  if (advName.length < 13) return null;
+  final tag = advName.substring(3, 3 + kCommunityNameSenderTagChars);
+  final msgId = _kNameFieldAlphabet.indexOf(advName[11]);
+  final reasonIndex = _kNameFieldAlphabet.indexOf(advName[12]);
+  if (msgId < 0 || reasonIndex < 0) return null;
+  // A newer build could send a reason this one doesn't know. Falling back
+  // to `other` still removes the message, which is the part that matters —
+  // dropping the whole deletion over an unknown label would leave the
+  // message on screen.
+  final reason = reasonIndex < CommunityDeleteReason.values.length
+      ? CommunityDeleteReason.values[reasonIndex]
+      : CommunityDeleteReason.other;
+  return DecodedCommunityDeletion(senderTag: tag, msgId: msgId, reason: reason);
+}
+
+const int _kCommunityTagStart = 3; // after "CM:"/"CA:"
+const int _kCommunityTagEnd = _kCommunityTagStart + kCommunityNameSenderTagChars;
+const int _kCommunityMsgIdIndex = _kCommunityTagEnd;
+const int _kCommunityChunkInfoIndex = _kCommunityMsgIdIndex + 1;
+
+DecodedCommunityNameChunk? decodeCommunityNameChunk(String advName) {
+  final isAdmin = advName.startsWith(kAdminCommunityChatPrefix);
+  if (!isAdmin && !advName.startsWith(kCommunityChatPrefix)) return null;
+  if (advName.length < kCommunityNameOverhead) return null;
+
+  final msgId = _kNameFieldAlphabet.indexOf(advName[_kCommunityMsgIdIndex]);
+  final info = _kNameFieldAlphabet.indexOf(advName[_kCommunityChunkInfoIndex]);
+  // Not our encoding (or a corrupted/truncated name) — reject rather than
+  // reassemble a message out of garbage offsets.
+  if (msgId < 0 || info < 0) return null;
+
+  return DecodedCommunityNameChunk(
+    senderTag: advName.substring(_kCommunityTagStart, _kCommunityTagEnd),
     msgId: msgId,
-    chunkIndex: chunkIndex,
-    totalChunks: totalChunks,
-    text: text,
+    chunkIndex: (info >> 3) & 0x07,
+    totalChunks: (info & 0x07) + 1,
+    text: advName.substring(kCommunityNameOverhead),
+    isAdmin: isAdmin,
   );
+}
+
+/// Short, stable, non-reversible label for a sender whose real name isn't
+/// being shown — the "#abcd" in "Anonymous #abcd".
+///
+/// Needed because the Community Chat sender tag is now the sender's actual
+/// username (moderation needs an account an admin can act on), so the
+/// anonymous label can't just be built from the tag the way it was when
+/// the tag was an opaque rotating token — doing that rendered
+/// "Anonymous #Kwame123", which is the opposite of anonymous. Hashing it
+/// keeps the useful property (the same person reads as the same label, so
+/// a conversation is followable) without printing their name.
+///
+/// Scope, honestly: this is display-level obfuscation, not a privacy
+/// guarantee. The username itself travels in the advertisement in the
+/// clear, so anything actually reading the air sees it regardless — and
+/// because the mapping is deterministic and usernames are guessable, this
+/// label is reversible by anyone who cares to try. What it does is keep
+/// the app from casually broadcasting everyone's name to everyone else's
+/// screen, which is the property this feature is meant to have.
+String anonymousLabelFor(String senderTag) {
+  final trimmed = senderTag.replaceAll(RegExp(r'_+$'), '');
+  final digest = sha256.convert(utf8.encode('hops-anon:$trimmed'));
+  // 3 bytes -> exactly 4 base64url characters, no padding.
+  return base64Url.encode(digest.bytes.sublist(0, 3)).replaceAll('=', '');
+}
+
+/// Splits [message] into at most kCommunityNameMaxChunks pieces that each
+/// fit kCommunityNameTextBudget *bytes* — the advertisement budget is a
+/// byte budget, so a multi-byte character counts for more than one.
+///
+/// Accumulates whole characters rather than slicing the raw byte array:
+/// a byte-index split can land in the middle of a multi-byte character,
+/// which corrupts it on both sides of the seam (each half decodes to a
+/// replacement character and the original is unrecoverable). Emoji and
+/// accented characters in a chat message are entirely ordinary, so that
+/// would be a real, visible bug rather than a theoretical one.
+List<String> splitCommunityMessage(String message) {
+  final chunks = <String>[];
+  final buffer = StringBuffer();
+  var bufferBytes = 0;
+
+  for (final rune in message.runes) {
+    final ch = String.fromCharCode(rune);
+    final chBytes = utf8.encode(ch).length;
+    if (bufferBytes + chBytes > kCommunityNameTextBudget) {
+      chunks.add(buffer.toString());
+      if (chunks.length >= kCommunityNameMaxChunks) return chunks;
+      buffer.clear();
+      bufferBytes = 0;
+    }
+    buffer.write(ch);
+    bufferBytes += chBytes;
+  }
+
+  if (buffer.isNotEmpty && chunks.length < kCommunityNameMaxChunks) {
+    chunks.add(buffer.toString());
+  }
+  if (chunks.isEmpty) chunks.add('');
+  return chunks;
+}
+
+// ── 1:1 direct message over the advertisement name (BLE fallback) ───────
+//
+// Fallback transport for 1:1 chat when RFCOMM can't connect (see
+// ble_direct_message_service.dart / rfcomm_chat_service.dart). Same
+// chunked-advertisement-name idea as Community Chat v3 above, with two
+// differences: it carries BOTH a recipient and a sender tag (Community
+// Chat is a broadcast and needs only the sender), and its payload is
+// base64 of an *encrypted* blob rather than plain text — these
+// advertisements are readable by any BLE scanner in range, so a private
+// message can't ride them in the clear. See mesh_crypto.dart's
+// sealDirectMessage, including its honest limitations.
+//
+// Tags are 3 characters here rather than Community Chat's 4: two tags plus
+// the prefix and framing already cost 11 of the 27-byte name budget, and
+// every extra tag character comes straight out of message length. A
+// 3-char base64url tag is 18 bits — collisions are more likely than at 4,
+// but a collision only causes a wasted decryption attempt, since the
+// encryption key (not the tag) is what actually determines who can read a
+// message.
+const String kDirectMessagePrefix = 'DM:';
+const int kDirectMessageTagChars = 3;
+// prefix(3) + recipientTag(3) + senderTag(3) + msgId(1) + chunkInfo(1)
+const int kDirectMessageOverhead = 11;
+const int kDirectMessageTextBudget = kCommunityNameBudget - kDirectMessageOverhead; // 16
+const int kDirectMessageMaxChunks = 8;
+
+/// First kDirectMessageTagChars of a rotating presence token — the
+/// addressing unit for direct messages on both ends.
+String directMessageTag(String rotatingToken) =>
+    rotatingToken.length > kDirectMessageTagChars
+        ? rotatingToken.substring(0, kDirectMessageTagChars)
+        : rotatingToken.padRight(kDirectMessageTagChars, '_');
+
+String encodeDirectMessageChunk({
+  required String recipientTag,
+  required String senderTag,
+  required int msgId,
+  required int chunkIndex,
+  required int totalChunks,
+  required String chunkPayload,
+}) {
+  final id = _kNameFieldAlphabet[msgId & 0x3F];
+  final info = _kNameFieldAlphabet[
+      ((chunkIndex & 0x07) << 3) | ((totalChunks - 1) & 0x07)];
+  return '$kDirectMessagePrefix$recipientTag$senderTag$id$info$chunkPayload';
+}
+
+class DecodedDirectMessageChunk {
+  final String recipientTag;
+  final String senderTag;
+  final int msgId;
+  final int chunkIndex;
+  final int totalChunks;
+  final String payload;
+  const DecodedDirectMessageChunk({
+    required this.recipientTag,
+    required this.senderTag,
+    required this.msgId,
+    required this.chunkIndex,
+    required this.totalChunks,
+    required this.payload,
+  });
+}
+
+// Derived, not literal — these happen to be correct for the current
+// 3-character tag width, but see decodeCommunityNameChunk's comment for
+// what hardcoding them cost there when a tag width changed.
+const int _kDmRecipientStart = 3; // after "DM:"
+const int _kDmRecipientEnd = _kDmRecipientStart + kDirectMessageTagChars;
+const int _kDmSenderEnd = _kDmRecipientEnd + kDirectMessageTagChars;
+const int _kDmMsgIdIndex = _kDmSenderEnd;
+const int _kDmChunkInfoIndex = _kDmMsgIdIndex + 1;
+
+DecodedDirectMessageChunk? decodeDirectMessageChunk(String advName) {
+  if (!advName.startsWith(kDirectMessagePrefix)) return null;
+  if (advName.length < kDirectMessageOverhead) return null;
+
+  final msgId = _kNameFieldAlphabet.indexOf(advName[_kDmMsgIdIndex]);
+  final info = _kNameFieldAlphabet.indexOf(advName[_kDmChunkInfoIndex]);
+  if (msgId < 0 || info < 0) return null;
+
+  return DecodedDirectMessageChunk(
+    recipientTag: advName.substring(_kDmRecipientStart, _kDmRecipientEnd),
+    senderTag: advName.substring(_kDmRecipientEnd, _kDmSenderEnd),
+    msgId: msgId,
+    chunkIndex: (info >> 3) & 0x07,
+    totalChunks: (info & 0x07) + 1,
+    payload: advName.substring(kDirectMessageOverhead),
+  );
+}
+
+/// Longest plaintext that survives encryption + base64 + chunking. Worked
+/// backwards from the wire budget: kDirectMessageMaxChunks ×
+/// kDirectMessageTextBudget base64 characters carry 3/4 that many bytes,
+/// of which kDirectMessageNonceBytes are spent on the nonce.
+int get kDirectMessageMaxPlaintextBytes {
+  const base64Chars = kDirectMessageMaxChunks * kDirectMessageTextBudget; // 128
+  const rawBytes = (base64Chars ~/ 4) * 3; // 96
+  return rawBytes - 6; // kDirectMessageNonceBytes — 90
 }
 
 // ── Rotating presence identifiers ───────────────────────────────────────
@@ -181,6 +503,23 @@ bool matchesRotatingToken(List<int> seed, String token) {
   return computeRotatingToken(seed, at: previousWindow) == token;
 }
 
+/// Prefix variant of matchesRotatingToken, for Community Chat's 4-char
+/// sender tag (the full 8-char token doesn't fit the advertisement-name
+/// budget — see kCommunityNameSenderTagChars).
+///
+/// A 4-char base64url prefix is 24 bits, so two unrelated contacts can
+/// collide roughly once in 16 million per window — and a collision is
+/// harmless here anyway: the worst case is one contact's name shown on
+/// another's broadcast message, in a chat that is explicitly public and
+/// where unresolved senders already display as anonymous. Not worth
+/// spending 4 more of the 18 precious text bytes to make exact.
+bool matchesRotatingTokenPrefix(List<int> seed, String prefix) {
+  final now = DateTime.now();
+  if (computeRotatingToken(seed, at: now).startsWith(prefix)) return true;
+  final previousWindow = now.subtract(kRotatingIdWindow);
+  return computeRotatingToken(seed, at: previousWindow).startsWith(prefix);
+}
+
 // ── Emergency Flare signature chunking ──────────────────────────────────
 //
 // An RSA-2048 signature (~256 bytes) is far too big for one BLE packet, so
@@ -192,6 +531,17 @@ bool matchesRotatingToken(List<int> seed, String token) {
 // each signature chunk, so a receiver already has the natural correlation
 // key for free — see hops_app.dart's scan-result handling.
 const int kFlareSigProtocolMarker = 0x45; // ascii 'E'
+
+// How long a personal Emergency Flare (EMG:) stays live once triggered —
+// the broadcast auto-stops, the alarm on receivers' phones auto-cancels,
+// and the sender's own countdown all key off this one value. Was 30
+// seconds; raised to a full minute so there's more real time for someone
+// nearby to notice, react, and actually reach whoever triggered it, rather
+// than the window closing while they're still working out where the sound
+// came from. Doesn't apply to an admin's Official Alert (ADM:) — that one
+// keeps its own separate 30-second window in official_alert_service.dart,
+// which this constant deliberately leaves untouched.
+const Duration kEmergencyFlareDuration = Duration(seconds: 60);
 
 const int kFlareSigChunkBudgetBytes = kCommunityChunkBudgetBytes - 2;
 

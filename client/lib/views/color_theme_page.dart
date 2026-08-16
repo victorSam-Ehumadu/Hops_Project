@@ -48,7 +48,7 @@ class _ColorThemePageState extends State<ColorThemePage> {
             padding: const EdgeInsets.only(left: 4, bottom: 12),
             child: Text(
               "Currently using ${current.name}",
-              style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6)),
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
             ),
           ),
           _ThemeCategoryTile(
@@ -123,7 +123,7 @@ class _ThemeCategoryTile extends StatelessWidget {
         leading: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: colors.primary.withOpacity(0.1),
+            color: colors.primary.withValues(alpha: 0.1),
             shape: BoxShape.circle,
           ),
           child: Icon(icon, color: colors.primary),
@@ -134,9 +134,9 @@ class _ThemeCategoryTile extends StatelessWidget {
         ),
         subtitle: Text(
           isCurrentCategory ? "$count themes · current: $currentName" : "$count themes",
-          style: TextStyle(fontSize: 12, color: colors.onSurface.withOpacity(0.6)),
+          style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
         ),
-        trailing: Icon(Icons.chevron_right, color: colors.onSurface.withOpacity(0.4)),
+        trailing: Icon(Icons.chevron_right, color: colors.onSurface.withValues(alpha: 0.4)),
         onTap: onTap,
       ),
     );
@@ -214,14 +214,24 @@ class _ColorThemeGridPageState extends State<_ColorThemeGridPage> {
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     Icon(Icons.palette, color: t.primary, size: 32),
-                    Text(
-                      t.name,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: t.primary,
-                        fontSize: 14,
+                    // Flexible + ellipsis: the fixed 1.1 aspect-ratio grid
+                    // cell has no slack for this to wrap onto a second line,
+                    // which font_size_page.dart's up-to-1.6x scale (or just
+                    // a longer theme name) would otherwise push past the
+                    // card's bottom and clip/overflow the selected checkmark
+                    // below it.
+                    Flexible(
+                      child: Text(
+                        t.name,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: t.primary,
+                          fontSize: 14,
+                        ),
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      textAlign: TextAlign.center,
                     ),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,

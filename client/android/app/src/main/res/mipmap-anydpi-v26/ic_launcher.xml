@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Adaptive launcher icon — used on Android 8.0 (API 26) and above, which
+    is the overwhelming majority of devices. Older versions keep falling
+    back to the plain mipmap-*/ic_launcher.png files, so both have to stay.
+
+    Why this exists: without an adaptive icon, Android 8+ takes the legacy
+    PNG, shrinks it, and drops it on a plain white rounded square of its
+    own making. Supplying the layers here means the launcher masks Hops'
+    own artwork to whatever shape the device uses (circle, squircle,
+    rounded square) instead of boxing it.
+
+    Geometry: the foreground is a 108dp canvas whose inner 72dp is the safe
+    zone — anything outside can be cropped by the mask, and the system also
+    shifts the layers slightly for parallax. ic_launcher_foreground.png
+    therefore draws the bunny at 63% of the canvas, centred, which keeps it
+    inside the safe zone with a little margin.
+
+    The background is a flat colour rather than an image: the artwork has a
+    transparent background, and a solid fill is what the launcher was
+    already compositing behind it.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <!-- Themed icons (Android 13+): the launcher discards colour and tints
+         the silhouette to match the wallpaper, so this layer is the same
+         geometry flattened to a single tone. Ignored on older versions. -->
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
+</adaptive-icon>

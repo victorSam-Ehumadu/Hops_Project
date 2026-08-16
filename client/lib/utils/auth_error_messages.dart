@@ -5,9 +5,25 @@
 // (change password/email, delete account) and the forgot-password/email-
 // verification screens, so the same underlying failure always reads the
 // same way no matter which screen it surfaced on.
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 String describeAuthException(Object e) {
   final text = e.toString();
 
+  // account_banned carries its reason in the PostgrestException's `details`
+  // (see ban_user/signin_hops_user*/get_my_status in
+  // supabase/migrations/0008_admin_moderation.sql) — unlike every other
+  // branch here, it's safe to be this specific: this is always the account
+  // owner's own sign-in/session, not a third party probing whether some
+  // other username exists, so naming the reason leaks nothing.
+  if (text.contains('account_banned')) {
+    final reason = e is PostgrestException && e.details != null && (e.details as String).isNotEmpty
+        ? e.details as String
+        : null;
+    return reason == null
+        ? "This account has been suspended by a Hops admin."
+        : "This account has been suspended by a Hops admin: $reason";
+  }
   if (text.contains('SocketException') ||
       text.contains('Failed host lookup') ||
       text.contains('Network is unreachable')) {
@@ -18,6 +34,13 @@ String describeAuthException(Object e) {
   }
   if (text.contains('username_taken')) {
     return "That username is already taken — try another one.";
+  }
+  // Reserved for the built-in assistant — see
+  // 0014_reserve_bot_usernames.sql. Worth its own message rather than
+  // folding into "already taken": nobody holds it, so "try another one"
+  // without saying why reads as the server being wrong.
+  if (text.contains('username_reserved')) {
+    return "That name is reserved for the built-in Hops assistant — please pick another.";
   }
   if (text.contains('email_taken')) {
     return "An account already exists with that email address.";

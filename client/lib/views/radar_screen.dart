@@ -34,11 +34,11 @@ class RadarScreen extends StatefulWidget {
   // back to a real name. Absent entries just render as anonymous.
   final Map<String, List<int>> contactSeeds;
   final ValueChanged<String>? onActivateFlare;
-  // Admin-only tier — the button that calls this is never even shown
-  // unless [isAdmin] is true, not just disabled, so a student never sees
-  // an "Official Alert" affordance at all.
-  final ValueChanged<String>? onActivateOfficialAlert;
-  final bool isAdmin;
+  // Official Alert composing/broadcasting moved to the separate Admin app
+  // (see lib/services/official_alert_service.dart) — this screen no
+  // longer has any admin-only trigger UI at all, only the personal
+  // Emergency Flare above. Receiving an Official Alert someone else sent
+  // is unaffected — that's handled in hops_app.dart, not here.
   final VoidCallback? onRescan;
   final int nearbyBleCount;
   // Set true for exactly one build when the "Emergency Flare" app-icon
@@ -65,8 +65,6 @@ class RadarScreen extends StatefulWidget {
     required this.friendUsernames,
     this.contactSeeds = const {},
     this.onActivateFlare,
-    this.onActivateOfficialAlert,
-    this.isAdmin = false,
     this.onRescan,
     this.nearbyBleCount = 0,
     this.autoOpenFlareDialog = false,
@@ -294,80 +292,6 @@ class _RadarScreenState extends State<RadarScreen>
     );
   }
 
-  // No long-press friction here unlike the personal flare — this is
-  // already gated to a small, trusted admin group, so the accidental-tap
-  // risk this session's UX design was protecting against for the SOS
-  // button doesn't apply the same way. Still a confirm step, though.
-  void _showOfficialAlertConfirmDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Issue Official Alert?"),
-        content: const Text(
-            "This broadcasts a signed, campus-wide alert as your admin identity. "
-            "Use only for genuine official communications."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _showOfficialAlertReasonInputDialog();
-            },
-            child: const Text("NEXT",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showOfficialAlertReasonInputDialog() {
-    final reasonController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("What is the official alert?"),
-        content: TextField(
-          controller: reasonController,
-          autofocus: true,
-          maxLength: 25,
-          decoration: const InputDecoration(
-            hintText: "e.g., Campus lockdown",
-          ),
-          onSubmitted: (_) {
-            final reason = reasonController.text.trim();
-            if (reason.isEmpty) return;
-            Navigator.pop(ctx);
-            widget.onActivateOfficialAlert?.call(reason);
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900),
-            onPressed: () {
-              final reason = reasonController.text.trim();
-              if (reason.isEmpty) return;
-              Navigator.pop(ctx);
-              widget.onActivateOfficialAlert?.call(reason);
-            },
-            child: const Text("BROADCAST",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
-  }
-
   double _rssiToRadius(int rssi) {
     double clamped = rssi.clamp(-100, -30).toDouble();
     return 0.2 + (1.0 - 0.2) * (clamped + 100) / 70.0;
@@ -472,7 +396,7 @@ class _RadarScreenState extends State<RadarScreen>
     return Scaffold(
       appBar: AppBar(
         elevation: 0,
-        backgroundColor: theme.scaffoldBackgroundColor.withOpacity(0.8),
+        backgroundColor: theme.scaffoldBackgroundColor.withValues(alpha: 0.8),
         title: Row(
           children: [
             Icon(Icons.home_outlined, color: colors.primary),
@@ -494,7 +418,7 @@ class _RadarScreenState extends State<RadarScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: _bleMeshColor(widget.nearbyBleCount).withOpacity(0.12),
+              color: _bleMeshColor(widget.nearbyBleCount).withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(100),
             ),
             child: Row(
@@ -510,7 +434,7 @@ class _RadarScreenState extends State<RadarScreen>
                     boxShadow: [
                       BoxShadow(
                         color: _bleMeshColor(widget.nearbyBleCount)
-                            .withOpacity(0.6),
+                            .withValues(alpha: 0.6),
                         blurRadius: 6,
                       ),
                     ],
@@ -534,7 +458,7 @@ class _RadarScreenState extends State<RadarScreen>
                       _bleMeshLabel(widget.nearbyBleCount),
                       style: TextStyle(
                         color: _bleMeshColor(widget.nearbyBleCount)
-                            .withOpacity(0.8),
+                            .withValues(alpha: 0.8),
                         fontSize: 8,
                         fontWeight: FontWeight.w500,
                         height: 1.1,
@@ -579,28 +503,10 @@ class _RadarScreenState extends State<RadarScreen>
               ),
             ),
           ),
-          // Admin-only — never rendered at all for a student, not just
-          // disabled, so there's nothing here that even hints the tier
-          // exists to someone who can't use it.
-          if (widget.isAdmin) ...[
-            Tooltip(
-              message: "Issue Official Alert (admin)",
-              child: GestureDetector(
-                onTap: () => _showOfficialAlertConfirmDialog(),
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  margin: const EdgeInsets.only(right: 8),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.red.shade900,
-                  ),
-                  child:
-                      const Icon(Icons.campaign, color: Colors.white, size: 22),
-                ),
-              ),
-            ),
-          ],
+          // Official Alert's trigger used to live here, admin-gated — it's
+          // composed from the separate Admin app now (see
+          // lib/services/official_alert_service.dart), so there's nothing
+          // admin-specific left in this bar at all.
           GestureDetector(
             onTap: () async {
               await Navigator.of(context).push(
@@ -719,7 +625,7 @@ class _RadarScreenState extends State<RadarScreen>
                           onPressed: widget.onRescan,
                           tooltip: 'Rescan',
                           style: IconButton.styleFrom(
-                            backgroundColor: colors.surface.withOpacity(0.6),
+                            backgroundColor: colors.surface.withValues(alpha: 0.6),
                             padding: const EdgeInsets.all(6),
                           ),
                         ),
@@ -734,8 +640,8 @@ class _RadarScreenState extends State<RadarScreen>
                         right: 4,
                         child: Tooltip(
                           message: widget.isDiscoverable
-                              ? "Discoverable — nearby Hoppers can see your name. Tap to turn off."
-                              : "Turn on Discoverable so a friend nearby can see your name and tap your dot.",
+                              ? "Discoverable — nearby Hoppers can see your name. Turns off on its own in 10s, or tap to stop now."
+                              : "Turn on Discoverable for 10 seconds so a friend nearby can see your name and tap your dot.",
                           child: IconButton(
                             icon: Icon(
                               widget.isDiscoverable
@@ -753,7 +659,7 @@ class _RadarScreenState extends State<RadarScreen>
                                 SnackBar(
                                   duration: const Duration(seconds: 2),
                                   content: Text(next
-                                      ? "You're discoverable — nearby Hoppers can see your name"
+                                      ? "You're discoverable for 10 seconds — nearby Hoppers can see your name"
                                       : "Discoverable turned off"),
                                 ),
                               );
@@ -761,7 +667,7 @@ class _RadarScreenState extends State<RadarScreen>
                             style: IconButton.styleFrom(
                               backgroundColor: widget.isDiscoverable
                                   ? colors.primary
-                                  : colors.surface.withOpacity(0.6),
+                                  : colors.surface.withValues(alpha: 0.6),
                               padding: const EdgeInsets.all(6),
                             ),
                           ),
@@ -788,13 +694,13 @@ class _RadarScreenState extends State<RadarScreen>
                                 Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: colors.primary.withOpacity(0.1),
+                                    color: colors.primary.withValues(alpha: 0.1),
                                     shape: BoxShape.circle,
                                   ),
                                   child: Icon(
                                     Icons.cruelty_free,
                                     size: blips.isEmpty ? 32 : 22,
-                                    color: colors.primary.withOpacity(
+                                    color: colors.primary.withValues(alpha: 
                                         blips.isEmpty ? 0.55 : 0.4),
                                   ),
                                 ),
@@ -805,7 +711,7 @@ class _RadarScreenState extends State<RadarScreen>
                                     style: TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
-                                      color: colors.onSurface.withOpacity(0.4),
+                                      color: colors.onSurface.withValues(alpha: 0.4),
                                     ),
                                   ),
                                 ],
@@ -830,7 +736,7 @@ class _RadarScreenState extends State<RadarScreen>
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 10, vertical: 5),
                                 decoration: BoxDecoration(
-                                  color: colors.surface.withOpacity(0.85),
+                                  color: colors.surface.withValues(alpha: 0.85),
                                   borderRadius: BorderRadius.circular(100),
                                 ),
                                 child: Row(
@@ -838,7 +744,7 @@ class _RadarScreenState extends State<RadarScreen>
                                   children: [
                                     Icon(Icons.touch_app_outlined,
                                         size: 13,
-                                        color: colors.primary.withOpacity(0.7)),
+                                        color: colors.primary.withValues(alpha: 0.7)),
                                     const SizedBox(width: 5),
                                     Flexible(
                                       child: Text(
@@ -850,7 +756,7 @@ class _RadarScreenState extends State<RadarScreen>
                                           fontSize: 11,
                                           fontWeight: FontWeight.w600,
                                           color: colors.onSurface
-                                              .withOpacity(0.55),
+                                              .withValues(alpha: 0.55),
                                         ),
                                       ),
                                     ),
@@ -917,7 +823,7 @@ class _RadarScreenState extends State<RadarScreen>
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
+                        color: Colors.black.withValues(alpha: 0.08),
                         blurRadius: 16,
                         offset: const Offset(0, -4),
                       ),
@@ -935,7 +841,7 @@ class _RadarScreenState extends State<RadarScreen>
                           height: 4,
                           margin: const EdgeInsets.only(bottom: 8),
                           decoration: BoxDecoration(
-                            color: colors.onSurface.withOpacity(0.15),
+                            color: colors.onSurface.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(100),
                           ),
                         ),
@@ -983,12 +889,12 @@ class _RadarScreenState extends State<RadarScreen>
                                     Icon(Icons.mark_email_read_outlined,
                                         size: 28,
                                         color:
-                                            colors.onSurface.withOpacity(0.2)),
+                                            colors.onSurface.withValues(alpha: 0.2)),
                                     const SizedBox(height: 6),
                                     Text("No pending requests",
                                         style: TextStyle(
                                             color: colors.onSurface
-                                                .withOpacity(0.4),
+                                                .withValues(alpha: 0.4),
                                             fontSize: 12)),
                                   ],
                                 ),
@@ -1008,7 +914,7 @@ class _RadarScreenState extends State<RadarScreen>
                                         CircleAvatar(
                                           radius: 18,
                                           backgroundColor:
-                                              colors.primary.withOpacity(0.12),
+                                              colors.primary.withValues(alpha: 0.12),
                                           child: Text(
                                               sender.isNotEmpty
                                                   ? sender[0].toUpperCase()
@@ -1035,7 +941,7 @@ class _RadarScreenState extends State<RadarScreen>
                                                   style: TextStyle(
                                                       fontSize: 11,
                                                       color: colors.onSurface
-                                                          .withOpacity(0.5))),
+                                                          .withValues(alpha: 0.5))),
                                             ],
                                           ),
                                         ),
@@ -1048,7 +954,7 @@ class _RadarScreenState extends State<RadarScreen>
                                           tooltip: 'Decline',
                                           style: IconButton.styleFrom(
                                             backgroundColor: Colors.redAccent
-                                                .withOpacity(0.08),
+                                                .withValues(alpha: 0.08),
                                             padding: const EdgeInsets.all(8),
                                           ),
                                         ),
@@ -1061,7 +967,7 @@ class _RadarScreenState extends State<RadarScreen>
                                           tooltip: 'Accept',
                                           style: IconButton.styleFrom(
                                             backgroundColor:
-                                                colors.primary.withOpacity(0.1),
+                                                colors.primary.withValues(alpha: 0.1),
                                             padding: const EdgeInsets.all(8),
                                           ),
                                         ),
@@ -1115,6 +1021,10 @@ class _DeviceBlip {
 class RadarPainter extends CustomPainter {
   final double rotation;
   final Color primaryColor;
+  // _DeviceBlip is an implementation detail of this file and RadarPainter
+  // is only ever constructed from inside it. Making the type public purely
+  // to satisfy the lint would widen the surface for no caller's benefit.
+  // ignore: library_private_types_in_public_api
   final List<_DeviceBlip> blips;
   RadarPainter({
     required this.rotation,
@@ -1127,25 +1037,25 @@ class RadarPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width / 2 - 16;
     final bgPaint = Paint()
-      ..color = Colors.white.withOpacity(0.05)
+      ..color = Colors.white.withValues(alpha: 0.05)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(center, radius, bgPaint);
     final circlePaint = Paint()
-      ..color = primaryColor.withOpacity(0.2)
+      ..color = primaryColor.withValues(alpha: 0.2)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
     for (int i = 1; i <= 4; i++) {
       canvas.drawCircle(center, radius * i / 4, circlePaint);
     }
     final linePaint = Paint()
-      ..color = primaryColor.withOpacity(0.3)
+      ..color = primaryColor.withValues(alpha: 0.3)
       ..strokeWidth = 0.5;
     canvas.drawLine(Offset(center.dx - radius, center.dy),
         Offset(center.dx + radius, center.dy), linePaint);
     canvas.drawLine(Offset(center.dx, center.dy - radius),
         Offset(center.dx, center.dy + radius), linePaint);
     final sweepPaint = Paint()
-      ..color = primaryColor.withOpacity(0.8)
+      ..color = primaryColor.withValues(alpha: 0.8)
       ..strokeWidth = 2
       ..strokeCap = StrokeCap.round;
     final sweepEnd = Offset(

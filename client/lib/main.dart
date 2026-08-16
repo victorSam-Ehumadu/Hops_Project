@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,8 +10,9 @@ import 'package:quick_actions/quick_actions.dart';
 import 'package:client/theme/app_theme.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/hops_app.dart';
+import 'package:client/views/hops_splash_screen.dart';
 import 'package:client/services/notification_service.dart';
-import 'package:client/services/foreground_service.dart';
+import 'package:client/widgets/alarm_ringing_banner.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 final ValueNotifier<int> themeNotifier = ValueNotifier<int>(0);
@@ -60,6 +62,43 @@ final ValueNotifier<int> nearbyConnectionsSessionCount = ValueNotifier<int>(0);
 // to null once the ping's gone out.
 final ValueNotifier<String?> chatPingRequest = ValueNotifier<String?>(null);
 
+// ── BLE fallback for 1:1 chat ───────────────────────────────────────────
+//
+// Same "chat screen needs HopsApp's radio" bridge as chatPingRequest
+// above, for the DM: transport (see ble_direct_message_service.dart). Only
+// HopsApp holds the BLE peripheral/scanner, and IndividualChatTerminalView
+// is a pushed screen several routes above it, so requests go down through
+// bleDirectMessageOutbox and received messages come back up through
+// bleDirectMessageInbox rather than plumbing callbacks through every
+// intermediate screen.
+class BleDirectMessage {
+  final String peerUsername;
+  final String text;
+  // Only set on outgoing requests, so the chat screen can find out whether
+  // the broadcast actually started — HopsApp can refuse (no rotating seed
+  // exchanged with this peer yet, so no shared key exists to encrypt
+  // with), and a chat screen that assumed success would silently show a
+  // message as sent that never left the device. Null on inbound messages,
+  // which have nothing to report back.
+  final Completer<bool>? sent;
+  const BleDirectMessage({
+    required this.peerUsername,
+    required this.text,
+    this.sent,
+  });
+}
+
+// One-shot, same as chatPingRequest: the chat screen sets it, HopsApp
+// broadcasts it and resets it to null.
+final ValueNotifier<BleDirectMessage?> bleDirectMessageOutbox =
+    ValueNotifier<BleDirectMessage?>(null);
+
+// Broadcast (not single-subscription) so the chat screen can come and go
+// without closing the stream out from under HopsApp, which owns it for
+// the whole app's lifetime.
+final StreamController<BleDirectMessage> bleDirectMessageInbox =
+    StreamController<BleDirectMessage>.broadcast();
+
 // Real, measured height (in logical pixels) of HopsApp's floating nav
 // pill — arrow handle + gap + the pill itself — refreshed every frame it's
 // visible (see hops_app.dart's _buildFloatingNavBar). Exists so a screen
@@ -93,7 +132,7 @@ void main() async {
       channelDescription: 'Keeps BLE scanning active for emergency alerts',
     ),
     iosNotificationOptions: const IOSNotificationOptions(),
-    foregroundTaskOptions: ForegroundTaskOptions(
+    foregroundTaskOptions: const ForegroundTaskOptions(
       autoRunOnBoot: true,
       allowWakeLock: true,
     ),
@@ -116,7 +155,9 @@ void main() async {
   }
 
   final SharedPreferences prefs = await SharedPreferences.getInstance();
-  final String? savedToken = prefs.getString('saved_hops_token');
+  // The saved token is deliberately NOT read here: HopsRoot's own
+  // FutureBuilder re-reads it when it builds the home widget, and a copy
+  // taken this early would only be a second, staler source of truth.
   final themeIndex = prefs.getInt('selected_theme_index') ?? 0;
   themeNotifier.value = themeIndex;
   fontNotifier.value = prefs.getInt('selected_font_index') ?? -1;
@@ -149,6 +190,11 @@ class _HopsRootState extends State<HopsRoot> {
   late int _themeIndex;
   late int _fontIndex;
   late double _fontScale;
+
+  // Cold start only. HopsRoot is built once for the process lifetime, so
+  // this never re-shows on a theme change, a sign-out, or a return from
+  // the background.
+  bool _splashDone = false;
 
   @override
   void initState() {
@@ -214,14 +260,39 @@ class _HopsRootState extends State<HopsRoot> {
         // now that there's an in-app control for it.
         final constrainedTextScale = _fontScale.clamp(0.85, 1.6);
         return MediaQuery(
-          data: mediaQueryData.copyWith(textScaleFactor: constrainedTextScale),
-          child: child!,
+          data: mediaQueryData.copyWith(textScaler: TextScaler.linear(constrainedTextScale)),
+          // Banner sits here, above `child`, rather than inside HopsApp's
+          // own Scaffold — HopsApp stays mounted underneath every pushed
+          // screen (a chat, settings, a report sheet), so a banner living
+          // in ITS body would be hidden behind whatever's on top exactly
+          // when someone most needs to reach it. This builder wraps every
+          // route the Navigator ever shows, splash and sign-in included, so
+          // "an alarm is ringing" stays reachable no matter what's on
+          // screen — not just while looking at HopsApp's own tabs.
+          child: Column(
+            children: [
+              const AlarmRingingBanner(),
+              Expanded(child: child!),
+            ],
+          ),
         );
       },
     );
   }
 
   Widget _getHomeWidget() {
+    // Swapped in place as `home` rather than pushed as a route, so the
+    // splash physically cannot navigate anywhere itself — it reports that
+    // it's done and the signed-in/signed-out decision below still runs
+    // exactly as before. A splash that pushed its own destination would
+    // route around that check and drop a signed-out user into HopsApp.
+    if (!_splashDone) {
+      return HopsSplashScreen(
+        onFinished: () {
+          if (mounted) setState(() => _splashDone = true);
+        },
+      );
+    }
     return FutureBuilder<SharedPreferences>(
       future: SharedPreferences.getInstance(),
       builder: (context, snapshot) {

@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 class DatabaseHelper {
   static const _databaseName = "MeshNetwork.db";
-  static const _databaseVersion = 8;
+  static const _databaseVersion = 9;
 
   static const table = 'messages';
   static const vibeTable = 'vibe_records';
@@ -52,6 +52,13 @@ class DatabaseHelper {
   // name. Stored separately from avatar/bio's upsert (see
   // upsertContactRotatingSeed) so updating one never clobbers the other.
   static const cpColRotatingSeed = 'rotating_seed';
+  // This contact's classic-Bluetooth MAC address, learned the first time
+  // an RFCOMM chat with them actually connects (see rfcomm_chat_service.dart
+  // /chat_terminal.dart) — lets a future chat with the same contact skip
+  // both classic-BT discovery and (on the hosting side) the intrusive
+  // "make this device discoverable" system dialog, connecting directly
+  // instead. Same separate-upsert reasoning as rotating_seed above.
+  static const cpColRfcommMac = 'rfcomm_mac';
 
   // Columns for Tasks
   static const taskColId = 'id';
@@ -153,7 +160,8 @@ class DatabaseHelper {
         $cpColAvatarPath TEXT,
         $cpColBio TEXT,
         $cpColUpdatedAt INTEGER NOT NULL,
-        $cpColRotatingSeed TEXT
+        $cpColRotatingSeed TEXT,
+        $cpColRfcommMac TEXT
       )
     ''');
   }
@@ -203,6 +211,9 @@ class DatabaseHelper {
     }
     if (oldVersion < 8) {
       await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColRotatingSeed TEXT');
+    }
+    if (oldVersion < 9) {
+      await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColRfcommMac TEXT');
     }
   }
 
@@ -356,6 +367,20 @@ class DatabaseHelper {
         $cpColRotatingSeed = excluded.$cpColRotatingSeed,
         $cpColUpdatedAt = excluded.$cpColUpdatedAt
     ''', [username, seedBase64, DateTime.now().millisecondsSinceEpoch]);
+  }
+
+  // Learned the same way as rotating_seed — see RfcommChatService's
+  // onMacLearned. Kept separate from the other upserts for the same
+  // don't-clobber-unrelated-fields reason.
+  Future<void> upsertContactMacAddress(String username, String macAddress) async {
+    Database db = await instance.database;
+    await db.rawInsert('''
+      INSERT INTO $contactProfilesTable ($cpColUsername, $cpColRfcommMac, $cpColUpdatedAt)
+      VALUES (?, ?, ?)
+      ON CONFLICT($cpColUsername) DO UPDATE SET
+        $cpColRfcommMac = excluded.$cpColRfcommMac,
+        $cpColUpdatedAt = excluded.$cpColUpdatedAt
+    ''', [username, macAddress, DateTime.now().millisecondsSinceEpoch]);
   }
 
   // Every known contact's rotating-ID seed, decoded and ready to test

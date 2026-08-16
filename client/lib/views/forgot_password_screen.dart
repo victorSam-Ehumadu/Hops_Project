@@ -191,7 +191,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           const SizedBox(height: 8),
           Text(
             "Enter the email you signed up with — we'll send a 6-digit code to reset your password.",
-            style: TextStyle(fontSize: 13, color: colors.onSurface.withOpacity(0.65), height: 1.4),
+            style: TextStyle(fontSize: 13, color: colors.onSurface.withValues(alpha: 0.65), height: 1.4),
           ),
           const SizedBox(height: 24),
           if (_error != null) _buildErrorBanner(colors),
@@ -243,7 +243,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           const SizedBox(height: 8),
           Text(
             "Enter the 6-digit code we sent to ${_emailController.text.trim()}, then choose a new password.",
-            style: TextStyle(fontSize: 13, color: colors.onSurface.withOpacity(0.65), height: 1.4),
+            style: TextStyle(fontSize: 13, color: colors.onSurface.withValues(alpha: 0.65), height: 1.4),
           ),
           const SizedBox(height: 24),
           if (_error != null) _buildErrorBanner(colors),
@@ -328,7 +328,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(color: Colors.red.withOpacity(0.08), borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(color: Colors.red.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12)),
       child: Row(
         children: [
           const Icon(Icons.error_outline, color: Colors.redAccent, size: 18),

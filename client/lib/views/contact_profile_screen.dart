@@ -149,7 +149,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
               style: TextStyle(
                 fontSize: 14,
                 fontStyle: hasBio ? FontStyle.normal : FontStyle.italic,
-                color: colors.onSurface.withOpacity(hasBio ? 0.85 : 0.5),
+                color: colors.onSurface.withValues(alpha: hasBio ? 0.85 : 0.5),
               ),
             ),
             const SizedBox(height: 32),
