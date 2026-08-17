@@ -203,7 +203,7 @@ class DecodedCommunityNameChunk {
 //   prefix(3) + senderTag(8) + msgId(1) + reason(1) = 13 chars
 //
 // senderTag + msgId is exactly the pair the receiver already keys messages
-// by (see community_chat.dart's msgKey), so a deletion identifies its
+// by (see community_alerts.dart's msgKey), so a deletion identifies its
 // target with no new identifier on the wire.
 //
 // Honest limits, since this is moderation and the gap matters: a device
@@ -352,6 +352,114 @@ List<String> splitCommunityMessage(String message) {
   }
   if (chunks.isEmpty) chunks.add('');
   return chunks;
+}
+
+// ── Alert composition: splitting a long alert into reliable parts ───────
+//
+// One Community Alerts message tops out at kCommunityNameMaxChunks ×
+// kCommunityNameTextBudget = 88 bytes — the advertisement-name budget times
+// the most chunks the wire format can address (chunkIndex and totalChunks-1
+// are each packed into 3 bits in encodeCommunityNameChunk, so 8 is a hard
+// ceiling, not a tuning knob). Reassembly needs every chunk of a message to
+// arrive, so a message needing more chunks has strictly more independent
+// chances for one to be missed — admin_ble_hub.dart's broadcastAdminChatMessage
+// now gives a long message more repeat cycles to narrow that gap, but it
+// can't close it, especially against real-world BLE flakiness on older
+// Android hardware.
+//
+// Rather than push the per-message ceiling any higher (which would mean
+// widening chunkIndex/totalChunks past 3 bits, eating further into the
+// already-tiny 11-byte text-per-chunk budget — a losing trade), a long
+// alert is split into several independent messages instead, each kept
+// small enough to land in the reliable few-chunk band on its own. A
+// dropped chunk then only costs one part of the alert, not the whole
+// thing, and every part already qualifies for the "<=3 chunks" 3-cycle
+// treatment short messages get.
+//
+// 3 chunks' worth of bytes per part — comfortably inside the reliable band
+// broadcastAdminChatMessage already special-cases, while still keeping the
+// part count for an ordinary long sentence low (most alerts split into 2-3
+// parts, not six).
+const int kAlertPartMaxBytes = kCommunityNameTextBudget * 3; // 33
+
+// Hard cap on how many separate broadcasts one composed alert turns into —
+// bounds both total airtime (each part takes roughly a chunk-cycle's worth
+// of seconds) and how many consecutive bubbles a single alert floods the
+// feed with. An admin who needs more than this is better served by two
+// separate alerts than a single wall of text anyway.
+const int kAlertMaxParts = 6;
+
+/// [parts] is what actually gets sent, in order. [truncated] is true if the
+/// composed alert didn't fit within kAlertMaxParts and had to be cut short —
+/// surfaced rather than silently dropped, the same lesson the original
+/// 27-byte chunk-budget bug (see kCommunityNameBudget above) already cost
+/// this app once: a length limit that fails silently just moves the bug
+/// from "visible in testing" to "reported by a confused admin."
+class AlertSplitResult {
+  final List<String> parts;
+  final bool truncated;
+  const AlertSplitResult(this.parts, this.truncated);
+}
+
+/// Splits [message] on word boundaries into parts that each fit within
+/// kAlertPartMaxBytes, so every part reassembles inside the reliable band
+/// rather than needing anywhere near the full 8-chunk ceiling. Falls back
+/// to splitCommunityMessage's byte-safe hard split only for a single "word"
+/// that alone exceeds the budget (e.g. a long URL with no spaces) — rare,
+/// but a part still has to fit on the wire regardless of where the spaces
+/// fell.
+AlertSplitResult splitIntoAlertParts(String message) {
+  final words = message.trim().split(RegExp(r'\s+'));
+  final parts = <String>[];
+  var current = StringBuffer();
+  var currentBytes = 0;
+
+  void flushCurrent() {
+    if (current.isEmpty) return;
+    parts.add(current.toString());
+    current = StringBuffer();
+    currentBytes = 0;
+  }
+
+  for (final word in words) {
+    if (word.isEmpty) continue;
+    final wordBytes = utf8.encode(word).length;
+
+    if (wordBytes > kAlertPartMaxBytes) {
+      flushCurrent();
+      for (final piece in splitCommunityMessage(word)) {
+        // splitCommunityMessage caps each piece to kCommunityNameTextBudget
+        // — smaller than kAlertPartMaxBytes — so an oversized word turns
+        // into more parts, never a less reliable one.
+        parts.add(piece);
+        if (parts.length >= kAlertMaxParts) {
+          return AlertSplitResult(parts, true);
+        }
+      }
+      continue;
+    }
+
+    final joinBytes = current.isEmpty ? 0 : 1; // the joining space
+    if (currentBytes + joinBytes + wordBytes > kAlertPartMaxBytes) {
+      flushCurrent();
+      if (parts.length >= kAlertMaxParts) {
+        return AlertSplitResult(parts, true);
+      }
+    }
+    if (current.isNotEmpty) {
+      current.write(' ');
+      currentBytes += 1;
+    }
+    current.write(word);
+    currentBytes += wordBytes;
+  }
+  flushCurrent();
+
+  if (parts.length > kAlertMaxParts) {
+    return AlertSplitResult(parts.sublist(0, kAlertMaxParts), true);
+  }
+  if (parts.isEmpty) parts.add('');
+  return AlertSplitResult(parts, false);
 }
 
 // ── 1:1 direct message over the advertisement name (BLE fallback) ───────

@@ -1,7 +1,7 @@
 // lib/views/admin/admin_moderation_tab.dart
 //
 // Open content_reports queue — students file these via
-// lib/utils/report_content.dart (Community Chat, Vibe Check). Resolving one
+// lib/utils/report_content.dart (Community Alerts, Vibe Check). Resolving one
 // here doesn't remove the reported content from anyone's device (see that
 // file's header comment for why: chat/vibe-check content is otherwise
 // transient/local-only, this snapshot is the only copy that ever reached
@@ -391,7 +391,7 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
   String _contentTypeLabel(String contentType) {
     switch (contentType) {
       case 'chat_message':
-        return "Community Chat";
+        return "Community Alerts";
       case 'vibe_check':
         return "Vibe Check";
       case 'contact_profile':

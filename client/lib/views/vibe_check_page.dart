@@ -406,7 +406,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                         // Vibe Check tags carry no sender at all (see
                         // VBT: in hops_app.dart) — this can only ever
                         // report the tag itself as spam/wrong, never a
-                        // specific person, unlike Community Chat's report
+                        // specific person, unlike Community Alerts' report
                         // action.
                         IconButton(
                           icon: Icon(Icons.flag_outlined, size: 18, color: colors.onSurface.withValues(alpha: 0.35)),

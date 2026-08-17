@@ -61,7 +61,7 @@ const List<_PermissionInfo> _kPermissions = [
     breaks: [
       "Radar shows nobody, ever",
       "You stop receiving emergency flares from people nearby",
-      "Community Chat receives nothing",
+      "Community Alerts receive nothing",
       "Vibe Check never sees anyone else's reports",
       "Watch Me can't tell if your buddy has moved away",
     ],
@@ -75,7 +75,7 @@ const List<_PermissionInfo> _kPermissions = [
         "only lets you listen — this is the half that lets you speak.",
     breaks: [
       "Your emergency flare reaches nobody",
-      "You can't send in Community Chat",
+      "Admins can't send Community Alerts",
       "You don't appear on anyone else's Radar",
       "You can't send files with Hops Share",
     ],
@@ -103,7 +103,7 @@ const List<_PermissionInfo> _kPermissions = [
         "location from Hops — it stops Hops seeing other phones at all.",
     breaks: [
       "On most phones, Bluetooth scanning stops entirely",
-      "Radar, Community Chat and flare alerts go quiet with it",
+      "Radar, Community Alerts and flare alerts go quiet with it",
     ],
     safetyCritical: true,
   ),

@@ -17,7 +17,7 @@ import 'package:client/views/admin/admin_dashboard_tab.dart';
 import 'package:client/views/admin/admin_moderation_tab.dart';
 import 'package:client/views/admin/admin_users_tab.dart';
 import 'package:client/views/admin/admin_action_log_tab.dart';
-import 'package:client/views/admin/admin_community_chat_tab.dart';
+import 'package:client/views/admin/admin_community_alerts_tab.dart';
 import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/main.dart' show navBarPillHeightNotifier;
 
@@ -65,7 +65,7 @@ class _AdminShellState extends State<AdminShell> {
   void initState() {
     super.initState();
     // One-time BlePeripheral.initialize() + the shared continuous scan both
-    // the Listening Post and Admin Community Chat subscribe to — see
+    // the Listening Post and Admin Community Alerts subscribe to — see
     // admin_ble_hub.dart's header comment. AdminShell is only ever reached
     // after sign-in (or a cached session) already requested Bluetooth
     // permissions (admin_sign_in_screen.dart), so it's safe to start here.
@@ -89,7 +89,7 @@ class _AdminShellState extends State<AdminShell> {
   // _AdminEntryGate) lands straight here without ever passing through the
   // sign-in screen, which is the only other place that asks for these. On
   // Android 12+ BLUETOOTH_ADVERTISE/SCAN are runtime permissions, so
-  // without this the Listening Post and Official Alert/Community Chat
+  // without this the Listening Post and Official Alert/Community Alerts
   // broadcasting could all silently do nothing on such a session.
   // Re-requesting an already-granted permission is a no-op.
   Future<void> _ensurePermissionsThenStartBle() async {
@@ -148,19 +148,19 @@ class _AdminShellState extends State<AdminShell> {
     AdminDashboardTab(),
     AdminModerationTab(),
     AdminUsersTab(),
-    AdminCommunityChatTab(), // reads AdminBleHub.instance internally, not via constructor — stays const-constructible
+    AdminCommunityAlertsTab(), // reads AdminBleHub.instance internally, not via constructor — stays const-constructible
     AdminActionLogTab(),
   ];
 
-  // Community Chat's input bar reserves bottom clearance for itself using
-  // navBarPillHeightNotifier (see main.dart). That exists for the STUDENT
-  // app, whose Scaffold sets extendBody: true so the floating nav pill
-  // hovers over the body — there, the body genuinely does have to keep the
-  // pill's height clear or the pill covers the text field.
+  // Community Alerts' compose bar reserves bottom clearance for itself
+  // using navBarPillHeightNotifier (see main.dart). That exists for the
+  // STUDENT app, whose Scaffold sets extendBody: true so the floating nav
+  // pill hovers over the body — there, the body genuinely does have to keep
+  // the pill's height clear or the pill covers the text field.
   //
   // This Scaffold does not set extendBody. An ordinary bottomNavigationBar
   // means the body is already laid out to stop above the NavigationBar, so
-  // reporting that bar's height here made Community Chat reserve it a
+  // reporting that bar's height here made Community Alerts reserve it a
   // second time: one whole nav bar of dead space between the input and the
   // tabs, which is exactly what it looked like.
   //
@@ -188,7 +188,7 @@ class _AdminShellState extends State<AdminShell> {
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: "Dashboard"),
           NavigationDestination(icon: Icon(Icons.flag_outlined), selectedIcon: Icon(Icons.flag), label: "Reports"),
           NavigationDestination(icon: Icon(Icons.people_outline), selectedIcon: Icon(Icons.people), label: "Users"),
-          NavigationDestination(icon: Icon(Icons.forum_outlined), selectedIcon: Icon(Icons.forum), label: "Chat"),
+          NavigationDestination(icon: Icon(Icons.campaign_outlined), selectedIcon: Icon(Icons.campaign), label: "Alerts"),
           NavigationDestination(icon: Icon(Icons.history), selectedIcon: Icon(Icons.history), label: "Log"),
         ],
       ),

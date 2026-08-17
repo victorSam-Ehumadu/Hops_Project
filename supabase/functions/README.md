@@ -14,10 +14,11 @@ after the database call it depends on has already succeeded.
 - `send-moderation-email` — ban/suspend/reinstatement notice, with an
   appeal path on the two restrictive kinds (see `HOPS_APPEALS_EMAIL` below)
 
-Both send through [Resend](https://resend.com) by default (see
-`_shared/send_email.ts`) purely because it needs nothing but an API key to
-get started — swap in SendGrid/Postmark/SES/etc. by editing that one file;
-nothing else needs to change.
+All three send through [SendGrid](https://sendgrid.com) by default (see
+`_shared/send_email.ts`) — its free tier's Single Sender Verification means
+you can send to any recipient after verifying one email address you
+already own, no domain/DNS required. Swap in Postmark/SES/Resend/etc. by
+editing that one file; nothing else needs to change.
 
 ## One-time setup
 
@@ -33,17 +34,20 @@ nothing else needs to change.
    supabase link --project-ref <your-project-ref>
    ```
 
-3. Sign up at [resend.com](https://resend.com) (free tier is plenty for
-   this), grab an API key, then:
+3. Sign up at [sendgrid.com](https://sendgrid.com) (free tier is plenty for
+   this). Under Settings > Sender Authentication, verify a **Single
+   Sender** — the one email address you'll send from (a normal inbox you
+   own, e.g. Gmail; no domain purchase or DNS records needed). Create an
+   API key under Settings > API Keys (Mail Send permission is enough),
+   then:
    ```
-   supabase secrets set RESEND_API_KEY=re_your_key_here
+   supabase secrets set SENDGRID_API_KEY=SG.your_key_here
+   supabase secrets set HOPS_EMAIL_FROM="Hops <you@example.com>"
    ```
-   Optionally also set a custom "From" address once you've verified a
-   sending domain in Resend (until then, sending only actually reaches the
-   Resend account's own verified email address):
-   ```
-   supabase secrets set HOPS_EMAIL_FROM="Hops <noreply@yourdomain.com>"
-   ```
+   `HOPS_EMAIL_FROM` is required, and must exactly match the address you
+   verified as a Single Sender — SendGrid rejects sends from anything
+   else, so there's no working default to fall back on if it's unset.
+
    And for `send-moderation-email` specifically, an inbox that actually
    reads appeals — without this, "reply to this email to appeal" in a ban/
    suspend notice is a promise nobody's checking:
@@ -63,7 +67,9 @@ nothing else needs to change.
 
 ## Testing without a real inbox
 
-Resend's sandbox sender (`onboarding@resend.dev`, the default in
-`send_email.ts`) will only actually deliver to the email address on the
-Resend account you signed up with — handy for testing the whole flow
-end-to-end before verifying a real domain.
+There isn't a sandbox sender to fall back on here the way some providers
+offer — `HOPS_EMAIL_FROM` must be a verified Single Sender before any send
+will succeed at all (SendGrid returns a 403 otherwise). Verifying one email
+address you already own takes about two minutes (click the confirmation
+link SendGrid emails you), so there's little reason not to just do that
+first and test end-to-end for real.

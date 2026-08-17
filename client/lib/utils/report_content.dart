@@ -1,14 +1,15 @@
 // lib/utils/report_content.dart
 //
 // Shared "Report" action for anything a student might flag for admin
-// review — Community Chat messages and Vibe Check community reports today,
-// any future reportable content type later without duplicating this sheet.
+// review — Community Alerts messages and Vibe Check community reports
+// today, any future reportable content type later without duplicating
+// this sheet.
 //
 // Submits a snapshot (not a live reference) to content_reports via
 // submit_report — see supabase/migrations/0008_admin_moderation.sql for
-// why that matters here specifically: Community Chat messages and Vibe
+// why that matters here specifically: Community Alerts messages and Vibe
 // Check submissions are otherwise transient/device-local only (see
-// community_chat.dart, vibe_check_page.dart, database_helper.dart), so
+// community_alerts.dart, vibe_check_page.dart, database_helper.dart), so
 // this snapshot, taken at the moment of reporting, is the *only* copy of
 // that content that ever reaches the server. Reporting something doesn't
 // remove it from anyone else's device — the sheet says so explicitly so

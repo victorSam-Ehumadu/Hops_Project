@@ -1,39 +1,39 @@
-// lib/views/admin/admin_community_chat_tab.dart
+// lib/views/admin/admin_community_alerts_tab.dart
 //
-// Lets an admin post into the same Community Chat students see, using the
-// shared CommunityChat widget (lib/views/community_chat.dart) — reused
-// as-is rather than duplicated, same as the notification/verification
-// plumbing the Listening Post already reuses from the student app. The only
-// admin-specific bit is *how the message is broadcast*: AdminBleHub sends
-// it tagged with kAdminCommunityProtocolMarker (this admin's own truncated
-// username, not an anonymizing rotating token — see hops_constants.dart),
-// which is what makes CommunityChat resolve and style it as an admin bubble
-// on every device that receives it, not just this one.
+// Lets an admin compose into Community Alerts — the only side of this
+// feature that can. Reuses the shared CommunityAlerts widget
+// (lib/views/community_alerts.dart) as-is, same as the notification/
+// verification plumbing the Listening Post already reuses from the student
+// app. The only admin-specific bit is *how the message is broadcast*:
+// AdminBleHub sends it tagged with this admin's own truncated username
+// under the CA: (admin) prefix — see hops_constants.dart — which is what
+// lets CommunityAlerts resolve and admit it on every device that receives
+// it, not just this one.
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/services/key_directory.dart';
-import 'package:client/views/community_chat.dart';
+import 'package:client/views/community_alerts.dart';
 
-class AdminCommunityChatTab extends StatefulWidget {
-  const AdminCommunityChatTab({super.key});
+class AdminCommunityAlertsTab extends StatefulWidget {
+  const AdminCommunityAlertsTab({super.key});
 
   @override
-  State<AdminCommunityChatTab> createState() => _AdminCommunityChatTabState();
+  State<AdminCommunityAlertsTab> createState() => _AdminCommunityAlertsTabState();
 }
 
-class _AdminCommunityChatTabState extends State<AdminCommunityChatTab> {
+class _AdminCommunityAlertsTabState extends State<AdminCommunityAlertsTab> {
   String? _myUsername;
 
   @override
   void initState() {
     super.initState();
     _loadUsername();
-    // Names in Community Chat are resolved from this cache (see
-    // community_chat.dart's _resolveSenderAndAdd) — an admin reviewing
-    // chat needs to see who actually said what, so make sure it's current
-    // rather than relying on the Listening Post tab having been opened
-    // first. Best-effort/fire-and-forget, same as everywhere else.
+    // Names in Community Alerts are resolved from this cache (see
+    // community_alerts.dart's _resolveSenderAndAdd) — an admin reviewing
+    // the feed needs to see who actually sent what, so make sure it's
+    // current rather than relying on the Listening Post tab having been
+    // opened first. Best-effort/fire-and-forget, same as everywhere else.
     KeyDirectory.sync();
   }
 
@@ -48,13 +48,10 @@ class _AdminCommunityChatTabState extends State<AdminCommunityChatTab> {
     if (username == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    return CommunityChat(
+    return CommunityAlerts(
       radarStream: AdminBleHub.instance.scanStream,
       myUsername: username,
       amAdmin: true,
-      // The whole reason an admin reads this feed is to see who said what
-      // — students see anonymous labels, admins see accounts.
-      showRealNames: true,
       onSendMessage: (message) async {
         // Resolved before the await, not after: looking an inherited widget
         // up off a context that may have been disposed mid-broadcast is the

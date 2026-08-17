@@ -21,6 +21,7 @@ class NotificationService {
   static const int _fileReceivedNotificationId = 207;
   static const int _taskReminderNotificationId = 208;
   static const int _communityMessageNotificationId = 209;
+  static const int _accountSuspendedNotificationId = 210;
   static const int _adminWarningNotificationId = 211;
   static const int _chatNotificationIdBase = 90000;
 
@@ -221,8 +222,21 @@ class NotificationService {
   // immediately signs the device out locally.
   static Future<void> showAccountBannedNotification() => _showActivity(
         id: _accountBannedNotificationId,
+        title: "Account banned",
+        body: "A Hops admin has banned this account. You've been signed out.",
+      );
+
+  // Same idea as above, for a suspension rather than a ban — see
+  // _syncIdentityStatus's 'account_suspended' branch. Distinct wording (and
+  // a distinct notification id) so someone who's been both at different
+  // times isn't left staring at a stale "banned" toast for what's actually
+  // a temporary lockout.
+  static Future<void> showAccountSuspendedNotification({String? until}) => _showActivity(
+        id: _accountSuspendedNotificationId,
         title: "Account suspended",
-        body: "A Hops admin has suspended this account. You've been signed out.",
+        body: until != null
+            ? "A Hops admin has suspended this account until $until. You've been signed out."
+            : "A Hops admin has suspended this account. You've been signed out.",
       );
 
   static Future<void> showTaskReminderNotification({required String taskTitle}) =>
@@ -232,16 +246,17 @@ class NotificationService {
         body: "'$taskTitle' is due now",
       );
 
-  // Community Chat is a broadcast everyone nearby receives, so unlike a 1:1
-  // chat this reuses ONE id — a busy channel would otherwise stack up a
-  // separate notification per message. Latest message replaces the last.
+  // Community Alerts is a broadcast everyone nearby receives, so unlike a
+  // 1:1 chat this reuses ONE id — several alerts in a row would otherwise
+  // stack up a separate notification per message. Latest alert replaces
+  // the last.
   static Future<void> showCommunityMessageNotification({
     required String sender,
     required String message,
   }) =>
       _showActivity(
         id: _communityMessageNotificationId,
-        title: "Community Chat · $sender",
+        title: "Community Alert · $sender",
         body: message,
       );
 

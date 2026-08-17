@@ -103,7 +103,7 @@ final StreamController<BleDirectMessage> bleDirectMessageInbox =
 // pill — arrow handle + gap + the pill itself — refreshed every frame it's
 // visible (see hops_app.dart's _buildFloatingNavBar). Exists so a screen
 // that has to position its own content just above the pill by hand (e.g.
-// Community Chat's message input) can clear it exactly, instead of
+// Community Alerts' compose bar) can clear it exactly, instead of
 // guessing a fixed offset from kFloatingNavClearance (hops_constants.dart)
 // — that constant is deliberately oversized "don't get covered" padding
 // for scrollable lists where a little extra empty space at the bottom is
@@ -174,7 +174,7 @@ void main() async {
   });
   await quickActions.setShortcutItems(const [
     ShortcutItem(type: 'emergency_flare', localizedTitle: 'Emergency Flare'),
-    ShortcutItem(type: 'community_chat', localizedTitle: 'Community Chat'),
+    ShortcutItem(type: 'community_alerts', localizedTitle: 'Community Alerts'),
   ]);
 
   runApp(const HopsRoot());

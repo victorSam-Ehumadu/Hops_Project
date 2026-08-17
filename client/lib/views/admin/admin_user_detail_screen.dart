@@ -163,14 +163,34 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
         },
       );
       final data = res.data;
-      if (mounted && data is Map && data['ok'] == false && data['error'] == 'no_email_on_file') {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("No email on file for this account — they won't be emailed about this."),
-        ));
+      // Previously only 'no_email_on_file' was surfaced — every other
+      // failure (Resend rejecting the send, RESEND_API_KEY missing, etc.)
+      // came back as {ok:false, error:...} exactly the same way, but was
+      // silently dropped, so a ban/suspend could "succeed" here while the
+      // target was never actually told, with nothing in the UI to say so.
+      // A common real cause for 'send_failed' on this project's setup:
+      // Resend's shared onboarding@resend.dev sender only delivers to the
+      // Resend account's own verified address until a real sending domain
+      // is verified and HOPS_EMAIL_FROM is set — see
+      // supabase/functions/_shared/send_email.ts.
+      if (mounted && data is Map && data['ok'] == false) {
+        final err = data['error'] as String?;
+        final message = switch (err) {
+          'no_email_on_file' => "No email on file for this account — they won't be emailed about this.",
+          'send_failed' => "Done, but the notification email failed to send "
+              "(check the Resend sending domain / RESEND_API_KEY).",
+          'email_not_configured' => "Done, but no email service is configured "
+              "(RESEND_API_KEY isn't set) — they won't be emailed about this.",
+          _ => "Done, but the notification email couldn't be sent.",
+        };
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
       }
     } catch (_) {
       // Not surfaced — see doc comment. The edge function may not even be
       // deployed yet on a project that's only applied the SQL migrations.
+      // This branch is for the call itself failing (offline, function not
+      // found); a call that succeeds but returns {ok:false} is handled
+      // above instead.
     }
   }
 

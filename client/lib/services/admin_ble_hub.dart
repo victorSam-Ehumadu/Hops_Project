@@ -12,8 +12,8 @@
 //      actual state. ensureStarted() below is the one place that call
 //      happens now, gated so it only ever runs once per process.
 //
-//   2. The Listening Post (admin_alert_tab.dart) and Admin Community Chat
-//      (admin_community_chat_tab.dart) both need a continuous, HOPS_SERVICE_
+//   2. The Listening Post (admin_alert_tab.dart) and Admin Community Alerts
+//      (admin_community_alerts_tab.dart) both need a continuous, HOPS_SERVICE_
 //      UUID-filtered scan feeding them ScanResults — same shape as
 //      hops_app.dart's single shared radarStream. Without one owner, each
 //      tab starting/stopping its own scan on its own tab-switch lifecycle
@@ -282,13 +282,29 @@ class AdminBleHub {
 
   int _chatMsgCounter = 0;
 
-  /// Broadcasts one Community Chat message as this admin's own identity —
+  // Serializes consecutive broadcastAdminChatMessage calls so two messages
+  // (the parts of one auto-split long alert — see hops_constants.dart's
+  // splitIntoAlertParts — or just two separate alerts sent close together)
+  // never cycle chunks on the shared BlePeripheral radio at the same time.
+  // It can only ever advertise ONE local name at once, so two overlapping
+  // cycles would each keep interrupting the other's stopAdvertising()/
+  // startAdvertising() pair via their own independent Timers, corrupting
+  // both messages' reassembly on every receiving device. Each call's own
+  // advertising work now waits for the PREVIOUS call's full cycle (not just
+  // its first chunk) to finish before it starts; the Future this method
+  // returns to its caller still resolves as soon as its own turn's first
+  // chunk is confirmed, same prompt-feedback contract as before.
+  Future<void> _chatSendQueue = Future.value();
+
+  /// Broadcasts one Community Alerts message as this admin's own identity —
   /// an admin's tag is their own (truncated) username rather than an
   /// anonymizing rotating token, since the whole point of an admin
   /// speaking up is that it's identifiably them. Uses the v3 advertisement
   /// local-name format (see hops_constants.dart's kCommunityNameBudget for
   /// why the earlier scan-response manufacturer-data encoding was
-  /// abandoned) — mirrors hops_app.dart's _advertiseCommunityMessage.
+  /// abandoned). This is the only place in the app that composes a
+  /// Community Alerts message — students are read-only (see
+  /// community_alerts.dart).
   /// Returns false if the message could not be put on the air at all.
   ///
   /// It used to return void and fire the first advertise without awaiting
@@ -306,11 +322,37 @@ class AdminBleHub {
   /// device", which is answered by then, and the id is needed promptly so
   /// the admin's own copy can be tagged for a possible later deletion.
   Future<int?> broadcastAdminChatMessage(String message, String adminUsername) async {
-    // Guarantees BlePeripheral.initialize() has actually run — the admin
-    // app can reach this screen on a restored session without ever having
-    // passed through sign-in, so nothing else on the path is certain to
-    // have done it.
-    await ensureStarted();
+    // Claim a place in line: whoever called this before us gets `myTurn`
+    // (our predecessor's cycleDone future); we publish our OWN cycleDone as
+    // the new queue tail before awaiting anything, so a caller that arrives
+    // while we're still waiting our turn correctly queues behind us, not
+    // behind whoever we're waiting on. This all happens synchronously
+    // (nothing here awaits yet), so there's no race between two calls
+    // arriving back-to-back.
+    final myTurn = _chatSendQueue;
+    final cycleDone = Completer<void>();
+    _chatSendQueue = cycleDone.future;
+
+    // Guaranteed to complete no matter which path below returns/throws —
+    // otherwise a failure between here and the first successful chunk would
+    // leave cycleDone forever incomplete, and every call queued behind us
+    // would hang waiting for a turn that never comes.
+    void finishTurn() {
+      if (!cycleDone.isCompleted) cycleDone.complete();
+    }
+
+    await myTurn; // wait for the previous call's full cycle to finish
+
+    try {
+      // Guarantees BlePeripheral.initialize() has actually run — the admin
+      // app can reach this screen on a restored session without ever having
+      // passed through sign-in, so nothing else on the path is certain to
+      // have done it.
+      await ensureStarted();
+    } catch (e) {
+      finishTurn();
+      return null;
+    }
 
     final msgId = _chatMsgCounter;
     // 64, not 256 — msgId is one 6-bit character in the v3 name format.
@@ -319,7 +361,19 @@ class AdminBleHub {
     final chunks = splitCommunityMessage(message);
 
     const perChunkDuration = Duration(milliseconds: 1500);
-    final totalCycles = chunks.length <= 3 ? 3 : 2;
+    // MORE repeats for longer messages, not fewer. This used to be inverted
+    // (3 cycles for <=3 chunks, only 2 beyond that) on an airtime-cost
+    // argument — a max-length 8-chunk alert already spends nearly a minute
+    // on the air, so cycling it a third time was cut to save time. That
+    // reasoning had it backwards for what this channel actually is now:
+    // reassembly needs EVERY chunk to arrive, so a message needing more
+    // chunks has more independent chances for one to be missed, and is
+    // exactly the message that most needs the extra pass — not the one that
+    // can least afford it. An alert is sent once, rarely, and matters more
+    // than a chat message; spending under a minute of airtime to reliably
+    // land an 8-chunk alert is a good trade, and this is the fix for admins
+    // reporting long alerts failing to arrive.
+    final totalCycles = chunks.length <= 3 ? 3 : 4;
 
     Future<void> advertiseChunk(int index) async {
       await BlePeripheral.stopAdvertising();
@@ -347,7 +401,10 @@ class AdminBleHub {
         } else if (cycle + 1 < totalCycles) {
           step(0, cycle + 1);
         } else {
+          // Cycling is genuinely done — safe for the next queued call (the
+          // next part of a split alert, most commonly) to start its own.
           BlePeripheral.stopAdvertising();
+          finishTurn();
         }
       });
     }
@@ -357,6 +414,7 @@ class AdminBleHub {
     try {
       await advertiseChunk(0);
     } catch (e) {
+      finishTurn();
       return null;
     }
 
@@ -367,6 +425,7 @@ class AdminBleHub {
         step(0, 1);
       } else {
         BlePeripheral.stopAdvertising();
+        finishTurn();
       }
     });
     return msgId;

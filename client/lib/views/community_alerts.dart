@@ -1,13 +1,28 @@
-// lib/views/community_chat.dart
+// lib/views/community_alerts.dart
 //
-// Wire format v2: messages ride in BLE manufacturer data (scan response),
-// chunked and reassembled — see hops_constants.dart for the byte-level
-// protocol and hops_app.dart's _advertiseCommunityMessage for the sender
-// side. Dedup here works at two levels: an in-flight reassembly buffer per
-// (sender, msgId) while chunks are still arriving, and a short-lived
-// "already shown" set once a message is complete, so the sender's own
-// repeated re-broadcast of the same chunks during its cycle doesn't
-// re-add the message every time it's picked up again.
+// Formerly Community Chat — anyone nearby could broadcast into a shared
+// thread. Repurposed to Community Alerts: only Hops admins can post; every
+// other Hops user is a read-only recipient. Two reasons this is a straight
+// repurpose rather than a rewrite:
+//
+//   1. The wire format was already fine. v3 (chunked advertisement LOCAL
+//      NAME — see hops_constants.dart) is the same channel EMG:/FR:/HOP:/
+//      VBT: use, the one BLE mechanism this app has confirmed working on
+//      real hardware. Nothing about *delivery* needed fixing.
+//   2. A free-for-all broadcast thread and an admin-only alert channel need
+//      the same reassembly/dedup/persistence/moderation machinery — only
+//      who's allowed to add to it differs. So this keeps that machinery
+//      (see _ChunkBuffer, _resolveSenderAndAdd, the CX: deletion path) and
+//      changes two things: the compose UI only renders for widget.amAdmin,
+//      and _listenToRadar now discards anything that doesn't decode as an
+//      admin-tagged (CA:) chunk before it's even buffered — enforced on the
+//      receiving end, not just hidden in the UI, so a forged CM: broadcast
+//      from an ordinary account can't inject a fake "alert" into the feed.
+//
+// kCommunityChatPrefix ('CM:', the plain non-admin tag) still exists in
+// hops_constants.dart and still decodes — nothing in this app emits it
+// anymore, but the decoder accepting it costs nothing and there's no reason
+// to make the wire format itself refuse a shape it doesn't currently see.
 
 import 'dart:async';
 import 'dart:convert';
@@ -31,24 +46,23 @@ class CommunityMessage {
   final String text;
   final DateTime timestamp;
   final bool isMe;
-  // True for a message sent by an admin (either received and resolved via
-  // KeyDirectory, or this device's own outgoing message when amAdmin is
-  // set — see CommunityChat.amAdmin) — drives the distinct bubble styling
-  // in _buildBubble.
+  // Always true for anything actually shown now — see _resolveSenderAndAdd,
+  // which refuses to add a message from any sender that doesn't resolve to
+  // a confirmed admin account. Kept as a field (rather than assumed) because
+  // it still drives the bubble's admin styling and JSON round-trips old
+  // local history.
   final bool isAdmin;
 
-  // The sender's REAL account name, resolved from the wire tag. Kept
-  // separate from [sender] (which is what's actually shown) because the
-  // student app deliberately displays a contact's name or an anonymous
-  // label instead — see CommunityChat.showRealNames. Reporting must use
-  // this one: a report filed against the displayed string named an
-  // account that doesn't exist, and the admin app's "Send warning" then
-  // failed with "no account by that name exists".
+  // The sender's REAL account name, resolved from the wire tag. An admin's
+  // alert is meant to be attributable — that's the entire point of
+  // restricting who can send — so unlike the old Community Chat, this is
+  // also what gets DISPLAYED, not just what reports are filed against.
   //
   // Null when this device couldn't match the tag to any cached account
-  // (directory never synced, or synced before that account existed) — the
-  // report UI treats that as "not reportable" rather than sending a name
-  // the server will reject.
+  // (directory never synced, or synced before that account existed) — see
+  // _resolveSenderAndAdd, which now drops the message entirely rather than
+  // showing it unattributed, since an alert nobody can attribute to a real
+  // admin account isn't one this feed should trust.
   final String? realUsername;
 
   /// Wire identity of this message: the sender tag and 6-bit id it arrived
@@ -124,7 +138,7 @@ class CommunityMessage {
 
   /// Range-checked rather than indexed directly: a stored index from a
   /// build with more reasons would throw while loading history, which is a
-  /// blank Community Chat rather than one odd message.
+  /// blank Community Alerts feed rather than one odd message.
   static CommunityDeleteReason? _reasonFromIndex(int? i) =>
       (i != null && i >= 0 && i < CommunityDeleteReason.values.length)
           ? CommunityDeleteReason.values[i]
@@ -142,16 +156,18 @@ class _ChunkBuffer {
       List.generate(totalChunks, (i) => chunks[i] ?? '').join();
 }
 
-class CommunityChat extends StatefulWidget {
+class CommunityAlerts extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
-  /// Sends the message over BLE and returns the 6-bit msgId it was
-  /// broadcast under, or null if the sender doesn't track one.
+  /// Sends the alert over BLE and returns the 6-bit msgId it was broadcast
+  /// under, or null if the sender doesn't track one. Null (unset) on the
+  /// student side entirely — only the admin app ever composes, so there's
+  /// nothing to send there.
   ///
   /// The id comes back so this device's own copy can be tagged with the
   /// same wire identity everyone else keys it by — without that, an admin
   /// deletion removed the message from every device except the one that
   /// posted it, which is the device whose author most needs to see it go.
-  final Future<int?> Function(String message) onSendMessage;
+  final Future<int?> Function(String message)? onSendMessage;
   final String myUsername;
 
   // True when this is the tab currently on screen. Every tab in HopsApp's
@@ -162,77 +178,58 @@ class CommunityChat extends StatefulWidget {
   // shows this as a whole tab of its own).
   final bool isVisible;
 
-  // Whether to DISPLAY senders' real account names.
-  //
-  // The wire always carries the real (truncated) username — moderation is
-  // impossible without it, since a report has to name an account an admin
-  // can actually act on. But showing it to every student nearby is a
-  // different question, and the answer is no: students see a known
-  // contact's name, or an anonymous label for everyone else, exactly as
-  // before. Only the admin app sets this true.
-  //
-  // Worth being clear-eyed that this is a presentation choice, not a
-  // privacy guarantee — the username is on the air either way, and anyone
-  // running a modified client could read it. What it does preserve is the
-  // social property of the feature (you aren't identified to the room by
-  // default) without giving up the accountability admins need.
-  final bool showRealNames;
-
   // True when this instance is running inside the Admin app (see
-  // admin_community_chat_tab.dart) — marks this device's own outgoing
-  // messages as admin-styled locally, and switches the own-broadcast skip
-  // check in _listenToRadar to match on truncated username instead of a
-  // rotating seed, since admin messages aren't sent with one. Received
-  // messages are marked admin/not independent of this flag (that comes
-  // from the wire — see DecodedCommunityChunk.isAdmin); this only affects
-  // how OUR OWN messages are labeled/skipped.
+  // admin_community_alerts_tab.dart) — the ONLY thing that decides whether
+  // the compose bar renders at all. Received messages are always styled and
+  // attributed as admin messages regardless of this flag (every message
+  // that survives _resolveSenderAndAdd already is one); this only controls
+  // whether THIS device can add to the feed.
   final bool amAdmin;
 
-  const CommunityChat({
+  const CommunityAlerts({
     super.key,
     required this.radarStream,
-    required this.onSendMessage,
     required this.myUsername,
+    this.onSendMessage,
     this.amAdmin = false,
     this.isVisible = true,
-    this.showRealNames = false,
-    this.contactSeeds = const {},
   });
 
-  // Known contacts' rotating-ID seeds. Community Chat no longer identifies
-  // senders by rotating token (the wire tag is a username now), but a
-  // *contact's* name is still shown rather than an anonymous label — and
-  // deciding "is this sender someone I've paired with" still means
-  // checking whether their name is one of these keys.
-  final Map<String, List<int>> contactSeeds;
-
   @override
-  State<CommunityChat> createState() => _CommunityChatState();
+  State<CommunityAlerts> createState() => _CommunityAlertsState();
 }
 
-class _CommunityChatState extends State<CommunityChat> {
-  static const _prefsKey = 'community_messages_v1';
+class _CommunityAlertsState extends State<CommunityAlerts> {
+  // v1 under the new name deliberately — this is a fresh feed, not a
+  // continuation of Community Chat's history. Old local history could
+  // contain ordinary students' messages from before this repurpose, which
+  // have no business surviving as "alerts" once the feature's meaning
+  // changed; a new key just leaves that old data inert rather than trying
+  // to filter it after the fact.
+  static const _prefsKey = 'community_alerts_v1';
   static const int _maxStored = 100;
-  // Hard capacity of the v3 advertisement-name format is
-  // kCommunityNameMaxChunks × kCommunityNameTextBudget = 8 × 14 = 112
-  // *bytes* (see hops_constants.dart). Capped a little under that in
-  // characters, since a non-ASCII character costs more than one byte and
-  // anything over the byte ceiling is silently truncated by
-  // splitCommunityMessage rather than rejected.
-  // Derived, not hand-picked: the most that can actually fit on the wire is
-  // kCommunityNameMaxChunks × kCommunityNameTextBudget. It was hard-coded at
-  // 105 against a 14-byte chunk budget; when that budget changed the two
-  // silently disagreed and splitCommunityMessage quietly dropped the
-  // overflow, so anything past the real limit was truncated mid-sentence
-  // with the counter still saying there was room.
-  static const int _maxMsgLen =
-      kCommunityNameMaxChunks * kCommunityNameTextBudget;
+  // A single wire message tops out at kAlertPartMaxBytes worth of reliable
+  // capacity (see hops_constants.dart's splitIntoAlertParts for why that's
+  // 3 chunks' worth rather than the full 8-chunk ceiling), but a composed
+  // alert isn't limited to one wire message anymore — _send() splits
+  // anything longer into up to kAlertMaxParts separate broadcasts. This is
+  // the composer's overall guide-rail on that, in characters rather than
+  // bytes (a non-ASCII character costs more than one byte, same caveat
+  // splitCommunityMessage always had), matched to what splitIntoAlertParts
+  // will actually fit before it has to start trimming.
+  static const int _maxMsgLen = kAlertMaxParts * kAlertPartMaxBytes;
 
   List<CommunityMessage> _messages = [];
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   StreamSubscription? _streamSub;
   bool _isSending = false;
+  // Progress for a multi-part send — 0/0 outside of sending, or e.g. 2/3
+  // while the second of three split parts is in flight. Drives the small
+  // status line in the composer so a long alert taking a while doesn't
+  // read as the app being stuck.
+  int _sendingIndex = 0;
+  int _sendingTotal = 0;
 
   final Map<String, _ChunkBuffer> _pendingChunks = {}; // key: "sender:msgId"
   final Map<String, DateTime> _completedMsgKeys = {}; // msgKey -> shown-at
@@ -284,71 +281,43 @@ class _CommunityChatState extends State<CommunityChat> {
   // ── Radar listener — chunk reassembly ─────────────────────────────────────
 
   // Resolves a chunk's truncated-username tag against the cached public
-  // directory and adds the completed message. Async (KeyDirectory reads
-  // from SharedPreferences on first use), so it's kept outside the
-  // synchronous per-batch loop in _listenToRadar and manages its own
-  // setState/_persist/scroll rather than folding into that loop's shared
-  // `updated` flag.
+  // directory and adds the completed message — but only once that tag
+  // actually resolves to an account cached with role 'admin'. Anyone can
+  // claim the CA: prefix; the resolution against KeyDirectory is what
+  // actually verifies it, and a claim that doesn't resolve is dropped
+  // rather than shown some lesser way — there's no legitimate reason for a
+  // message in this feed to exist without a confirmed admin behind it.
   //
-  // [isAdmin] comes from the wire prefix, but is only *trusted* if the
-  // resolved account is actually cached with role 'admin' — otherwise
-  // anyone could style their message as official just by using the CA:
-  // prefix. An unresolvable admin-claiming tag is shown as an ordinary
-  // message, not an admin one.
+  // Async (KeyDirectory reads from SharedPreferences on first use), so it's
+  // kept outside the synchronous per-batch loop in _listenToRadar and
+  // manages its own setState/_persist/scroll rather than folding into that
+  // loop's shared state.
   Future<void> _resolveSenderAndAdd(
-      String tag, int msgId, String text, DateTime now, bool claimsAdmin) async {
+      String tag, int msgId, String text, DateTime now) async {
     // Permanent guard against re-adding a message already in the list,
-    // independent of _completedMsgKeys' 90-second memory.
-    //
-    // This is the actual fix for "messages keep repeating": the 90-second
-    // window only ever existed to skip re-processing chunks still arriving
-    // during a message's own active broadcast cycle (which finishes in
-    // well under 90s — see splitCommunityMessage's timing). Once that
-    // window lapsed, a chunk set for the SAME message arriving again —
-    // from Android's BLE scan cache replaying a device's last-seen
-    // advertisement on a fresh scan (e.g. after tapping Rescan), or a
-    // sender's peripheral stack not fully releasing a stopped
-    // advertisement before the next one starts — was treated as brand
-    // new and reassembled into a second, duplicate bubble. Checking
-    // against what's actually on screen has no expiry, so a stale
-    // redelivery can't produce a duplicate no matter how late it arrives.
+    // independent of _completedMsgKeys' 90-second memory — see the original
+    // Community Chat comment this carries forward: a stale BLE-scan-cache
+    // redelivery arriving after that window shouldn't produce a duplicate
+    // bubble no matter how late it arrives.
     if (_messages.any((m) => m.senderTag == tag && m.msgId == msgId)) return;
 
     final candidates = await KeyDirectory.candidatesForTruncatedUsername(tag);
     String? resolvedName;
-    var confirmedAdmin = false;
     for (final candidate in candidates) {
-      if (claimsAdmin && candidate.value.role != 'admin') continue;
+      if (candidate.value.role != 'admin') continue;
       resolvedName = candidate.key;
-      confirmedAdmin = claimsAdmin && candidate.value.role == 'admin';
       break;
     }
 
+    // No confirmed-admin candidate — either a spoofed CA: from an ordinary
+    // account, or an admin this device's directory hasn't synced yet (or
+    // has since been demoted). Either way, not something this feed shows.
+    if (resolvedName == null) return;
+
     if (!mounted) return;
 
-    // What to actually SHOW. Admins see the real account name; students
-    // see a contact's name if this is someone they've paired with, and an
-    // anonymous label otherwise — see showRealNames' doc comment.
-    final isKnownContact =
-        resolvedName != null && widget.contactSeeds.containsKey(resolvedName);
-    final String displayName;
-    if (widget.showRealNames && resolvedName != null) {
-      displayName = resolvedName;
-    } else if (isKnownContact) {
-      displayName = resolvedName;
-    } else if (confirmedAdmin) {
-      // An admin's message is meant to be recognizable as official even in
-      // the student app — that's the entire point of the separate tier.
-      displayName = resolvedName ?? 'Admin';
-    } else {
-      // Hashed, NOT the raw tag — the tag is the sender's username now, so
-      // printing it here would have made "Anonymous #Kwame123". See
-      // anonymousLabelFor.
-      displayName = 'Anonymous #${anonymousLabelFor(tag)}';
-    }
-
     // Badge + system notification — but only when this screen isn't the
-    // thing being looked at right now. Community Chat lives in a PageView
+    // thing being looked at right now. Community Alerts lives in a PageView
     // inside HopsApp, so "mounted" isn't enough to tell: every tab stays
     // mounted regardless of which one is on screen. widget.isVisible is
     // what HopsApp uses to say "this is the selected tab", and the
@@ -356,20 +325,20 @@ class _CommunityChatState extends State<CommunityChat> {
     final looking = widget.isVisible &&
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     if (!looking) {
-      UnreadTracker.instance.mark(UnreadSource.communityChat);
+      UnreadTracker.instance.mark(UnreadSource.communityAlerts);
       NotificationService.showCommunityMessageNotification(
-        sender: displayName,
+        sender: resolvedName,
         message: text,
       );
     }
 
     setState(() {
       _messages.add(CommunityMessage(
-        sender: displayName,
+        sender: resolvedName!,
         text: text,
         timestamp: now,
         isMe: false,
-        isAdmin: confirmedAdmin,
+        isAdmin: true,
         realUsername: resolvedName,
         senderTag: tag,
         msgId: msgId,
@@ -419,10 +388,15 @@ class _CommunityChatState extends State<CommunityChat> {
         final decoded = decodeCommunityNameChunk(r.advertisementData.advName);
         if (decoded == null || decoded.senderTag.isEmpty) continue;
 
-        // Skip our own broadcasts — the tag is now the sender's truncated
-        // username for everyone (student and admin alike), so this is one
-        // plain comparison rather than the two-branch check the rotating-
-        // token version needed.
+        // Community Alerts is admin-only by design — discard anything that
+        // didn't arrive under the admin prefix (CA:) before it's even
+        // buffered. This is the enforcement, not the compose bar being
+        // hidden: even a modified client broadcasting plain CM: chunks
+        // can't get a message into this feed.
+        if (!decoded.isAdmin) continue;
+
+        // Skip our own broadcasts (admin composing) — the tag is the
+        // sender's truncated username.
         final myTag = widget.myUsername.length > kCommunityNameSenderTagChars
             ? widget.myUsername.substring(0, kCommunityNameSenderTagChars)
             : widget.myUsername.padRight(kCommunityNameSenderTagChars, '_');
@@ -440,10 +414,11 @@ class _CommunityChatState extends State<CommunityChat> {
           _pendingChunks.remove(msgKey);
           _completedMsgKeys[msgKey] = now;
           // Resolved against the whole cached public directory — not just
-          // this device's contacts — so a name shows for everyone nearby,
-          // not only people already paired with. See _resolveSenderAndAdd.
+          // this device's contacts — so an alert shows for every nearby
+          // Hops user, not only people already paired with. See
+          // _resolveSenderAndAdd.
           _resolveSenderAndAdd(decoded.senderTag, decoded.msgId,
-              buffer.reassembled, now, decoded.isAdmin);
+              buffer.reassembled, now);
         }
       }
 
@@ -464,65 +439,122 @@ class _CommunityChatState extends State<CommunityChat> {
     });
   }
 
-  // ── Sending ───────────────────────────────────────────────────────────────
+  // ── Sending (admin only) ─────────────────────────────────────────────────
+
+  /// Sends this device's own message [text] (one part of a possibly
+  /// multi-part alert) and backfills its wire identity once broadcast
+  /// starts. Shared by both the single-part and split-alert paths in
+  /// _send() below — the only difference between them is how many times
+  /// this gets called and awaited.
+  Future<void> _sendOnePart(String text, int index) async {
+    final msgId = await widget.onSendMessage!(text);
+    // Null means the broadcast never started. Said out loud, because the
+    // message is already sitting in this device's own list looking sent —
+    // which is exactly how a message that reached nobody passed for a
+    // delivered one.
+    if (msgId == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_sendingTotal > 1
+            ? "Part $_sendingIndex of $_sendingTotal couldn't broadcast — check Bluetooth is on."
+            : "Couldn't broadcast — check Bluetooth is on, then try again."),
+        duration: const Duration(seconds: 5),
+      ));
+    }
+    // Backfill the wire identity so an admin deletion can find this copy
+    // too. Guarded on the index still holding the same message: received
+    // messages can land in the list while the broadcast is starting.
+    if (msgId != null && index < _messages.length) {
+      final mine = _messages[index];
+      if (mine.isMe && mine.text == text && mine.senderTag == null) {
+        final tag = widget.myUsername.length > kCommunityNameSenderTagChars
+            ? widget.myUsername.substring(0, kCommunityNameSenderTagChars)
+            : widget.myUsername.padRight(kCommunityNameSenderTagChars, '_');
+        _messages[index] = CommunityMessage(
+          sender: mine.sender,
+          text: mine.text,
+          timestamp: mine.timestamp,
+          isMe: true,
+          isAdmin: true,
+          realUsername: mine.realUsername,
+          senderTag: tag,
+          msgId: msgId,
+        );
+        await _persist();
+      }
+    }
+  }
 
   Future<void> _send() async {
     final text = _controller.text.trim();
-    if (text.isEmpty || _isSending) return;
+    // The compose bar only ever renders for widget.amAdmin (which is the
+    // only case onSendMessage is non-null in practice) — this null check is
+    // defensive, not reachable through the normal UI.
+    if (text.isEmpty || _isSending || widget.onSendMessage == null) return;
 
     _controller.clear();
-    setState(() => _isSending = true);
 
-    // Show own message immediately, before it's been broadcast — the msgId
-    // isn't known until onSendMessage returns, and waiting for a Bluetooth
-    // round trip before the sender sees their own message would feel broken.
-    final index = _messages.length;
-    setState(() => _messages.add(CommunityMessage(
-      sender: widget.myUsername,
-      text: text,
-      timestamp: DateTime.now(),
-      isMe: true,
-      isAdmin: widget.amAdmin,
-    )));
+    // An alert longer than one wire message's reliable capacity is split
+    // into several — see hops_constants.dart's splitIntoAlertParts for why
+    // this beats raising the per-message ceiling. Most alerts are short
+    // enough that this returns exactly one part, in which case everything
+    // below behaves exactly like the single-message send this always was.
+    final split = splitIntoAlertParts(text);
+    final parts = split.parts;
+
+    setState(() {
+      _isSending = true;
+      _sendingTotal = parts.length;
+      _sendingIndex = 0;
+    });
+
+    if (split.truncated && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(
+            "That alert was too long even split up — sent the first $kAlertMaxParts parts, the rest was cut."),
+        duration: Duration(seconds: 6),
+      ));
+    }
+
+    // Show every part immediately, in the right order, before any of them
+    // has actually gone out — same "own message shows first" reasoning a
+    // single-part send always used (the msgId isn't known until
+    // onSendMessage returns, and waiting on a Bluetooth round trip before
+    // the sender even sees their own alert would feel broken), just applied
+    // to each part.
+    final startIndex = _messages.length;
+    final now = DateTime.now();
+    setState(() {
+      _messages.addAll(parts.map((part) => CommunityMessage(
+        sender: widget.myUsername,
+        text: part,
+        timestamp: now,
+        isMe: true,
+        isAdmin: true,
+      )));
+    });
     await _persist();
     _scrollToBottom();
 
     try {
-      final msgId = await widget.onSendMessage(text);
-      // Null means the broadcast never started. Said out loud, because the
-      // message is already sitting in this device's own list looking sent —
-      // which is exactly how a message that reached nobody passed for a
-      // delivered one.
-      if (msgId == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Couldn't broadcast — check Bluetooth is on, then try again."),
-          duration: Duration(seconds: 5),
-        ));
-      }
-      // Backfill the wire identity so an admin deletion can find this copy
-      // too. Guarded on the index still holding the same message: received
-      // messages can land in the list while the broadcast is starting.
-      if (msgId != null && index < _messages.length) {
-        final mine = _messages[index];
-        if (mine.isMe && mine.text == text && mine.senderTag == null) {
-          final tag = widget.myUsername.length > kCommunityNameSenderTagChars
-              ? widget.myUsername.substring(0, kCommunityNameSenderTagChars)
-              : widget.myUsername.padRight(kCommunityNameSenderTagChars, '_');
-          _messages[index] = CommunityMessage(
-            sender: mine.sender,
-            text: mine.text,
-            timestamp: mine.timestamp,
-            isMe: true,
-            isAdmin: mine.isAdmin,
-            realUsername: mine.realUsername,
-            senderTag: tag,
-            msgId: msgId,
-          );
-          await _persist();
-        }
+      // Sequential, not concurrent — admin_ble_hub.dart's
+      // broadcastAdminChatMessage queues internally for exactly this
+      // reason (two messages can't cycle chunks on the same BLE radio at
+      // once without corrupting both), but awaiting each part here in turn
+      // also keeps the progress indicator honestly in step with what's
+      // actually on the air.
+      for (var i = 0; i < parts.length; i++) {
+        if (!mounted) return;
+        setState(() => _sendingIndex = i + 1);
+        await _sendOnePart(parts[i], startIndex + i);
       }
     } finally {
-      if (mounted) setState(() => _isSending = false);
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+          _sendingTotal = 0;
+          _sendingIndex = 0;
+        });
+      }
     }
   }
 
@@ -564,7 +596,7 @@ class _CommunityChatState extends State<CommunityChat> {
             Icon(Icons.campaign, color: colors.primary),
             const SizedBox(width: 8),
             Text(
-              'Community Chat',
+              'Community Alerts',
               style: theme.textTheme.headlineMedium
                   ?.copyWith(fontSize: 20, color: colors.primary),
             ),
@@ -592,54 +624,57 @@ class _CommunityChatState extends State<CommunityChat> {
             ),
           ),
 
-          // ── Info / char counter ───────────────────────────────────────────
-          Container(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-            color: colors.surfaceContainerHighest.withValues(alpha: 0.25),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline,
-                    size: 12,
-                    color: colors.onSurface.withValues(alpha: 0.35)),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    'Broadcast to all nearby Hops users · hold a message to report it',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: colors.onSurface.withValues(alpha: 0.35),
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                AnimatedOpacity(
-                  opacity: charsUsed > 0 ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 200),
-                  child: Text(
-                    '$charsUsed/$_maxMsgLen',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight:
-                      nearLimit ? FontWeight.bold : FontWeight.normal,
-                      color: nearLimit
-                          ? Colors.redAccent
-                          : colors.onSurface.withValues(alpha: 0.4),
+          // ── Char counter (compose only — nothing to count while reading) ──
+          if (widget.amAdmin)
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+              color: colors.surfaceContainerHighest.withValues(alpha: 0.25),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline,
+                      size: 12,
+                      color: colors.onSurface.withValues(alpha: 0.35)),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      _sendingTotal > 1
+                          ? 'Sending part $_sendingIndex of $_sendingTotal — long alerts go out as several linked messages'
+                          : 'Broadcasts as an official alert to every nearby Hops user',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: colors.onSurface.withValues(alpha: 0.35),
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ),
-              ],
+                  AnimatedOpacity(
+                    opacity: charsUsed > 0 ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: Text(
+                      '$charsUsed/$_maxMsgLen',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight:
+                        nearLimit ? FontWeight.bold : FontWeight.normal,
+                        color: nearLimit
+                            ? Colors.redAccent
+                            : colors.onSurface.withValues(alpha: 0.4),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
 
-          // ── Input ─────────────────────────────────────────────────────────
+          // ── Input (admin) / read-only footer (student) ────────────────────
           // The clearance for the floating pill bottom nav (HopsApp's
           // Scaffold uses extendBody: true, so it otherwise sits directly
-          // on top of this field and swallows every tap meant for it) lives
-          // OUTSIDE the input bar's own padding, as transparent space,
-          // rather than inside it — stuffing it inside the bar's padding
-          // pushed the actual text field up and left a big dead-looking gap
-          // under it within the same shadowed/colored box.
+          // on top of this and swallows every tap meant for it) lives
+          // OUTSIDE this bar's own padding, as transparent space, rather
+          // than inside it — stuffing it inside the bar's padding pushed
+          // the actual content up and left a big dead-looking gap under it
+          // within the same shadowed/colored box.
           //
           // navBarPillHeightNotifier now reports the nav area's FULL
           // occupied height, safe-area inset included (see hops_app.dart's
@@ -652,8 +687,7 @@ class _CommunityChatState extends State<CommunityChat> {
           // the Scaffold has already shrunk the body by the keyboard's
           // height, and the bottom nav is underneath the keyboard rather
           // than competing for the same space, so still reserving room for
-          // it left a large dead gap between the text field and the
-          // keyboard.
+          // it left a large dead gap between the input and the keyboard.
           ValueListenableBuilder<double>(
             valueListenable: navBarPillHeightNotifier,
             builder: (context, navAreaHeight, child) {
@@ -663,78 +697,115 @@ class _CommunityChatState extends State<CommunityChat> {
                 child: child,
               );
             },
-            child: Container(
-              padding: const EdgeInsets.only(left: 16, right: 8, top: 10, bottom: 10),
-              decoration: BoxDecoration(
-                color: colors.surface,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    blurRadius: 12,
-                    offset: const Offset(0, -4),
-                  ),
-                ],
-              ),
-              child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    maxLength: _maxMsgLen,
-                    maxLines: 1,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _send(),
-                    style: const TextStyle(fontSize: 14),
-                    decoration: InputDecoration(
-                      hintText: 'Message everyone nearby…',
-                      counterText: '',
-                      filled: true,
-                      fillColor: colors.surfaceContainerHighest,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(100),
-                        borderSide: BorderSide.none,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: _isSending
-                      ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                      : const Icon(Icons.send,
-                      color: Colors.white, size: 20),
-                  style: IconButton.styleFrom(
-                    backgroundColor: _controller.text.isNotEmpty
-                        ? colors.primary
-                        : colors.primary.withValues(alpha: 0.3),
-                    padding: const EdgeInsets.all(12),
-                  ),
-                  onPressed:
-                  _controller.text.isNotEmpty ? _send : null,
-                ),
-              ],
-            ),
-            ),
+            child: widget.amAdmin ? _buildComposer(colors) : _buildReadOnlyFooter(colors),
           ),
         ],
       )),
     );
   }
 
+  Widget _buildComposer(ColorScheme colors) {
+    return Container(
+      padding: const EdgeInsets.only(left: 16, right: 8, top: 10, bottom: 10),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              maxLength: _maxMsgLen,
+              maxLines: 1,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _send(),
+              style: const TextStyle(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Write an alert for everyone nearby…',
+                counterText: '',
+                filled: true,
+                fillColor: colors.surfaceContainerHighest,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(100),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 20, vertical: 12),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            icon: _isSending
+                ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white),
+            )
+                : const Icon(Icons.send,
+                color: Colors.white, size: 20),
+            style: IconButton.styleFrom(
+              backgroundColor: _controller.text.isNotEmpty
+                  ? colors.primary
+                  : colors.primary.withValues(alpha: 0.3),
+              padding: const EdgeInsets.all(12),
+            ),
+            onPressed:
+            _controller.text.isNotEmpty ? _send : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReadOnlyFooter(ColorScheme colors) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.shield_outlined,
+              size: 14, color: colors.onSurface.withValues(alpha: 0.35)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Only Hops admins can post here · hold an alert to report it',
+              style: TextStyle(
+                fontSize: 12,
+                color: colors.onSurface.withValues(alpha: 0.45),
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ── Admin moderation ──────────────────────────────────────────────────────
 
   /// Replaces a removed message in the thread. Deliberately keeps the
-  /// sender's name and timestamp visible: silently vanishing messages make
-  /// a conversation impossible to follow and look like a bug, whereas
-  /// "removed, and here's why" is both honest and a visible deterrent to
-  /// everyone else in the room.
+  /// sender's name and timestamp visible: silently vanishing alerts make a
+  /// thread impossible to follow and look like a bug, whereas "removed, and
+  /// here's why" is both honest and a visible deterrent to everyone else in
+  /// the room.
   Widget _buildTombstone(CommunityMessage msg, ColorScheme colors, bool isMe) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
@@ -869,7 +940,7 @@ class _CommunityChatState extends State<CommunityChat> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Text(
-                "This is shown in place of the message, so everyone who saw it "
+                "This is shown in place of the alert, so everyone who saw it "
                 "learns why it went.",
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -921,10 +992,9 @@ class _CommunityChatState extends State<CommunityChat> {
         required bool showHeader,
       }) {
     final isMe = msg.isMe;
-    // Admin messages get their own fixed color regardless of light/dark
-    // theme or isMe — the whole point is that an admin's message reads as
-    // unmistakably distinct from an ordinary bubble, on every device that
-    // receives it, not just a tint of whichever theme happens to be active.
+    // Every message in this feed is an admin alert now — the fixed red
+    // treatment (regardless of light/dark theme or isMe) is what makes an
+    // alert read as unmistakably official on every device that receives it.
     final adminColor = Colors.red.shade700;
     return Padding(
       padding: EdgeInsets.only(
@@ -942,21 +1012,8 @@ class _CommunityChatState extends State<CommunityChat> {
             if (showHeader)
               CircleAvatar(
                 radius: 15,
-                backgroundColor: msg.isAdmin
-                    ? adminColor.withValues(alpha: 0.15)
-                    : colors.primary.withValues(alpha: 0.12),
-                child: msg.isAdmin
-                    ? Icon(Icons.shield, size: 15, color: adminColor)
-                    : Text(
-                        msg.sender.isNotEmpty
-                            ? msg.sender[0].toUpperCase()
-                            : '?',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: colors.primary,
-                        ),
-                      ),
+                backgroundColor: adminColor.withValues(alpha: 0.15),
+                child: Icon(Icons.shield, size: 15, color: adminColor),
               )
             else
               const SizedBox(width: 30),
@@ -968,22 +1025,20 @@ class _CommunityChatState extends State<CommunityChat> {
                   ? CrossAxisAlignment.end
                   : CrossAxisAlignment.start,
               children: [
-                if (showHeader && (!isMe || msg.isAdmin))
+                if (showHeader)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 3, left: 4, right: 4),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (msg.isAdmin) ...[
-                          Icon(Icons.shield, size: 11, color: adminColor),
-                          const SizedBox(width: 3),
-                        ],
+                        Icon(Icons.shield, size: 11, color: adminColor),
+                        const SizedBox(width: 3),
                         Text(
                           isMe ? "You (Admin)" : msg.sender,
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            color: msg.isAdmin ? adminColor : colors.primary.withValues(alpha: 0.75),
+                            color: adminColor,
                           ),
                         ),
                       ],
@@ -999,11 +1054,6 @@ class _CommunityChatState extends State<CommunityChat> {
                   //
                   // Reporting your own message makes no sense — only
                   // wired up for messages from someone else.
-                  // Reports carry realUsername, never the displayed name —
-                  // the display is deliberately anonymized in the student
-                  // app, and an admin can't act on "Anonymous #ab12".
-                  // Unresolvable senders can't be reported at all rather
-                  // than filing a report the server will reject.
                   onLongPress: widget.amAdmin
                       ? () => _showAdminMessageActions(msg)
                       : (isMe || msg.realUsername == null)
@@ -1019,9 +1069,7 @@ class _CommunityChatState extends State<CommunityChat> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 9),
                     decoration: BoxDecoration(
-                      color: msg.isAdmin
-                          ? adminColor
-                          : (isMe ? colors.primary : colors.surfaceContainerHighest),
+                      color: adminColor,
                       borderRadius: BorderRadius.only(
                         topLeft: const Radius.circular(18),
                         topRight: const Radius.circular(18),
@@ -1038,8 +1086,8 @@ class _CommunityChatState extends State<CommunityChat> {
                     ),
                     child: Text(
                       msg.text,
-                      style: TextStyle(
-                        color: (isMe || msg.isAdmin) ? Colors.white : colors.onSurface,
+                      style: const TextStyle(
+                        color: Colors.white,
                         fontSize: 14,
                         height: 1.3,
                       ),
@@ -1079,7 +1127,7 @@ class _CommunityChatState extends State<CommunityChat> {
                 size: 64, color: colors.primary.withValues(alpha: 0.18)),
             const SizedBox(height: 18),
             Text(
-              'Community Chat',
+              'Community Alerts',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 18,
@@ -1088,8 +1136,11 @@ class _CommunityChatState extends State<CommunityChat> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Messages broadcast over Bluetooth to every nearby Hops user. '
-                  'No pairing needed — just type and send.',
+              widget.amAdmin
+                  ? 'No alerts sent yet. Compose one below and it broadcasts '
+                      'instantly, over Bluetooth, to every nearby Hops user.'
+                  : 'Official alerts from Hops admins appear here the moment '
+                      "they're sent — broadcast over Bluetooth, no signal needed.",
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 13,

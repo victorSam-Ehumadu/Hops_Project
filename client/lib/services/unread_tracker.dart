@@ -19,7 +19,7 @@
 //
 // This tracks *unread markers only*, never message content. The actual
 // messages live where they always have (sqflite for 1:1 chat,
-// SharedPreferences for Community Chat, Supabase for notifications).
+// SharedPreferences for Community Alerts, Supabase for notifications).
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -28,7 +28,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// UnreadTracker.navTabSources / featureIdFor.
 enum UnreadSource {
   directMessage,   // 1:1 chat (Contacts tab)
-  communityChat,   // Community tab
+  communityAlerts, // Alerts tab
   notifications,   // admin warnings etc. (Contacts tab's bell)
   vibeCheck,       // a new crowd report nearby (Vibe Check feature)
   taskReminder,    // a task came due (Task Tracker feature)
@@ -91,7 +91,7 @@ class UnreadTracker {
   /// without opening the tab to discover it.
   static const Map<int, List<UnreadSource>> navTabSources = {
     1: [UnreadSource.directMessage, UnreadSource.notifications],
-    2: [UnreadSource.communityChat],
+    2: [UnreadSource.communityAlerts],
     4: [
       UnreadSource.vibeCheck,
       UnreadSource.taskReminder,

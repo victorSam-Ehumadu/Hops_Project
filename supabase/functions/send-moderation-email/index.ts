@@ -12,9 +12,10 @@
 //
 // Best-effort by design, both directions:
 //   - The moderation action itself already happened by the time this is
-//     called. A failure here (no email on file, Resend down, RESEND_API_KEY
-//     missing) never un-bans/un-suspends anyone — it only means the person
-//     finds out from the app's own sign-in screen instead of their inbox.
+//     called. A failure here (no email on file, SendGrid down,
+//     SENDGRID_API_KEY missing) never un-bans/un-suspends anyone — it only
+//     means the person finds out from the app's own sign-in screen instead
+//     of their inbox.
 //   - The client does not block its own UI on this call succeeding.
 //
 // Authorization is re-checked here independently of the RPC that already
@@ -126,7 +127,8 @@ Deno.serve(async (req) => {
 
 // Setup, same as the other functions in this folder (see README.md):
 //   supabase functions deploy send-moderation-email
-//   supabase secrets set RESEND_API_KEY=re_your_key_here
+//   supabase secrets set SENDGRID_API_KEY=SG.your_key_here
+//   supabase secrets set HOPS_EMAIL_FROM="Hops <you@example.com>"
 //   supabase secrets set HOPS_APPEALS_EMAIL=appeals@yourdomain.example
 // HOPS_APPEALS_EMAIL is optional — omit it and ban/suspend emails still
 // send, just without a working "reply to appeal" (replies would go

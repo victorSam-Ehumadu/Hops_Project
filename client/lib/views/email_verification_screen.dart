@@ -56,10 +56,25 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
     });
     try {
       final token = await _getToken();
-      await Supabase.instance.client.functions.invoke(
+      final res = await Supabase.instance.client.functions.invoke(
         'send-verification-email',
         body: {'hops_token': token},
       );
+      // send-verification-email returns HTTP 200 with {ok: false} when the
+      // Resend call itself fails (bad/missing RESEND_API_KEY, or — the
+      // common case on this project's setup — no HOPS_EMAIL_FROM/verified
+      // sending domain, so Resend's onboarding@resend.dev sandbox sender
+      // silently refuses to deliver to anyone but the Resend account's own
+      // address). functions.invoke() only throws on a non-2xx response, so
+      // that {ok: false} body was previously never checked here — the
+      // screen just sat on "we sent a code to you" forever with nothing
+      // ever arriving, and no way to tell the two apart from a real code
+      // that's just taking a moment.
+      final data = res.data;
+      if (mounted && data is Map && data['ok'] == false) {
+        setState(() => _error =
+            "Couldn't send the code — the mail server rejected it. You can Skip for now and verify later from Account Management.");
+      }
     } catch (e) {
       if (mounted) setState(() => _error = describeAuthException(e));
     } finally {

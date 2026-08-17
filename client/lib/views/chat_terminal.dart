@@ -84,7 +84,7 @@ class _IndividualChatTerminalViewState
   // classic-Bluetooth discovery and, for a never-before-paired contact, a
   // system discoverability prompt — plenty of ways for it to legitimately
   // fail. When it does, rather than leaving the chat dead, messages fall
-  // back to the same chunked-advertisement-name channel Community Chat and
+  // back to the same chunked-advertisement-name channel Community Alerts and
   // Emergency Flare use (encrypted — see mesh_crypto.dart's
   // sealDirectMessage and its documented limits, since advertisements are
   // a public broadcast). Much slower and length-capped, but it works

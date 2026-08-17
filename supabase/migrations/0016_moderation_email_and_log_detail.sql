@@ -16,7 +16,7 @@
 --      and there was nothing to gain from carrying an email address through
 --      the RPC's return value when the edge function was going to look it
 --      up again anyway, more trustworthily, on its own.
---
+
 -- unban_user already existed (0008) and unsuspend_user already existed
 -- (0015) — nothing new needed there. This migration was almost titled
 -- "add unsuspend", until re-checking the client (admin_user_detail_screen's

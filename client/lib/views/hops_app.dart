@@ -43,7 +43,7 @@ import 'package:client/services/unread_tracker.dart';
 import 'package:client/services/vibe_report_store.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:flutter/services.dart';
-import 'package:client/views/community_chat.dart';
+import 'package:client/views/community_alerts.dart';
 import 'package:client/views/notifications_page.dart';
 import 'package:client/utils/report_content.dart' show flushPendingReports;
 import 'package:client/utils/mesh_crypto.dart'
@@ -90,7 +90,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   Timer? _scanRestartTimer;
 
   // Swiping down on the floating bottom nav pill tucks it off-screen (more
-  // room to read, e.g. a long Community Chat thread) — a small up-arrow
+  // room to read, e.g. a long Community Alerts thread) — a small up-arrow
   // indicator takes its place so it's still obvious how to bring it back.
   bool _navBarHidden = false;
 
@@ -214,10 +214,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   int _nearbyBleCount = 0;
   Timer? _bleCountTimer;
-
-  // Community Chat chunk-cycling state.
-  int _communityMsgCounter = 0;
-  Timer? _communityChunkCycleTimer;
 
   // 1:1 direct-message-over-BLE state (RFCOMM fallback — see
   // _broadcastDirectMessage / _handleDirectMessageChunk). Reuses
@@ -394,7 +390,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     if (type == null) return;
     shortcutNotifier.value = null;
     switch (type) {
-      case 'community_chat':
+      case 'community_alerts':
         setState(() => _currentIndex = 2);
         break;
       case 'emergency_flare':
@@ -485,7 +481,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _diagTimer?.cancel();
     _scanRestartTimer?.cancel();
     _bleCountTimer?.cancel();
-    _communityChunkCycleTimer?.cancel();
     _rotatingIdRefreshTimer?.cancel();
     _keyDirectorySyncTimer?.cancel();
     _watchSeedCycleTimer?.cancel();
@@ -697,116 +692,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _startContinuousScan();
   }
 
-  // Splits a message into chunks that fit the advertisement local-name
-  // budget (see hops_constants.dart's v3 Community Chat format) and cycles
-  // the peripheral through them, one chunk per advertised name — the exact
-  // same mechanism EMG:/FR:/HOP:/VBT: use, which is the one BLE channel
-  // this app has confirmed working on real hardware. v2's scan-response
-  // manufacturer-data encoding never delivered a message in testing; see
-  // the long comment on kCommunityNameBudget for the full reasoning.
-  //
-  // Unlike v2, this *replaces* the advertised name for the duration of the
-  // broadcast (v2 kept "HPS:<token>" up and rode alongside it), so this
-  // reverts to the presence beacon when done — same shape as
-  // _broadcastEmergencyFlare's own revert.
-  /// Returns the 6-bit msgId this message was broadcast under, so
-  /// CommunityChat can tag its own local copy with the same wire identity
-  /// every receiver keys it by — without it, an admin deletion cleared the
-  /// message everywhere except the device that posted it.
-  Future<int?> _advertiseCommunityMessage(String message) async {
-    _communityChunkCycleTimer?.cancel();
-    await _ensureRotatingSeedLoaded();
-
-    final msgId = _communityMsgCounter;
-    // 64, not 256 — msgId is one 6-bit character in the v3 name format.
-    _communityMsgCounter = (_communityMsgCounter + 1) % 64;
-
-    // The sender tag is this account's real (truncated) username, not a
-    // rotating token — see kCommunityNameSenderTagChars' comment for the
-    // reasoning and what it does/doesn't give up. Being static, it also
-    // can't drift mid-broadcast the way a rotating token could if a
-    // 15-minute window rolled over partway through the cycle.
-    final senderTag = myUsername.length > kCommunityNameSenderTagChars
-        ? myUsername.substring(0, kCommunityNameSenderTagChars)
-        : myUsername.padRight(kCommunityNameSenderTagChars, '_');
-
-    final chunks = splitCommunityMessage(message);
-
-    const perChunkDuration = Duration(milliseconds: 1500);
-    // Short messages (the overwhelming majority) get an extra full pass —
-    // they're cheap to repeat and every extra pass is another chance for a
-    // receiver whose scan was mid-cycle to catch them. A max-length
-    // 8-chunk message would otherwise spend nearly a minute on the air.
-    final totalCycles = chunks.length <= 3 ? 3 : 2;
-
-    Future<void> advertiseChunk(int index) => _advertiseWithName(
-      encodeCommunityNameChunk(
-        senderTag: senderTag,
-        msgId: msgId,
-        chunkIndex: index,
-        totalChunks: chunks.length,
-        chunkText: chunks[index],
-      ),
-      [],
-    );
-
-    void step(int chunkIndex, int cycle) {
-      // Later chunks stay best-effort — the message is already going out and
-      // the repeat cycles exist to cover a dropped one — but the error is no
-      // longer swallowed entirely: a chunk that can't be advertised is the
-      // difference between a delivered message and a silent one.
-      advertiseChunk(chunkIndex).catchError((e) {
-        debugPrint('Community chunk $chunkIndex failed to advertise: $e');
-      });
-      _communityChunkCycleTimer = Timer(perChunkDuration, () {
-        if (chunkIndex + 1 < chunks.length) {
-          step(chunkIndex + 1, cycle);
-        } else if (cycle + 1 < totalCycles) {
-          step(0, cycle + 1);
-        } else {
-          // Done — back to the ordinary presence beacon.
-          BlePeripheral.stopAdvertising();
-          _advertisePresenceBeacon();
-        }
-      });
-    }
-
-    // The first chunk is awaited and checked rather than fired blindly.
-    //
-    // This is what hid an over-long name for so long: every chunk was
-    // dispatched without await or catch, so a platform rejection
-    // (ADVERTISE_FAILED_DATA_TOO_LARGE for a name that won't fit the packet)
-    // became an unhandled async error nobody ever saw. The message appeared
-    // in the sender's own list and simply never reached anyone — which looks
-    // identical to "nobody was in range".
-    try {
-      await advertiseChunk(0);
-    } catch (e) {
-      debugPrint('Community message failed to start advertising: $e');
-      _advertisePresenceBeacon();
-      return null;
-    }
-
-    _communityChunkCycleTimer = Timer(perChunkDuration, () {
-      if (chunks.length > 1) {
-        step(1, 0);
-      } else if (totalCycles > 1) {
-        step(0, 1);
-      } else {
-        BlePeripheral.stopAdvertising();
-        _advertisePresenceBeacon();
-      }
-    });
-    return msgId;
-  }
-
   // ---------- 1:1 direct message over BLE (RFCOMM fallback) ----------
   //
   // Requested by an open chat screen via bleDirectMessageOutbox (see
   // main.dart) when RFCOMM couldn't connect. Encrypts with the key derived
   // from this device's and the peer's rotating-ID seeds, then cycles the
   // ciphertext across chunked advertisement names — the same proven
-  // channel Community Chat v3 and Emergency Flare use.
+  // channel Community Alerts v3 and Emergency Flare use.
   //
   // Returns false if the message can't be sent at all: no seed exchanged
   // with this peer yet (they've never chatted successfully, so there's no
@@ -841,7 +733,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
     _directMsgCycleTimer?.cancel();
     const perChunkDuration = Duration(milliseconds: 1500);
-    // One more pass than Community Chat gets: a direct message has exactly
+    // One more pass than Community Alerts gets: a direct message has exactly
     // one intended recipient, so unlike a broadcast there's no "someone
     // else probably caught it" consolation if every pass is missed.
     const totalCycles = 3;
@@ -1205,7 +1097,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       if (chunks.isEmpty) return;
 
       const perChunkDuration = Duration(milliseconds: 1200);
-      const totalCycles = 3; // more reliability margin than Community Chat — this one's safety-critical
+      const totalCycles = 3; // more reliability margin than Community Alerts — this one's safety-critical
 
       void step(int index, int cycle) {
         if (!isActive()) return; // cancelled/expired mid-cycle — stop
@@ -1654,6 +1546,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         await NotificationService.showAccountBannedNotification();
         // Re-checked: the notification above is itself an await, and this
         // runs on a background poll that can easily outlive the screen.
+        if (!mounted) return;
+        await wipeLocalIdentityAndReturnToGatekeeper(context);
+      } else if (e.message.contains('account_suspended') && mounted) {
+        // Was previously unhandled here — get_my_status (0015) has raised
+        // 'account_suspended' for a while, but this branch only ever
+        // checked for 'account_banned', so it fell through to the generic
+        // catch-all below and did nothing. A suspended account stayed
+        // signed in on-device indefinitely (until it happened to hit some
+        // *other* RPC that separately checks suspended_until) instead of
+        // being signed out the same way a ban is.
+        await NotificationService.showAccountSuspendedNotification(until: e.details as String?);
         if (!mounted) return;
         await wipeLocalIdentityAndReturnToGatekeeper(context);
       }
@@ -2687,15 +2590,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         onSetDiscoverable: _setDiscoverable,
       ),
       _buildContactsTab(),             // index 1 — unchanged radar contacts
-      CommunityChat(
+      CommunityAlerts(
         radarStream: radarStream,
-        onSendMessage: _advertiseCommunityMessage,
         myUsername: myUsername,
         isVisible: _currentIndex == 2,
-        // Student app stays anonymous — contacts by name, everyone else
-        // as an anonymous tag. Only the admin app sets showRealNames.
-        contactSeeds: _contactSeeds,
-      ), // index 2 — NEW: BT peer chat
+        // No onSendMessage — students are read-only. Only the admin app
+        // (admin_community_alerts_tab.dart) composes into this feed.
+      ), // index 2 — admin-only broadcast alerts, read-only here
       _buildFeaturesTab(),             // index 3
       _buildMyFeaturesTab(),           // index 4
     ];
@@ -2736,7 +2637,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       // Keyed on the OUTSIDE of the SafeArea, deliberately — see
       // navBarPillHeightNotifier's doc comment in main.dart. Measuring the
       // pill alone (inside the SafeArea) reported a height that excluded
-      // the gesture-nav inset, so Community Chat's input bar had to add
+      // the gesture-nav inset, so Community Alerts' compose bar had to add
       // MediaQuery.padding.bottom back itself — and on a Scaffold with
       // extendBody: true that inset is also still present in the body's own
       // MediaQuery, so it got counted twice and the bar floated well above
@@ -2890,7 +2791,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                         badgeCount: pendingRequests.length),
                     _buildNavItem(1, Icons.people_outline, Icons.people, "Contacts",
                         showDot: UnreadTracker.instance.hasForNavTab(1)),
-                    _buildNavItem(2, Icons.campaign_outlined, Icons.campaign, "Community",
+                    _buildNavItem(2, Icons.campaign_outlined, Icons.campaign, "Alerts",
                         showDot: UnreadTracker.instance.hasForNavTab(2)),
                     _buildNavItem(3, Icons.grid_view_outlined, Icons.grid_view, "Features"),
                     _buildNavItem(4, Icons.star_outline, Icons.star, "My Features",
@@ -2915,8 +2816,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // actually positions this now.
   Widget _buildHiddenNavIndicator(ColorScheme colors) {
     // Also re-measures: tucking the pill away shrinks the bottom area to
-    // just this little arrow, and anything clearing it (Community Chat's
-    // input bar) should move down to match rather than keep a pill-sized
+    // just this little arrow, and anything clearing it (Community Alerts'
+    // compose bar) should move down to match rather than keep a pill-sized
     // gap under it.
     _reportNavAreaHeight();
     return Padding(
@@ -3591,7 +3492,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
 // Buffers Emergency Flare signature chunks for one in-flight verification
 // until every piece has arrived — see _startFlareSignatureCycle /
-// _verifyFlareSignature above. Mirrors community_chat.dart's _ChunkBuffer.
+// _verifyFlareSignature above. Mirrors community_alerts.dart's _ChunkBuffer.
 class _FlareSigBuffer {
   final int totalChunks;
   final Map<int, List<int>> chunks = {};
