@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:client/utils/mesh_crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/utils/password_policy.dart';
@@ -110,10 +111,17 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       _error = null;
     });
     try {
+      // See mesh_crypto.dart's header comment for the salted-hashing
+      // scheme — a fresh salt for this new password, same as signup and
+      // change-password. The OTP hash itself stays plain sha256 (_hashOf)
+      // — it's a random, short-lived, attempt-capped code, not a
+      // long-lived credential, so it doesn't need the same protection.
+      final newSalt = generatePasswordSalt();
       final ok = await Supabase.instance.client.rpc('verify_password_reset_otp', params: {
         'p_email': _emailController.text.trim(),
         'p_otp_hash': _hashOf(otp),
-        'p_new_password_hash': _hashOf(_newPasswordController.text),
+        'p_new_password_hash': hashSaltedPassword(_newPasswordController.text, newSalt),
+        'p_new_password_salt': newSalt,
       }) as bool;
 
       if (!mounted) return;

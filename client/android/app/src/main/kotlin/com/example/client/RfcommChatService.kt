@@ -19,10 +19,30 @@ class RfcommChatService(private val channel: MethodChannel) {
 
     companion object {
         val SERVICE_UUID: UUID = UUID.fromString("fa87c0d0-afac-11de-8a39-0800200c9a66")
+        // BluetoothSocket.connect() is a blocking native call with NO
+        // built-in timeout — on some Android Bluetooth stacks (a real,
+        // OEM/chipset-specific quirk, not a theoretical one) it can hang
+        // indefinitely instead of ever throwing. This bounds it: a
+        // watchdog coroutine closes the socket after this many
+        // milliseconds if connect() hasn't returned yet, which is the
+        // documented way to unblock a stuck BluetoothSocket.connect() —
+        // closing it makes the blocked call throw IOException, same as
+        // any other connection failure.
+        private const val CONNECT_TIMEOUT_MS = 15_000L
     }
 
     private var serverSocket: BluetoothServerSocket? = null
     private var clientSocket: BluetoothSocket? = null
+    // The socket a connectToDevice() call is currently blocked inside
+    // .connect() on, if any — held so disconnect() (below) has something
+    // to actually close. Without this, a hung connect() (see
+    // CONNECT_TIMEOUT_MS's comment above) had NO way to be aborted: the
+    // local `socket` variable inside connectToDevice's coroutine wasn't
+    // stored anywhere else, clientSocket is only ever set AFTER connect()
+    // returns, and cancelling the coroutine scope doesn't interrupt a
+    // plain blocking call like connect() — it only stops FUTURE
+    // suspension points, which never arrive while stuck inside it.
+    private var pendingSocket: BluetoothSocket? = null
     private var writer: PrintWriter? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -36,7 +56,12 @@ class RfcommChatService(private val channel: MethodChannel) {
         scope.launch {
             try {
                 serverSocket = bluetoothAdapter
-                    .listenUsingRfcommWithServiceRecord("HopsChat", SERVICE_UUID)
+                    // INSECURE, deliberately — see connectToDevice's matching
+                    // comment below for why. Using the secure variant here is
+                    // what was causing an unprompted OS "Pair with X?" dialog
+                    // to pop up on both this device and the peer's every time
+                    // a chat connected.
+                    .listenUsingInsecureRfcommWithServiceRecord("HopsChat", SERVICE_UUID)
 
                 val socket = serverSocket?.accept()   // blocks until client connects
                 serverSocket?.close()
@@ -65,12 +90,45 @@ class RfcommChatService(private val channel: MethodChannel) {
         scope.launch {
             try {
                 val device: BluetoothDevice = bluetoothAdapter.getRemoteDevice(macAddress)
-                val socket = device.createRfcommSocketToServiceRecord(SERVICE_UUID)
+                // INSECURE RFCOMM, not the "secure" variant this used to
+                // call. A *secure* RFCOMM connect() to a device Android
+                // hasn't bonded with yet silently kicks off real OS-level
+                // Bluetooth bonding as a side effect — which is exactly what
+                // was surfacing as an unsolicited "Pair with <phone>?" system
+                // dialog on both ends of every chat connection, repeating on
+                // every retry attempt if it wasn't answered fast enough. Hops
+                // chat was never designed to rely on OS bonding for anything
+                // (no bonded-devices check anywhere else in this file), so
+                // there's nothing this trades away by not pairing — the
+                // socket is still a private, direct, point-to-point Bluetooth
+                // stream between exactly these two devices, just without
+                // triggering Android's separate pairing/bonding flow to get
+                // it.
+                val socket = device.createInsecureRfcommSocketToServiceRecord(SERVICE_UUID)
+                pendingSocket = socket
                 bluetoothAdapter.cancelDiscovery()
-                socket.connect()
+
+                // See CONNECT_TIMEOUT_MS's comment — connect() itself has
+                // no timeout, so this watchdog child coroutine closes the
+                // socket out from under it if it hasn't returned in time,
+                // which is what actually unblocks it (cancelling this
+                // coroutine alone would not — connect() doesn't check for
+                // cancellation, it just blocks on the underlying socket).
+                val watchdog = launch {
+                    delay(CONNECT_TIMEOUT_MS)
+                    try { socket.close() } catch (_: IOException) {}
+                }
+                try {
+                    socket.connect()
+                } finally {
+                    watchdog.cancel()
+                }
+
+                pendingSocket = null
                 onSocketReady(socket)
                 withContext(Dispatchers.Main) { callback(true, null) }
             } catch (e: IOException) {
+                pendingSocket = null
                 withContext(Dispatchers.Main) { callback(false, "Connection error: ${e.message}") }
             }
         }
@@ -133,8 +191,14 @@ class RfcommChatService(private val channel: MethodChannel) {
     fun disconnect() {
         scope.cancel()
         writer = null
+        // pendingSocket first, and explicitly — this is what actually
+        // aborts an in-flight connectToDevice() that's blocked inside
+        // .connect() (see its own comment above for why cancelling the
+        // scope alone doesn't touch it).
+        try { pendingSocket?.close() } catch (_: IOException) {}
         try { clientSocket?.close() } catch (_: IOException) {}
         try { serverSocket?.close() } catch (_: IOException) {}
+        pendingSocket = null
         clientSocket = null
         serverSocket = null
     }

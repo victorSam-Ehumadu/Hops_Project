@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Support Hops</title>
+  <meta name="description" content="Support Hops development — one-time contributions via Stripe.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <nav class="site-nav">
+    <a class="brand" href="index.html">
+      <img src="assets/hops_bunny.png" alt="Hops mascot">
+      <p class="logo-word">Hops</p>
+    </a>
+    <ul class="links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="about.html">About &amp; FAQ</a></li>
+      <li><a href="download.html">Download</a></li>
+      <li><a href="shop.html" class="active">Support Hops</a></li>
+    </ul>
+  </nav>
+
+  <header class="hero" style="padding-bottom: 24px;">
+    <div class="container">
+      <h1>Support Hops</h1>
+      <p class="tagline">
+        Hops is free and works with no account required for its safety features. If you'd like
+        to help fund development, you can chip in below.
+      </p>
+    </div>
+  </header>
+
+  <section class="section" style="padding-top: 0;">
+    <div class="container">
+
+      <!--
+        Important, read before this page goes live: this is NOT the same
+        thing as in-app carrots. In-app carrots (spent in the Hops Shop
+        inside the app) are earned only by playing Hops Hopper and Hops
+        Wordle — there is no server connecting a purchase here to anything
+        in the app. That was a deliberate choice (see the app's
+        CarrotWallet — a real payment-to-app sync would need a backend
+        holding a Stripe secret key, which this project chose not to
+        build). Don't reword this section to imply a purchase here unlocks
+        anything in-app unless that backend actually gets built first.
+      -->
+      <div class="note-box" style="margin-bottom: 40px; text-align: center;">
+        Supporting Hops here funds development directly — it doesn't unlock anything inside
+        the app. In-app carrots (spent on exclusive themes in the Hops Shop) are earned for
+        free by playing Hops Hopper and Hops Wordle.
+      </div>
+
+      <div class="tier-grid">
+        <div class="tier">
+          <div class="badge">🥕</div>
+          <div class="amount">$2</div>
+          <div class="desc">A quick thank-you — every bit helps keep Hops going.</div>
+          <!--
+            TODO: replace href with a real Stripe Payment Link (Stripe
+            Dashboard → Payment links → create one in TEST mode first).
+            No code needed beyond pasting the URL here — Stripe hosts the
+            actual checkout page.
+          -->
+          <a class="btn btn-primary" href="#" aria-disabled="true">Support — $2</a>
+        </div>
+        <div class="tier featured">
+          <div class="badge">🥕🥕</div>
+          <div class="amount">$5</div>
+          <div class="desc">The most popular tier — genuinely appreciated.</div>
+          <a class="btn btn-primary" href="#" aria-disabled="true">Support — $5</a>
+        </div>
+        <div class="tier">
+          <div class="badge">🥕🥕🥕</div>
+          <div class="amount">$10</div>
+          <div class="desc">Big help toward keeping Hops free for everyone on campus.</div>
+          <a class="btn btn-primary" href="#" aria-disabled="true">Support — $10</a>
+        </div>
+      </div>
+
+      <div class="note-box" style="text-align: center;">
+        Checkout is handled entirely by Stripe — Hops never sees or stores your card details.
+        <br>
+        <strong>Payment links aren't set up yet — buttons above are placeholders.</strong>
+      </div>
+
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <p>
+      <a href="about.html#contact">Contact</a> ·
+      <a href="about.html#faq">FAQ</a> ·
+      <a href="shop.html">Support Hops</a>
+    </p>
+    <p>&copy; 2026 Hops. Built for campus, built to work offline.</p>
+  </footer>
+
+</body>
+</html>

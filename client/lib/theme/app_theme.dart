@@ -40,6 +40,14 @@ class AppTheme {
   final Color tertiaryContainer;
   final Color onTertiaryContainer;
   final Brightness brightness;
+  // Null = free, always available (every theme above this field was added
+  // has this). Non-null = a Hops Shop item — see hops_shop_page.dart and
+  // CarrotWallet.owns(name). Gated in color_theme_page.dart's theme grid:
+  // locked themes show their cost instead of being selectable, and the
+  // Shop is the only place that actually spends carrots to unlock one.
+  // Keyed by `name` — themes have no separate id field, and names are
+  // already unique/stable across this catalog.
+  final int? carrotCost;
 
   const AppTheme({
     required this.name,
@@ -51,6 +59,7 @@ class AppTheme {
     required this.tertiaryContainer,
     required this.onTertiaryContainer,
     this.brightness = Brightness.light,
+    this.carrotCost,
   });
 
   // [font] is optional so every existing call site (this app has plenty
@@ -312,6 +321,63 @@ class AppThemes {
       tertiaryContainer: Color(0xFF78909C),
       onTertiaryContainer: Color(0xFF0B0F12),
       brightness: Brightness.dark,
+    ),
+    // ── Hops Shop exclusives ─────────────────────────────────────────────
+    // Appended at the end, not mixed into the free catalog above — every
+    // existing index (0-11) has to stay pointing at the same theme, since
+    // themeNotifier and admin_settings_screen.dart's defaultLightIndex/
+    // defaultDarkIndex both persist/reference themes BY INDEX. Inserting a
+    // new theme in the middle would silently reassign everyone's saved
+    // selection to a different theme on next launch.
+    // 13 – Golden Carrot (Light) — the "you paid for this" shine
+    AppTheme(
+      name: 'Golden Carrot',
+      primary: Color(0xFFB8860B),
+      background: Color(0xFFFFF8E1),
+      surface: Color(0xFFFFECB3),
+      onBackground: Color(0xFF4A3200),
+      primaryContainer: Color(0xFFFFC107),
+      tertiaryContainer: Color(0xFFFF8F00),
+      onTertiaryContainer: Colors.white,
+      carrotCost: 40,
+    ),
+    // 14 – Cotton Candy (Light)
+    AppTheme(
+      name: 'Cotton Candy',
+      primary: Color(0xFFD81B8A),
+      background: Color(0xFFFFF0F8),
+      surface: Color(0xFFFFD6EC),
+      onBackground: Color(0xFF5C0038),
+      primaryContainer: Color(0xFFFF80C0),
+      tertiaryContainer: Color(0xFF7C4DFF),
+      onTertiaryContainer: Colors.white,
+      carrotCost: 25,
+    ),
+    // 15 – Obsidian (Dark) — near-black with a single sharp accent
+    AppTheme(
+      name: 'Obsidian',
+      primary: Color(0xFF00E5FF),
+      background: Color(0xFF000000),
+      surface: Color(0xFF0D0D0D),
+      onBackground: Color(0xFFE0F7FA),
+      primaryContainer: Color(0xFF00838F),
+      tertiaryContainer: Color(0xFF00ACC1),
+      onTertiaryContainer: Colors.black,
+      brightness: Brightness.dark,
+      carrotCost: 25,
+    ),
+    // 16 – Royal Amethyst (Dark)
+    AppTheme(
+      name: 'Royal Amethyst',
+      primary: Color(0xFFCE93D8),
+      background: Color(0xFF150A1F),
+      surface: Color(0xFF241333),
+      onBackground: Color(0xFFF3E5F5),
+      primaryContainer: Color(0xFF6A1B9A),
+      tertiaryContainer: Color(0xFFAB47BC),
+      onTertiaryContainer: Colors.white,
+      brightness: Brightness.dark,
+      carrotCost: 40,
     ),
   ];
 

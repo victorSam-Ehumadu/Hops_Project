@@ -11,6 +11,19 @@ const int kMinUsernameLength = 3;
 const int kMaxUsernameLength = 20;
 
 const int kMinPasswordLength = 8;
+// No legitimate password needs to be this long — this exists to reject
+// someone pasting an arbitrarily large blob (a script, a file's contents)
+// into the field before it ever reaches hashing/network code. It is NOT
+// what stops that blob from being treated as SQL: nothing typed into any
+// field in this app is ever concatenated into a query string. Every write
+// this app makes goes through a Supabase RPC call with named, typed
+// parameters (see supabase/migrations/*.sql) — Postgres binds those as
+// data, never as code, the same structural guarantee a parameterized query
+// gives you in any other stack. A password field containing the text
+// "'; DROP TABLE profiles; --" is just a password that happens to look
+// like SQL; it gets hashed like any other string and the server never
+// interprets it as a command.
+const int kMaxPasswordLength = 128;
 
 /// Null return means valid. Checked in this order so the first thing a
 /// user needs to fix is also the first thing they're told about.
@@ -60,6 +73,9 @@ const List<String> _weakPasswordBlocklist = [
 String? validatePassword(String password) {
   if (password.length < kMinPasswordLength) {
     return "Password must be at least $kMinPasswordLength characters.";
+  }
+  if (password.length > kMaxPasswordLength) {
+    return "Password must be $kMaxPasswordLength characters or fewer.";
   }
   if (!RegExp(r'[A-Z]').hasMatch(password)) {
     return "Password must include at least one uppercase letter.";

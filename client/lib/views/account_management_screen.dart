@@ -1,9 +1,13 @@
 // account_management_screen.dart
 //
 // Replaces the old standalone "Log Out / Destroy Identity" card on the
-// profile screen with a dedicated hub for the three things people actually
-// mean by "manage my account": change password, log out, delete account.
+// profile screen with a dedicated hub for the things people actually mean
+// by "manage my account": change password, change email, export a backup
+// of your local data, log out, delete account.
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -17,6 +21,7 @@ import 'package:client/utils/password_policy.dart';
 import 'package:client/utils/mesh_crypto.dart';
 import 'package:client/widgets/password_strength_bar.dart';
 import 'package:client/views/email_verification_screen.dart';
+import 'package:client/services/avatar_path_notifier.dart';
 
 /// Clears every locally-scoped identity key and the cached sqlite db, then
 /// drops the caller onto the gatekeeper. Shared by both "Log Out" and
@@ -60,8 +65,10 @@ Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async 
   await prefs.remove('my_email');
   await prefs.remove('email_verified');
   await prefs.remove('avatar_path');
+  avatarPathRevision.value++;
   await prefs.remove('nickname');
   await prefs.remove('bio');
+  await prefs.remove('thinking_status');
   await prefs.remove('enabledFeatureIds');
   await prefs.remove('pinned_feature_ids');
   await prefs.remove('feature_order');
@@ -135,6 +142,51 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     }
   }
 
+  // Exports every locally-stored row (messages, tasks, vibe reports,
+  // contact profiles) to one JSON file the user saves wherever they like —
+  // see DatabaseHelper.exportAllData's header comment for why this exists:
+  // this app keeps no cloud copy of any of it by design, so this is the
+  // one way to get a copy that survives something happening to this
+  // specific phone. Uses the same file_picker "save to a chosen location"
+  // flow received_files_page.dart's Download button already established,
+  // rather than silently writing somewhere the user can't find without
+  // digging through app-private storage.
+  Future<void> _exportMyData() async {
+    setState(() => _busy = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final username = prefs.getString('my_username') ?? 'hops_user';
+
+      final data = await DatabaseHelper.instance.exportAllData();
+      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
+
+      final timestamp = DateTime.now();
+      final stamp = '${timestamp.year}${timestamp.month.toString().padLeft(2, '0')}'
+          '${timestamp.day.toString().padLeft(2, '0')}';
+      final fileName = 'hops_data_export_${username}_$stamp.json';
+
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save your Hops data export',
+        fileName: fileName,
+        bytes: bytes,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(savedPath != null ? "Saved $fileName" : "Export cancelled"),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Couldn't export your data: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _openDeleteAccount() async {
     final deleted = await Navigator.push<bool>(
       context,
@@ -178,6 +230,14 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
               title: "Change Email",
               subtitle: "Update the email you sign in with",
               onTap: _openChangeEmail,
+            ),
+            const SizedBox(height: 12),
+            _ManagementTile(
+              icon: Icons.download_for_offline_outlined,
+              iconColor: colors.primary,
+              title: "Export My Data",
+              subtitle: "Save a backup of your messages, tasks & contacts to a file",
+              onTap: _busy ? null : _exportMyData,
             ),
             const SizedBox(height: 12),
             _ManagementTile(
@@ -262,8 +322,15 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
   final _currentController = TextEditingController();
   final _newController = TextEditingController();
   final _confirmController = TextEditingController();
+  final _otpController = TextEditingController();
   bool _busy = false;
   String? _error;
+  // Two steps: fill in the passwords, then confirm a code sent to the
+  // account's email — a second factor so a stolen/unlocked phone with a
+  // live session alone isn't enough to lock the real owner out. Nothing is
+  // actually changed until the code checks out (see _verifyAndSubmit).
+  bool _otpStep = false;
+  bool _sendingCode = false;
 
   @override
   void initState() {
@@ -276,10 +343,21 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
     _currentController.dispose();
     _newController.dispose();
     _confirmController.dispose();
+    _otpController.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  Future<String?> _requireToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('saved_hops_token');
+  }
+
+  // Step 1 → 2: validates the password fields locally, then sends the
+  // confirmation code. Reuses the exact same Edge Function signup/change-
+  // email already use (send-verification-email) — it always mails whatever
+  // email is on file for this token right now, which for this flow is
+  // simply "the account's current, already-established email."
+  Future<void> _sendCode() async {
     final current = _currentController.text;
     final next = _newController.text;
     final confirm = _confirmController.text;
@@ -299,19 +377,83 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
     }
 
     setState(() {
+      _sendingCode = true;
+      _error = null;
+    });
+
+    try {
+      final token = await _requireToken();
+      if (token == null) throw Exception('Not signed in');
+
+      final res = await Supabase.instance.client.functions.invoke(
+        'send-verification-email',
+        body: {'hops_token': token},
+      );
+      final ok = (res.data is Map) ? (res.data['ok'] as bool? ?? false) : false;
+      if (!mounted) return;
+      if (!ok) {
+        setState(() {
+          _sendingCode = false;
+          _error = "Couldn't send a confirmation code — try again in a moment.";
+        });
+        return;
+      }
+      setState(() {
+        _sendingCode = false;
+        _otpStep = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _sendingCode = false;
+        _error = describeAuthException(e);
+      });
+    }
+  }
+
+  // Step 2: checks the typed code, and only on success actually applies
+  // the password change — everything from here down is what _submit used
+  // to do unconditionally.
+  Future<void> _verifyAndSubmit() async {
+    final otp = _otpController.text.trim();
+    if (otp.length != 6) {
+      setState(() => _error = "Enter the 6-digit code from your email.");
+      return;
+    }
+
+    setState(() {
       _busy = true;
       _error = null;
     });
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('saved_hops_token');
+      final token = await _requireToken();
       if (token == null) throw Exception('Not signed in');
 
+      final otpOk = await Supabase.instance.client.rpc('verify_account_otp', params: {
+        'p_hops_token': token,
+        'p_otp_hash': hashPassword(otp),
+      }) as bool;
+
+      if (!mounted) return;
+      if (!otpOk) {
+        setState(() {
+          _busy = false;
+          _error = "That code is incorrect or has expired — check your email or go back and resend.";
+        });
+        return;
+      }
+
+      // See mesh_crypto.dart's header comment for the salted-hashing
+      // scheme — the OLD password is checked against whatever salt this
+      // account already has on file; the NEW password gets a fresh one.
+      final oldSalt = await fetchMyPasswordSalt(token);
+      final newSalt = generatePasswordSalt();
       final ok = await Supabase.instance.client.rpc('change_hops_password', params: {
         'p_hops_token': token,
-        'p_old_password_hash': hashPassword(current),
-        'p_new_password_hash': hashPassword(next),
+        'p_old_password_hash': hashSaltedPassword(_currentController.text, oldSalt),
+        'p_new_password_hash': hashSaltedPassword(_newController.text, newSalt),
+        'p_new_password_salt': newSalt,
       }) as bool;
 
       if (!mounted) return;
@@ -367,33 +509,66 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
               ),
               const SizedBox(height: 16),
             ],
-            TextField(
-              controller: _currentController,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Current password'),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _newController,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'New password'),
-            ),
-            PasswordStrengthBar(password: _newController.text),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _confirmController,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Confirm new password'),
-              onSubmitted: (_) => _busy ? null : _submit(),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: _busy ? null : _submit,
-              child: _busy
-                  ? const SizedBox(
-                      width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text("Update Password"),
-            ),
+            if (!_otpStep) ...[
+              TextField(
+                controller: _currentController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Current password'),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _newController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'New password'),
+              ),
+              PasswordStrengthBar(password: _newController.text),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _confirmController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Confirm new password'),
+                onSubmitted: (_) => _sendingCode ? null : _sendCode(),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _sendingCode ? null : _sendCode,
+                child: _sendingCode
+                    ? const SizedBox(
+                        width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text("Send Confirmation Code"),
+              ),
+            ] else ...[
+              Text(
+                "Enter the 6-digit code we just emailed you to confirm this change.",
+                style: TextStyle(fontSize: 13, color: colors.onSurface.withValues(alpha: 0.7)),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _otpController,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 22, letterSpacing: 6),
+                decoration: const InputDecoration(labelText: 'Confirmation code', counterText: ''),
+                onSubmitted: (_) => _busy ? null : _verifyAndSubmit(),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _sendingCode ? null : _sendCode,
+                  child: const Text("Resend code"),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _busy ? null : _verifyAndSubmit,
+                child: _busy
+                    ? const SizedBox(
+                        width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text("Confirm & Update Password"),
+              ),
+            ],
           ],
         ),
       ),
@@ -458,9 +633,11 @@ class _ChangeEmailScreenState extends State<_ChangeEmailScreen> {
       final token = prefs.getString('saved_hops_token');
       if (token == null) throw Exception('Not signed in');
 
+      // See mesh_crypto.dart's header comment for the salted-hashing scheme.
+      final salt = await fetchMyPasswordSalt(token);
       final ok = await Supabase.instance.client.rpc('change_hops_email', params: {
         'p_hops_token': token,
-        'p_password_hash': hashPassword(password),
+        'p_password_hash': hashSaltedPassword(password, salt),
         'p_new_email': newEmail.toLowerCase(),
       }) as bool;
 
@@ -607,9 +784,11 @@ class _DeleteAccountScreenState extends State<_DeleteAccountScreen> {
       final token = prefs.getString('saved_hops_token');
       if (token == null) throw Exception('Not signed in');
 
+      // See mesh_crypto.dart's header comment for the salted-hashing scheme.
+      final salt = await fetchMyPasswordSalt(token);
       final ok = await Supabase.instance.client.rpc('delete_hops_user', params: {
         'p_hops_token': token,
-        'p_password_hash': hashPassword(password),
+        'p_password_hash': hashSaltedPassword(password, salt),
       }) as bool;
 
       if (!mounted) return;

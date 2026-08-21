@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:client/services/cosmetic_prefs.dart';
+import 'package:client/theme/ping_sound_packs.dart';
 
 class NotificationService {
   static const int _emgNotificationId = 0; // fixed — used by show AND cancel
@@ -23,6 +26,7 @@ class NotificationService {
   static const int _communityMessageNotificationId = 209;
   static const int _accountSuspendedNotificationId = 210;
   static const int _adminWarningNotificationId = 211;
+  static const int _studyInterestNotificationId = 212;
   static const int _chatNotificationIdBase = 90000;
 
   static final FlutterLocalNotificationsPlugin _plugin =
@@ -115,6 +119,7 @@ class NotificationService {
     AndroidNotificationChannel? channel,
   }) async {
     final ch = channel ?? _activityChannel;
+    final customSoundPlaying = await _playPingSoundIfSelected();
     await _plugin.show(
       id,
       title,
@@ -126,9 +131,37 @@ class NotificationService {
           channelDescription: ch.description,
           importance: ch.importance,
           priority: Priority.high,
+          playSound: !customSoundPlaying, // fallback if our player failed/wasn't selected
         ),
       ),
     );
+  }
+
+  /// One-shot playback of the selected ping sound pack (see
+  /// theme/ping_sound_packs.dart), if the player picked one and playback
+  /// succeeds. Returns true when a custom sound is now playing, so the
+  /// caller can suppress the channel's own default sound and avoid a
+  /// double-ping. See that catalog file's header comment for why this only
+  /// reliably fires while Hops is in the foreground — a real per-pack
+  /// system sound would need native Android channels, which this pass
+  /// doesn't add.
+  static Future<bool> _playPingSoundIfSelected() async {
+    await CosmeticPrefs.instance.load();
+    final asset = PingSoundOptions.byId(CosmeticPrefs.instance.pingSound.value).asset;
+    if (asset == null) return false;
+    try {
+      final player = AudioPlayer();
+      await player.setAsset(asset);
+      unawaited(player.play());
+      // Short one-shot clips (well under a second) — disposing on a fixed
+      // delay instead of chaining off play()'s completion future, since
+      // just_audio's play() future semantics aren't guaranteed to resolve
+      // promptly once playback actually finishes.
+      unawaited(Future.delayed(const Duration(seconds: 2), player.dispose));
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ── Chat (bucketed per-peer so different conversations don't clobber
@@ -169,6 +202,17 @@ class NotificationService {
         id: _friendAcceptedNotificationId,
         title: "Friend added",
         body: "$username accepted your friend request",
+      );
+
+  // Fires when someone taps "I'm Interested" on your active Study Bunny
+  // Finder tag (see hops_app.dart's SBI: scan handler) — deliberately no
+  // sender name in the body, since study tags carry no identity on the
+  // wire at all (same anonymity as Vibe Check).
+  static Future<void> showStudyInterestNotification({required String subject}) =>
+      _showActivity(
+        id: _studyInterestNotificationId,
+        title: "Study Bunny interest",
+        body: "Someone nearby is interested in studying $subject with you",
       );
 
   static Future<void> showWatchRequestNotification({required String sender}) =>
@@ -239,11 +283,25 @@ class NotificationService {
             : "A Hops admin has suspended this account. You've been signed out.",
       );
 
-  static Future<void> showTaskReminderNotification({required String taskTitle}) =>
+  // [reminderKey] identifies which task+stage this is (see
+  // hops_app.dart's _maybeFireTaskReminder) so the day-before, 2-hour,
+  // 1-hour, and at-time reminders for the SAME task — or reminders for
+  // two DIFFERENT tasks landing close together — each get their own
+  // notification instead of the newest one silently replacing an
+  // still-relevant earlier one. Falls back to the old shared id when no
+  // key is given, so nothing else calling this with the old signature
+  // breaks.
+  static Future<void> showTaskReminderNotification({
+    required String taskTitle,
+    String? body,
+    String? reminderKey,
+  }) =>
       _showActivity(
-        id: _taskReminderNotificationId,
-        title: "Task due",
-        body: "'$taskTitle' is due now",
+        id: reminderKey == null
+            ? _taskReminderNotificationId
+            : _taskReminderNotificationId + (reminderKey.hashCode & 0xFFFF),
+        title: "Task reminder",
+        body: body ?? "'$taskTitle' is due now",
       );
 
   // Community Alerts is a broadcast everyone nearby receives, so unlike a

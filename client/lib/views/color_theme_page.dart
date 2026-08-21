@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/theme/app_theme.dart';
 import 'package:client/main.dart' show themeNotifier;
+import 'package:client/services/carrot_wallet.dart';
+import 'package:client/views/hops_shop_page.dart';
 
 // Was a single flat grid of all 12 themes at once — with only Forest Calm/
 // Night and Ocean Breeze/Depths as light/dark counterparts to make sense
@@ -162,6 +164,7 @@ class _ColorThemeGridPageState extends State<_ColorThemeGridPage> {
   void initState() {
     super.initState();
     _selectedThemeIndex = themeNotifier.value;
+    CarrotWallet.instance.load();
   }
 
   Future<void> _selectTheme(int index) async {
@@ -169,6 +172,22 @@ class _ColorThemeGridPageState extends State<_ColorThemeGridPage> {
     await prefs.setInt('selected_theme_index', index);
     themeNotifier.value = index;
     setState(() => _selectedThemeIndex = index);
+  }
+
+  void _onTapTheme(int index, AppTheme t) {
+    // A priced theme (Hops Shop exclusive) that isn't owned yet doesn't
+    // select — it points at the Shop instead. CarrotWallet.owns() is the
+    // one source of truth for "unlocked", read fresh here rather than
+    // cached, since a purchase could have happened on this same visit
+    // (Shop pushed on top, then popped back to this page).
+    if (t.carrotCost != null && !CarrotWallet.instance.owns(t.name)) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const HopsShopPage()),
+      ).then((_) => setState(() {})); // refresh lock states on return
+      return;
+    }
+    _selectTheme(index);
   }
 
   @override
@@ -198,53 +217,61 @@ class _ColorThemeGridPageState extends State<_ColorThemeGridPage> {
           final index = widget.indices[gridIndex];
           final t = AppThemes.all[index];
           final isSelected = index == _selectedThemeIndex;
+          final isLocked = t.carrotCost != null && !CarrotWallet.instance.owns(t.name);
           return GestureDetector(
-            onTap: () => _selectTheme(index),
-            child: Card(
-              color: t.background,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: isSelected
-                    ? BorderSide(color: t.primary, width: 3)
-                    : BorderSide.none,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    Icon(Icons.palette, color: t.primary, size: 32),
-                    // Flexible + ellipsis: the fixed 1.1 aspect-ratio grid
-                    // cell has no slack for this to wrap onto a second line,
-                    // which font_size_page.dart's up-to-1.6x scale (or just
-                    // a longer theme name) would otherwise push past the
-                    // card's bottom and clip/overflow the selected checkmark
-                    // below it.
-                    Flexible(
-                      child: Text(
-                        t.name,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: t.primary,
-                          fontSize: 14,
+            onTap: () => _onTapTheme(index, t),
+            child: Opacity(
+              opacity: isLocked ? 0.55 : 1.0,
+              child: Card(
+                color: t.background,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: isSelected
+                      ? BorderSide(color: t.primary, width: 3)
+                      : BorderSide.none,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      Icon(isLocked ? Icons.lock : Icons.palette, color: t.primary, size: 32),
+                      // Flexible + ellipsis: the fixed 1.1 aspect-ratio grid
+                      // cell has no slack for this to wrap onto a second line,
+                      // which font_size_page.dart's up-to-1.6x scale (or just
+                      // a longer theme name) would otherwise push past the
+                      // card's bottom and clip/overflow the selected checkmark
+                      // below it.
+                      Flexible(
+                        child: Text(
+                          t.name,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: t.primary,
+                            fontSize: 14,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _ColorCircle(color: t.primary),
-                        const SizedBox(width: 4),
-                        _ColorCircle(color: t.primaryContainer),
-                        const SizedBox(width: 4),
-                        _ColorCircle(color: t.tertiaryContainer),
-                      ],
-                    ),
-                    if (isSelected) Icon(Icons.check_circle, color: t.primary),
-                  ],
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _ColorCircle(color: t.primary),
+                          const SizedBox(width: 4),
+                          _ColorCircle(color: t.primaryContainer),
+                          const SizedBox(width: 4),
+                          _ColorCircle(color: t.tertiaryContainer),
+                        ],
+                      ),
+                      if (isLocked)
+                        Text('🥕 ${t.carrotCost} — tap to unlock',
+                            style: TextStyle(fontSize: 10, color: t.primary, fontWeight: FontWeight.bold))
+                      else if (isSelected)
+                        Icon(Icons.check_circle, color: t.primary),
+                    ],
+                  ),
                 ),
               ),
             ),

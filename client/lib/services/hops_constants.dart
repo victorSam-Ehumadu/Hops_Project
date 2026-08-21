@@ -216,7 +216,7 @@ const String kCommunityDeletePrefix = 'CX:';
 /// Why a message was removed. Ordinal is what travels on the wire, so
 /// entries may be appended but never reordered or removed — an older build
 /// would render a shifted index as the wrong reason.
-enum CommunityDeleteReason { spam, harassment, inappropriate, misinformation, other }
+enum CommunityDeleteReason { spam, harassment, inappropriate, misinformation, other, removedBySender }
 
 const Map<CommunityDeleteReason, String> kCommunityDeleteReasonLabels = {
   CommunityDeleteReason.spam: 'spam',
@@ -224,6 +224,12 @@ const Map<CommunityDeleteReason, String> kCommunityDeleteReasonLabels = {
   CommunityDeleteReason.inappropriate: 'inappropriate content',
   CommunityDeleteReason.misinformation: 'misinformation',
   CommunityDeleteReason.other: 'breaking the rules',
+  // Not a moderation reason — the sender simply removed their own message.
+  // Used for the streamlined self-delete path in community_alerts.dart,
+  // which skips the "why is it being removed" picker entirely (a
+  // moderation-flavored reason picker makes no sense when you're deleting
+  // your own content, not someone else's).
+  CommunityDeleteReason.removedBySender: 'removed by sender',
 };
 
 String encodeCommunityDeletion({
@@ -793,4 +799,101 @@ Uint8List encodeGameRunnerTag(String username) {
 String? decodeGameRunnerTag(List<int> bytes) {
   if (bytes.isEmpty || bytes[0] != kGameRunnerTagProtocolMarker) return null;
   return utf8.decode(bytes.sublist(1), allowMalformed: true);
+}
+
+// ── Lost & Found board post encoding (chunked) ──────────────────────────
+//
+// A post carries a type flag plus two free-text fields (object, location).
+// At 10/7-character field limits the combined text fit in one 29-byte BLE
+// advertisement name; raised to 30/30 (up to 61 characters combined)
+// outgrew that, so this is chunked and reassembled the same way Community
+// Alerts solves "message longer than one packet" (see kCommunityNameBudget
+// above) — adapted here since a Lost & Found postId is already unique per
+// post, so reassembly keys directly on it; no separate msgId field is
+// needed the way Community Alerts needs one (it has many messages per
+// sender to tell apart, a Lost & Found post is posted once).
+//
+// Layout per chunk: "LNF:" (4) + postId (4) + type (1) + chunkInfo (1) =
+// 10 overhead, leaving kLostFoundChunkTextBudget of the ~29-byte total for
+// text. chunkIndex/totalChunks-1 pack into chunkInfo the same 3-bits-each
+// scheme encodeCommunityNameChunk uses, so up to 8 chunks — comfortably
+// enough for 61 characters at ~19 per chunk (4 chunks).
+const String kLostFoundPrefix = 'LNF:';
+const int kLostFoundPostIdChars = 4;
+const int kLostFoundOverhead = 4 + kLostFoundPostIdChars + 1 + 1; // 10
+const int kLostFoundChunkTextBudget = 29 - kLostFoundOverhead; // 19
+const int kLostFoundMaxChunks = 8;
+
+String encodeLostFoundChunk({
+  required String postId,
+  required String typeChar,
+  required int chunkIndex,
+  required int totalChunks,
+  required String chunkText,
+}) {
+  final info = _kNameFieldAlphabet[((chunkIndex & 0x07) << 3) | ((totalChunks - 1) & 0x07)];
+  return '$kLostFoundPrefix$postId$typeChar$info$chunkText';
+}
+
+class DecodedLostFoundChunk {
+  final String postId;
+  final String typeChar;
+  final int chunkIndex;
+  final int totalChunks;
+  final String text;
+  const DecodedLostFoundChunk({
+    required this.postId,
+    required this.typeChar,
+    required this.chunkIndex,
+    required this.totalChunks,
+    required this.text,
+  });
+}
+
+const int _kLnfTypeIndex = 4 + kLostFoundPostIdChars; // 8
+const int _kLnfChunkInfoIndex = _kLnfTypeIndex + 1; // 9
+
+DecodedLostFoundChunk? decodeLostFoundChunk(String advName) {
+  if (!advName.startsWith(kLostFoundPrefix)) return null;
+  if (advName.length < kLostFoundOverhead) return null;
+  final postId = advName.substring(4, 4 + kLostFoundPostIdChars);
+  final typeChar = advName[_kLnfTypeIndex];
+  final info = _kNameFieldAlphabet.indexOf(advName[_kLnfChunkInfoIndex]);
+  if (info < 0) return null;
+  return DecodedLostFoundChunk(
+    postId: postId,
+    typeChar: typeChar,
+    chunkIndex: (info >> 3) & 0x07,
+    totalChunks: (info & 0x07) + 1,
+    text: advName.substring(kLostFoundOverhead),
+  );
+}
+
+/// Splits [text] (the combined "object|location" string) into pieces that
+/// each fit kLostFoundChunkTextBudget bytes — same byte-safe whole-
+/// character accumulation as splitCommunityMessage, just against this
+/// format's own (larger) per-chunk budget.
+List<String> splitLostFoundText(String text) {
+  final chunks = <String>[];
+  final buffer = StringBuffer();
+  var bufferBytes = 0;
+
+  for (final rune in text.runes) {
+    final ch = String.fromCharCode(rune);
+    final chBytes = utf8.encode(ch).length;
+    if (bufferBytes + chBytes > kLostFoundChunkTextBudget) {
+      chunks.add(buffer.toString());
+      if (chunks.length >= kLostFoundMaxChunks) return chunks;
+      buffer.clear();
+      bufferBytes = 0;
+    }
+    buffer.write(ch);
+    bufferBytes += chBytes;
+  }
+
+  if (buffer.isNotEmpty && chunks.length < kLostFoundMaxChunks) {
+    chunks.add(buffer.toString());
+  }
+  if (chunks.isEmpty) chunks.add('');
+  return chunks;
 }

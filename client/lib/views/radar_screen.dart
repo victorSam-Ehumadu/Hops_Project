@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/services/hops_constants.dart';
+import 'package:client/services/cosmetic_prefs.dart';
+import 'package:client/services/avatar_path_notifier.dart';
+import 'package:client/theme/radar_icons.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/widgets/hops_background_pattern.dart';
 import 'package:client/widgets/hops_card.dart';
@@ -82,6 +85,7 @@ class _RadarScreenState extends State<RadarScreen>
   final Map<String, ScanResult> _devices = {};
   StreamSubscription<List<ScanResult>>? _sub;
   late AnimationController _radarController;
+  late AnimationController _pulseController;
 
   Color _bleMeshColor(int count) {
     if (count >= 50) return Colors.green;
@@ -127,9 +131,27 @@ class _RadarScreenState extends State<RadarScreen>
   void initState() {
     super.initState();
     _loadAvatar(); // load avatar on start
+    // Also reload on every avatar_path write, from ANYWHERE — the "refresh
+    // after returning" call further down only catches the one navigation
+    // path that goes through this screen's own Profile button; the
+    // app bar's own avatar tap (hops_app.dart) opens Profile via a
+    // completely separate route this screen never sees return from, which
+    // is why an edited avatar wasn't showing up here specifically.
+    avatarPathRevision.addListener(_loadAvatar);
+    CosmeticPrefs.instance.load();
     _radarController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
+    )..repeat();
+    // Sonar-style pulse rings — separate from the sweep's own 2s rotation
+    // (a longer, independent cycle reads as "the radar is alive" without
+    // the ring expansion racing the sweep line around the dial). See
+    // RadarPainter's pulseValue for how this one value draws two rings
+    // staggered half a cycle apart, so a new pulse is always mid-expansion
+    // rather than there being a visible dead gap between them.
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
     )..repeat();
 
     _sub = widget.radarStream.listen((results) {
@@ -218,6 +240,8 @@ class _RadarScreenState extends State<RadarScreen>
     _sub?.cancel();
     _cleanupTimer?.cancel();
     _radarController.dispose();
+    _pulseController.dispose();
+    avatarPathRevision.removeListener(_loadAvatar);
     super.dispose();
   }
 
@@ -601,16 +625,24 @@ class _RadarScreenState extends State<RadarScreen>
                             }
                           }
                         },
-                        child: AnimatedBuilder(
-                          animation: _radarController,
-                          builder: (context, child) {
-                            return CustomPaint(
-                              painter: RadarPainter(
-                                rotation: _radarController.value * 2 * math.pi,
-                                primaryColor: colors.primary,
-                                blips: blips,
-                              ),
-                              size: Size(radarSize, radarSize),
+                        child: ValueListenableBuilder<String>(
+                          valueListenable: CosmeticPrefs.instance.radarIcon,
+                          builder: (context, radarIconId, _) {
+                            final blipEmoji = RadarIconOptions.byId(radarIconId).emoji;
+                            return AnimatedBuilder(
+                              animation: Listenable.merge([_radarController, _pulseController]),
+                              builder: (context, child) {
+                                return CustomPaint(
+                                  painter: RadarPainter(
+                                    rotation: _radarController.value * 2 * math.pi,
+                                    pulseValue: _pulseController.value,
+                                    primaryColor: colors.primary,
+                                    blips: blips,
+                                    blipEmoji: blipEmoji,
+                                  ),
+                                  size: Size(radarSize, radarSize),
+                                );
+                              },
                             );
                           },
                         ),
@@ -1020,16 +1052,26 @@ class _DeviceBlip {
 
 class RadarPainter extends CustomPainter {
   final double rotation;
+  // 0..1, looping — see initState's comment on _pulseController. Two rings
+  // are drawn from this single value, half a cycle out of phase with each
+  // other, each expanding from the center out to the dial's edge while
+  // fading out, the classic sonar-ping look.
+  final double pulseValue;
   final Color primaryColor;
   // _DeviceBlip is an implementation detail of this file and RadarPainter
   // is only ever constructed from inside it. Making the type public purely
   // to satisfy the lint would widen the surface for no caller's benefit.
   // ignore: library_private_types_in_public_api
   final List<_DeviceBlip> blips;
+  // null = the original plain dot; otherwise an emoji glyph drawn in place
+  // of the dot (see theme/radar_icons.dart).
+  final String? blipEmoji;
   RadarPainter({
     required this.rotation,
+    required this.pulseValue,
     required this.primaryColor,
     required this.blips,
+    this.blipEmoji,
   });
 
   @override
@@ -1046,6 +1088,20 @@ class RadarPainter extends CustomPainter {
       ..strokeWidth = 1;
     for (int i = 1; i <= 4; i++) {
       canvas.drawCircle(center, radius * i / 4, circlePaint);
+    }
+    // Sonar pulse — two rings, half a cycle apart, each expanding from the
+    // center to the dial's edge while fading to nothing. maxAlpha is
+    // highest right as a ring starts (near the center, where it reads as
+    // a fresh "ping") and fades to 0 by the time it reaches the edge.
+    final pulsePaint = Paint()..style = PaintingStyle.stroke;
+    for (final phase in [0.0, 0.5]) {
+      final progress = (pulseValue + phase) % 1.0;
+      final pulseAlpha = (1 - progress) * 0.35;
+      if (pulseAlpha <= 0.01) continue;
+      pulsePaint
+        ..color = primaryColor.withValues(alpha: pulseAlpha)
+        ..strokeWidth = 2;
+      canvas.drawCircle(center, radius * progress, pulsePaint);
     }
     final linePaint = Paint()
       ..color = primaryColor.withValues(alpha: 0.3)
@@ -1082,6 +1138,20 @@ class RadarPainter extends CustomPainter {
             ..color = Colors.white
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2);
+      if (blipEmoji != null) {
+        // Emoji drawn on top of the same dot+ring rather than replacing it
+        // — keeps a consistent, legible "chip" shape across every icon
+        // choice instead of a bare glyph floating unanchored on the sweep.
+        final emojiPainter = TextPainter(
+          text: TextSpan(text: blipEmoji, style: const TextStyle(fontSize: 14)),
+          textDirection: TextDirection.ltr,
+        );
+        emojiPainter.layout();
+        emojiPainter.paint(
+          canvas,
+          Offset(blipPos.dx - emojiPainter.width / 2, blipPos.dy - emojiPainter.height / 2),
+        );
+      }
       // A resolved contact or a self-revealed Discoverable name is shown
       // as-is; anyone else stays a short, non-identifying tag derived from
       // their already-public rotating token instead of nothing at all, so
@@ -1108,6 +1178,8 @@ class RadarPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant RadarPainter oldDelegate) {
-    return oldDelegate.rotation != rotation || oldDelegate.blips != blips;
+    return oldDelegate.rotation != rotation ||
+        oldDelegate.pulseValue != pulseValue ||
+        oldDelegate.blips != blips;
   }
 }

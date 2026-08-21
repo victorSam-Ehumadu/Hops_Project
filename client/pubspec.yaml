@@ -40,6 +40,11 @@ dependencies:
   quick_actions: ^1.0.7
   flutter_tts: ^4.2.5
   tflite_flutter: ^0.12.1
+  # Was already pulled in transitively (by share_plus); declared directly
+  # now that help_screen.dart intentionally uses it to open a mailto: link,
+  # rather than relying on an indirect dependency that could disappear on a
+  # future `flutter pub upgrade` if whatever pulled it in stops needing it.
+  url_launcher: ^6.3.0
 
 
 dev_dependencies:
@@ -52,7 +57,11 @@ flutter:
   uses-material-design: true
   assets:
     - .env
-    - assets/sounds/alert.wav
+    # Directory form — alert.wav (the Emergency Flare siren) plus the
+    # ping_*.wav notification tones (theme/ping_sound_packs.dart) all live
+    # here; a future addition needs no pubspec edit, same reasoning as
+    # assets/data/ below.
+    - assets/sounds/
     # Directory form, not a single file: anything dropped into assets/data/
     # later (extra knowledge packs, offline lookup tables) is bundled without
     # another pubspec edit. Only files directly in the folder — subfolders

@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:client/database/database_helper.dart';
 import 'package:client/views/chat_terminal.dart';
+import 'package:client/widgets/thought_bubble.dart';
 
 class ContactProfileScreen extends StatefulWidget {
   final String peerUsername;
@@ -28,6 +29,7 @@ class ContactProfileScreen extends StatefulWidget {
 class _ContactProfileScreenState extends State<ContactProfileScreen> {
   String? _avatarPath;
   String? _bio;
+  String? _thinking;
   bool _loading = true;
   bool _deleting = false;
 
@@ -43,6 +45,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
     setState(() {
       _avatarPath = profile?[DatabaseHelper.cpColAvatarPath] as String?;
       _bio = profile?[DatabaseHelper.cpColBio] as String?;
+      _thinking = profile?[DatabaseHelper.cpColThinking] as String?;
       _loading = false;
     });
   }
@@ -123,16 +126,31 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            GestureDetector(
-              onTap: _avatarPath != null ? _showFullImage : null,
-              child: CircleAvatar(
-                radius: 56,
-                backgroundColor: colors.primaryContainer,
-                backgroundImage: _avatarPath != null ? FileImage(File(_avatarPath!)) : null,
-                child: _avatarPath == null
-                    ? const Icon(Icons.cruelty_free, size: 56, color: Colors.white)
-                    : null,
-              ),
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                GestureDetector(
+                  onTap: _avatarPath != null ? _showFullImage : null,
+                  child: CircleAvatar(
+                    radius: 56,
+                    backgroundColor: colors.primaryContainer,
+                    backgroundImage: _avatarPath != null ? FileImage(File(_avatarPath!)) : null,
+                    child: _avatarPath == null
+                        ? const Icon(Icons.cruelty_free, size: 56, color: Colors.white)
+                        : null,
+                  ),
+                ),
+                // "What are they thinking" — synced the same way avatar/bio
+                // are, over the first chat session (see
+                // hops_chat_service.dart's sendProfile). Only shown once
+                // they've actually set one.
+                if (_thinking != null && _thinking!.isNotEmpty)
+                  Positioned(
+                    top: -24,
+                    right: -60,
+                    child: ThoughtBubble(text: _thinking!),
+                  ),
+              ],
             ),
             const SizedBox(height: 16),
             FittedBox(

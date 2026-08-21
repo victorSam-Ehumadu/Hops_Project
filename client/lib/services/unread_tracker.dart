@@ -34,6 +34,8 @@ enum UnreadSource {
   taskReminder,    // a task came due (Task Tracker feature)
   watchMe,         // watch request / buddy alert (Watch Me feature)
   hopsShare,       // an incoming file (Hops Share feature)
+  studyBunny,      // a new study tag nearby (Study Bunny Finder feature)
+  lostFound,       // a new lost/found post nearby (Lost & Found feature)
 }
 
 class UnreadTracker {
@@ -97,6 +99,8 @@ class UnreadTracker {
       UnreadSource.taskReminder,
       UnreadSource.watchMe,
       UnreadSource.hopsShare,
+      UnreadSource.studyBunny,
+      UnreadSource.lostFound,
     ],
   };
 
@@ -108,6 +112,8 @@ class UnreadTracker {
     UnreadSource.vibeCheck: 5,
     UnreadSource.taskReminder: 9,
     UnreadSource.hopsShare: 11,
+    UnreadSource.studyBunny: 15,
+    UnreadSource.lostFound: 16,
   };
 
   /// True if the given feature card should show a dot.

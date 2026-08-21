@@ -23,6 +23,10 @@ import 'package:client/main.dart'
         BleDirectMessage;
 import 'package:client/services/hops_constants.dart' show kDirectMessageMaxPlaintextBytes;
 import 'package:client/services/hops_engine.dart';
+import 'package:client/services/cosmetic_prefs.dart';
+import 'package:client/services/accessibility_prefs.dart';
+import 'package:client/theme/chat_bubble_skins.dart';
+import 'package:client/utils/profanity_filter.dart';
 import 'package:client/widgets/hops_bot_avatar.dart';
 
 class IndividualChatTerminalView extends StatefulWidget {
@@ -101,6 +105,7 @@ class _IndividualChatTerminalViewState
   @override
   void initState() {
     super.initState();
+    CosmeticPrefs.instance.load();
 
     // The assistant needs none of the machinery below — no radio to pause,
     // no peer to discover, no fallback transport to arm. Starting any of it
@@ -268,7 +273,8 @@ class _IndividualChatTerminalViewState
       knownMacAddress: knownMac,
       onMacLearned: (mac) =>
           DatabaseHelper.instance.upsertContactMacAddress(widget.peerName, mac),
-      onMessageReceived: _handleIncomingMessage,
+      onMessageReceived: (id, text) => _handleIncomingMessage(text, id: id),
+      onMessageDeleted: _handleIncomingDelete,
       onProfileReceived: _handlePeerProfileReceived,
       onRotatingSeedReceived: _handlePeerSeedReceived,
       onStateChanged: (state) {
@@ -345,6 +351,7 @@ class _IndividualChatTerminalViewState
   Future<void> _sendMyProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final bio = prefs.getString('bio') ?? '';
+    final thinking = prefs.getString('thinking_status') ?? '';
     final avatarPath = prefs.getString('avatar_path');
     Uint8List? avatarBytes;
     if (avatarPath != null) {
@@ -355,10 +362,10 @@ class _IndividualChatTerminalViewState
         // No avatar to send — not fatal, bio still goes out below.
       }
     }
-    await _chatService?.sendProfile(bio: bio, avatarBytes: avatarBytes);
+    await _chatService?.sendProfile(bio: bio, thinking: thinking, avatarBytes: avatarBytes);
   }
 
-  Future<void> _handlePeerProfileReceived(String bio, Uint8List? avatarBytes) async {
+  Future<void> _handlePeerProfileReceived(String bio, String thinking, Uint8List? avatarBytes) async {
     String? savedAvatarPath;
     if (avatarBytes != null && avatarBytes.isNotEmpty) {
       try {
@@ -376,6 +383,7 @@ class _IndividualChatTerminalViewState
       widget.peerName,
       avatarPath: savedAvatarPath,
       bio: bio,
+      thinking: thinking,
     );
     if (mounted) setState(() => _peerAvatarPath = savedAvatarPath);
   }
@@ -424,16 +432,24 @@ class _IndividualChatTerminalViewState
     for (final row in pending) {
       final id = row[DatabaseHelper.columnId] as String;
       final text = row[DatabaseHelper.columnMessage] as String;
-      final delivered = await _chatService?.sendMessage(text) ?? false;
+      final delivered = await _chatService?.sendMessage(id, text) ?? false;
       if (!delivered) break; // stay in order — don't skip ahead on failure
       await DatabaseHelper.instance.markMessageDelivered(id);
     }
     await _loadPeerMessageLogs();
   }
 
-  Future<void> _handleIncomingMessage(String message) async {
+  // [id] is the sender's own row id for this message, threaded through by
+  // RfcommChatService so both sides file it under the same id (see that
+  // file's sendMessage) — required for _handleIncomingDelete below to be
+  // able to find this row later. Left null (and a fresh id minted here
+  // instead) for the BLE-mesh fallback path (_bleInboxSub's listener),
+  // which has no such shared id and, being fire-and-forget broadcast
+  // rather than a live socket, has no delete-for-everyone signal to honor
+  // anyway.
+  Future<void> _handleIncomingMessage(String message, {String? id}) async {
     final incomingPayload = {
-      DatabaseHelper.columnId: const Uuid().v4(),
+      DatabaseHelper.columnId: id ?? const Uuid().v4(),
       DatabaseHelper.columnMessage: message,
       DatabaseHelper.columnSenderId: widget.peerName,
       DatabaseHelper.columnPeerId: widget.peerName,
@@ -444,6 +460,14 @@ class _IndividualChatTerminalViewState
     };
     await DatabaseHelper.instance.insertMessage(incomingPayload);
     await _loadPeerMessageLogs();
+
+    // Accessibility: "Read Messages Aloud" (accessibility_settings_page.dart)
+    // — reuses HopsEngine's already-initialized TTS engine (the same one
+    // that reads the assistant's own replies aloud) rather than spinning up
+    // a second flutter_tts instance for this.
+    if (AccessibilityPrefs.instance.readMessagesAloud.value) {
+      unawaited(HopsEngine.instance.bunnyTalk(message));
+    }
 
     // Only while this exact conversation isn't the thing on screen right
     // now — otherwise every incoming message would double up as both the
@@ -465,6 +489,55 @@ class _IndividualChatTerminalViewState
     _scrollToBottom();
   }
 
+  // "Delete my message" — for everyone, best-effort. If the peer is
+  // connected right now, sendDeleteMessage tells their device to remove
+  // its own copy of this same message too (see RfcommChatService's
+  // sendMessage/onMessageDeleted for how both sides end up filing it under
+  // the same id in the first place). If they're not connected at this
+  // moment, there's no live channel to reach them on — the signal is never
+  // queued or retried, so their copy simply stays. That's an inherent
+  // limit of an often-disconnected P2P transport, not a bug: there's no
+  // server in the middle to hold the request until they're back online.
+  Future<void> _confirmDeleteMessage(String id) async {
+    final colors = Theme.of(context).colorScheme;
+    final canReachPeer = _connState == ChatConnectionState.connected;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete message?'),
+        content: Text(
+          canReachPeer
+              ? "This removes it from your conversation. Since you're "
+                "currently connected to ${widget.peerName}, it will be "
+                "removed from their device too."
+              : "This removes it from your own copy of the conversation. "
+                "You're not connected to ${widget.peerName} right now, so "
+                "it can't be removed from their device.",
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete', style: TextStyle(color: colors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await DatabaseHelper.instance.deleteMessage(id);
+    await _loadPeerMessageLogs();
+    unawaited(_chatService?.sendDeleteMessage(id));
+  }
+
+  // The peer told us (live, over RFCOMM) that they deleted one of their
+  // messages — remove our copy of that same message too. See
+  // _confirmDeleteMessage's comment and RfcommChatService's sendMessage
+  // for why both sides share this id.
+  Future<void> _handleIncomingDelete(String id) async {
+    await DatabaseHelper.instance.deleteMessage(id);
+    await _loadPeerMessageLogs();
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -478,14 +551,17 @@ class _IndividualChatTerminalViewState
   }
 
   Future<void> _send() async {
-    final text = _msgInputController.text.trim();
+    var text = _msgInputController.text.trim();
     if (text.isEmpty) return;
     _msgInputController.clear();
 
     if (widget.isBot) {
+      // Not censored — this is a private query to the first-aid assistant,
+      // not a message another person will ever see.
       await _sendToBot(text);
       return;
     }
+    text = censorProfanity(text);
 
     final id = const Uuid().v4();
     final outgoingPayload = {
@@ -501,7 +577,7 @@ class _IndividualChatTerminalViewState
     await DatabaseHelper.instance.insertMessage(outgoingPayload);
     await _loadPeerMessageLogs();
 
-    final delivered = await _chatService?.sendMessage(text) ?? false;
+    final delivered = await _chatService?.sendMessage(id, text) ?? false;
     if (delivered) {
       await DatabaseHelper.instance.markMessageDelivered(id);
       await _loadPeerMessageLogs();
@@ -715,7 +791,17 @@ class _IndividualChatTerminalViewState
                 ? Center(
                 child: Text("No messages yet.",
                     style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5))))
-                : ListView.builder(
+                : ValueListenableBuilder<String>(
+              // Only YOUR OWN outgoing bubbles use the selected skin — the
+              // other side's bubbles stay the neutral theme color
+              // regardless, since there's no way to know (or apply) a
+              // skin the other person hasn't shared, and this is a
+              // local-rendering-only cosmetic same as every other one in
+              // theme/ (see cosmetic_prefs.dart's header comment).
+              valueListenable: CosmeticPrefs.instance.bubbleSkin,
+              builder: (context, bubbleSkinId, _) {
+                final skin = BubbleSkinOptions.byId(bubbleSkinId);
+                return ListView.builder(
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
               itemCount: messageThreadsList.length,
@@ -745,6 +831,14 @@ class _IndividualChatTerminalViewState
                             ? () => HopsEngine.instance.bunnyTalk(
                                 msg[DatabaseHelper.columnMessage] as String)
                             : null,
+                        // Long-press your own message to delete it (see
+                        // _confirmDeleteMessage). Not offered on the other
+                        // person's messages, or in the bot thread — there's
+                        // nothing to delete-for-me about a locally
+                        // generated bot reply.
+                        onLongPress: (isMe && !widget.isBot)
+                            ? () => _confirmDeleteMessage(msg[DatabaseHelper.columnId] as String)
+                            : null,
                         child: Container(
                         margin: const EdgeInsets.only(top: 4),
                         padding: const EdgeInsets.symmetric(
@@ -755,7 +849,7 @@ class _IndividualChatTerminalViewState
                         ),
                         decoration: BoxDecoration(
                           color: isMe
-                              ? colors.primary
+                              ? (skin.bubbleColor ?? colors.primary)
                               : colors.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -766,7 +860,7 @@ class _IndividualChatTerminalViewState
                           // with an ellipsis would cut first-aid steps off
                           // mid-instruction.
                           style: TextStyle(
-                              color: isMe ? Colors.white : colors.onSurface),
+                              color: isMe ? (skin.textColor ?? Colors.white) : colors.onSurface),
                           maxLines: widget.isBot ? null : 10,
                           overflow: widget.isBot
                               ? TextOverflow.clip
@@ -805,6 +899,8 @@ class _IndividualChatTerminalViewState
                       ),
                     ],
                   ),
+                );
+              },
                 );
               },
             ),

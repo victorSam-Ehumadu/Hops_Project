@@ -66,11 +66,16 @@ class _AdminSignInScreenState extends State<AdminSignInScreen> {
         Permission.bluetoothScan,
       ].request();
 
+      // See mesh_crypto.dart's header comment for the salted-hashing
+      // scheme — the salt has to be fetched before the hash can even be
+      // computed, and this lookup alone reveals nothing about whether the
+      // email has an account.
+      final salt = await fetchPasswordSaltForEmail(email);
       final response = await Supabase.instance.client.rpc(
         'signin_hops_user_by_email',
         params: {
           'p_email': email,
-          'p_password_hash': hashPassword(password),
+          'p_password_hash': hashSaltedPassword(password, salt),
         },
       ).maybeSingle();
 

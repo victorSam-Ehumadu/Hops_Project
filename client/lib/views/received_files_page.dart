@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
 
 class ReceivedFilesPage extends StatefulWidget {
   const ReceivedFilesPage({super.key});
@@ -14,6 +15,10 @@ class ReceivedFilesPage extends StatefulWidget {
 
 class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
   List<Map<String, dynamic>> _records = [];
+  // Tracks which file (by name) has a save in progress, so its download
+  // button can show a spinner and every OTHER row's button stays tappable
+  // — a shared "busy" bool would freeze the whole list over one save.
+  String? _savingFileName;
 
   @override
   void initState() {
@@ -43,6 +48,49 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Could not open file: ${result.message}")),
       );
+    }
+  }
+
+  // Saves a copy of a received file to wherever the user picks — the
+  // file_picker save dialog (Storage Access Framework on Android) opens
+  // to Downloads by default on every device this has been checked against,
+  // so "tap Download, tap Save" lands the file there without the user
+  // needing to navigate anywhere, while still letting them choose a
+  // different folder if they want one. This is deliberately NOT the same
+  // thing as "Share / Save" in the menu below — that hands the file to
+  // whatever OTHER APP the user picks (Drive, WhatsApp, etc.); this copies
+  // it straight onto the device's own storage, no other app involved.
+  Future<void> _downloadFile(String fileName) async {
+    setState(() => _savingFileName = fileName);
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final sourceFile = File('${dir.path}/$fileName');
+      if (!await sourceFile.exists()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("File not found")),
+        );
+        return;
+      }
+      final bytes = await sourceFile.readAsBytes();
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save $fileName',
+        fileName: fileName,
+        bytes: bytes,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(savedPath != null ? "Saved $fileName" : "Save cancelled"),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Couldn't save $fileName: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _savingFileName = null);
     }
   }
 
@@ -116,17 +164,36 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              trailing: PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'open') {
-                    _openFile(fileName.toString());
-                  } else if (value == 'share') {
-                    _shareFile(fileName.toString());
-                  }
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(value: 'open', child: Text('Open')),
-                  PopupMenuItem(value: 'share', child: Text('Share / Save')),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _savingFileName == fileName
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton(
+                          icon: Icon(Icons.download_outlined, color: colors.primary),
+                          tooltip: 'Download to device',
+                          onPressed: () => _downloadFile(fileName.toString()),
+                        ),
+                  PopupMenuButton<String>(
+                    onSelected: (value) {
+                      if (value == 'open') {
+                        _openFile(fileName.toString());
+                      } else if (value == 'share') {
+                        _shareFile(fileName.toString());
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(value: 'open', child: Text('Open')),
+                      PopupMenuItem(value: 'share', child: Text('Share…')),
+                    ],
+                  ),
                 ],
               ),
             ),

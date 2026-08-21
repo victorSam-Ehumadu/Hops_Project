@@ -101,7 +101,12 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       final meshKeys = generateLocalMeshKeys();
 
       setState(() => authEngineStatus = "Registering Identity...");
-      final passwordHash = hashPassword(password);
+      // See mesh_crypto.dart's header comment for the salted-hashing
+      // scheme this is part of — a brand-new password gets a brand-new
+      // salt, generated locally rather than asking the server for one,
+      // since there's no existing account yet to look one up from.
+      final passwordSalt = generatePasswordSalt();
+      final passwordHash = hashSaltedPassword(password, passwordSalt);
 
       await _secureStorage.write(key: 'private_key', value: meshKeys['private']);
       await _ensureRotatingIdSeed(forceNew: true);
@@ -120,6 +125,7 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
           'p_email': email.trim().toLowerCase(),
           'p_public_key': meshKeys['public'],
           'p_password_hash': passwordHash,
+          'p_password_salt': passwordSalt,
         },
       ).single();
 
@@ -203,11 +209,16 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       // password" alike, so the two error branches this used to have
       // collapse into one generic message on purpose — that used to leak
       // which emails exist.
+      // Salt has to be fetched before the hash can even be computed — see
+      // mesh_crypto.dart's header comment. fetchPasswordSaltForEmail
+      // returns an indistinguishable-looking value for an email with no
+      // account, so this round trip alone reveals nothing.
+      final salt = await fetchPasswordSaltForEmail(targetedEmail);
       final response = await Supabase.instance.client.rpc(
         'signin_hops_user_by_email',
         params: {
           'p_email': targetedEmail,
-          'p_password_hash': hashPassword(password),
+          'p_password_hash': hashSaltedPassword(password, salt),
         },
       ).maybeSingle();
 
@@ -286,13 +297,6 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     }
 
     bool agreed = false;
-    // Requires actually scrolling through the terms before the checkbox
-    // can be checked at all — previously it was enabled the instant the
-    // dialog opened, so "I agree" didn't mean much. maxScrollExtent is 0
-    // when the content already fits without scrolling (e.g. a very large
-    // display), which counts as "reached the bottom" trivially.
-    bool reachedBottom = false;
-    final scrollController = ScrollController();
 
     // Guarded because the SharedPreferences read above is an await, and
     // sign-up can be abandoned in that window.
@@ -304,20 +308,6 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final colors = Theme.of(context).colorScheme;
-
-            // Safety net for the scroll-gate below: if the terms content
-            // ever fits within the dialog's fixed height without needing
-            // to scroll at all (e.g. a very tall/large display), no scroll
-            // notification would ever fire to unlock the checkbox — check
-            // directly once this frame's laid out instead of relying only
-            // on the listener.
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!reachedBottom &&
-                  scrollController.hasClients &&
-                  scrollController.position.maxScrollExtent <= 0) {
-                setDialogState(() => reachedBottom = true);
-              }
-            });
 
             // Build rich-text spans from the raw terms text
             final lines = TermsScreen.termsText.split('\n');
@@ -365,72 +355,68 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
                     color: colors.primary, fontWeight: FontWeight.bold),
               ),
               content: SizedBox(
-                height: 300,
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: (notification) {
-                    final metrics = notification.metrics;
-                    // >= maxScrollExtent - 4: a couple of px of slack for
-                    // floating-point rounding at the very end of the list,
-                    // same idea as the tolerance used elsewhere for "did
-                    // this scroll view bottom out."
-                    if (!reachedBottom &&
-                        metrics.pixels >= metrics.maxScrollExtent - 4) {
-                      setDialogState(() => reachedBottom = true);
-                    }
-                    return false;
-                  },
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: RichText(
-                      text: TextSpan(children: spans),
-                    ),
-                  ),
-                ),
-              ),
-              actions: [
-                if (!reachedBottom)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
+                height: 340,
+                width: double.maxFinite,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
                       children: [
                         Icon(Icons.arrow_downward, size: 14, color: colors.onSurface.withValues(alpha: 0.5)),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            "Scroll down to read the full terms before agreeing",
+                            "Scroll to the bottom to check the box and continue",
                             style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.6), fontStyle: FontStyle.italic),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                Row(
-                  children: [
-                    Checkbox(
-                      value: agreed,
-                      // Locked to unchecked (and unresponsive) until the
-                      // scroll listener above confirms the bottom's been
-                      // reached — checking "I agree" before that point
-                      // wouldn't mean the user actually read anything.
-                      onChanged: !reachedBottom
-                          ? null
-                          : (val) {
-                              setDialogState(() => agreed = val ?? false);
-                            },
-                      activeColor: colors.primary,
-                    ),
+                    const SizedBox(height: 8),
                     Expanded(
-                      child: Text(
-                        "I agree to the Terms and Conditions",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: reachedBottom ? null : colors.onSurface.withValues(alpha: 0.4),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            RichText(text: TextSpan(children: spans)),
+                            // The checkbox lives INSIDE the scrollable
+                            // content, as the very last thing in it — not
+                            // pinned in the dialog's action bar. A widget
+                            // below the fold of a SingleChildScrollView
+                            // can't be tapped until it's actually scrolled
+                            // into view, so this makes "read to the
+                            // bottom" a physical requirement rather than a
+                            // scroll-position check that has to be kept in
+                            // sync with it.
+                            const SizedBox(height: 16),
+                            const Divider(),
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Checkbox(
+                                  value: agreed,
+                                  onChanged: (val) {
+                                    setDialogState(() => agreed = val ?? false);
+                                  },
+                                  activeColor: colors.primary,
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    "I agree to the Terms and Conditions",
+                                    style: TextStyle(fontSize: 12, color: colors.onSurface),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(width: 8),
+              ),
+              actions: [
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: agreed ? colors.primary : Colors.grey,

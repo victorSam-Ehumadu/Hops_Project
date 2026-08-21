@@ -8,16 +8,19 @@ import 'package:client/widgets/hops_card.dart';
 import 'package:client/utils/report_content.dart';
 import 'package:client/services/unread_tracker.dart';
 import 'package:client/services/vibe_report_store.dart';
+import 'package:client/utils/profanity_filter.dart';
 
 
 class VibeCheckPage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
   final Future<void> Function(String location, int count) onAdvertiseVibeTag;
+  final Future<void> Function(String reportKey) onDeleteVibeReport;
 
   const VibeCheckPage({
     super.key,
     required this.radarStream,
     required this.onAdvertiseVibeTag,
+    required this.onDeleteVibeReport,
   });
 
   @override
@@ -66,7 +69,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
   }
 
   Future<void> _saveLocation() async {
-    final location = _locationController.text.trim();
+    final location = censorProfanity(_locationController.text.trim());
     if (location.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Enter a location name")),
@@ -88,7 +91,9 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     // Also show it in the live list straight away. Our own advertisement
     // is filtered out of our own scan results, so without this the report
     // you just filed is the one report you can't see.
-    _store.record(key: "VBT:$location:$level", location: location, level: level);
+    final key = "VBT:$location:$level";
+    _store.record(key: key, location: location, level: level);
+    _store.markMine(key);
     if (mounted) setState(() {});
 
     await widget.onAdvertiseVibeTag(location, level);
@@ -100,6 +105,12 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
         SnackBar(content: Text("Saved $location as ${_levelNames[level]}")),
       );
     }
+  }
+
+  Future<void> _deleteReport(String key) async {
+    _store.removeReport(key);
+    if (mounted) setState(() {});
+    await widget.onDeleteVibeReport(key);
   }
 
   static const List<String> _levelNames = [
@@ -154,11 +165,14 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     // changes, which is what "arrives while I'm looking at the page" needs.
     return ValueListenableBuilder<Map<String, VibeReport>>(
       valueListenable: _store.reports,
-      builder: (context, _, __) => _buildScaffold(context, theme, colors),
+      builder: (context, _, __) => ValueListenableBuilder<Set<String>>(
+        valueListenable: _store.myReportKeys,
+        builder: (context, mine, __) => _buildScaffold(context, theme, colors, mine),
+      ),
     );
   }
 
-  Widget _buildScaffold(BuildContext context, ThemeData theme, ColorScheme colors) {
+  Widget _buildScaffold(BuildContext context, ThemeData theme, ColorScheme colors, Set<String> mine) {
     final communityList = _store.sortedReports();
 
     return Scaffold(
@@ -260,6 +274,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                   child: TextField(
                     controller: _locationController,
                     focusNode: _focusNode,
+                    maxLength: 24,
                     style: TextStyle(color: colors.onSurface),  // typed text visible
                     decoration: InputDecoration(
                       hintText: "e.g., Library, Cafeteria",
@@ -403,22 +418,30 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                             ],
                           ),
                         ),
-                        // Vibe Check tags carry no sender at all (see
-                        // VBT: in hops_app.dart) — this can only ever
-                        // report the tag itself as spam/wrong, never a
-                        // specific person, unlike Community Alerts' report
-                        // action.
-                        IconButton(
-                          icon: Icon(Icons.flag_outlined, size: 18, color: colors.onSurface.withValues(alpha: 0.35)),
-                          tooltip: "Report",
-                          visualDensity: VisualDensity.compact,
-                          onPressed: () => showReportContentSheet(
-                            context,
-                            contentType: 'vibe_check',
-                            snapshotText: "${report.location}: ${_levelNames[report.level]}",
-                            contentCreatedAt: report.timestamp,
+                        if (mine.contains("VBT:${report.location}:${report.level}"))
+                          IconButton(
+                            icon: Icon(Icons.delete_outline, size: 18, color: colors.error.withValues(alpha: 0.7)),
+                            tooltip: "Delete",
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => _deleteReport("VBT:${report.location}:${report.level}"),
+                          )
+                        else
+                          // Vibe Check tags carry no sender at all (see
+                          // VBT: in hops_app.dart) — this can only ever
+                          // report the tag itself as spam/wrong, never a
+                          // specific person, unlike Community Alerts'
+                          // report action.
+                          IconButton(
+                            icon: Icon(Icons.flag_outlined, size: 18, color: colors.onSurface.withValues(alpha: 0.35)),
+                            tooltip: "Report",
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => showReportContentSheet(
+                              context,
+                              contentType: 'vibe_check',
+                              snapshotText: "${report.location}: ${_levelNames[report.level]}",
+                              contentCreatedAt: report.timestamp,
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),

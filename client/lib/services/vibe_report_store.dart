@@ -71,6 +71,14 @@ class VibeReportStore {
   final ValueNotifier<Map<String, VibeReport>> reports =
       ValueNotifier<Map<String, VibeReport>>({});
 
+  /// Report keys THIS device itself filed — the only ones the "Delete"
+  /// action is offered on (vibe_check_page.dart). Local-only bookkeeping,
+  /// same as LostFoundStore.myPostIds: nothing about authorship travels on
+  /// the wire, a VBT: tag is anonymous same as always.
+  final ValueNotifier<Set<String>> myReportKeys = ValueNotifier<Set<String>>({});
+
+  static const _minePrefsKey = 'vibe_my_report_keys_v1';
+
   bool _loaded = false;
 
   Future<void> load() async {
@@ -78,15 +86,17 @@ class VibeReportStore {
     _loaded = true;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_prefsKey);
-    if (raw == null) return;
-    try {
-      final decoded = (json.decode(raw) as Map<String, dynamic>).map(
-          (k, v) => MapEntry(k, VibeReport.fromJson(v as Map<String, dynamic>)));
-      reports.value = decoded;
-      prune();
-    } catch (_) {
-      // Corrupt/older shape — start clean rather than crash the feature.
+    if (raw != null) {
+      try {
+        final decoded = (json.decode(raw) as Map<String, dynamic>).map(
+            (k, v) => MapEntry(k, VibeReport.fromJson(v as Map<String, dynamic>)));
+        reports.value = decoded;
+        prune();
+      } catch (_) {
+        // Corrupt/older shape — start clean rather than crash the feature.
+      }
     }
+    myReportKeys.value = (prefs.getStringList(_minePrefsKey) ?? const []).toSet();
   }
 
   Future<void> _persist() async {
@@ -95,6 +105,35 @@ class VibeReportStore {
       _prefsKey,
       json.encode(reports.value.map((k, v) => MapEntry(k, v.toJson()))),
     );
+  }
+
+  Future<void> _persistMine() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_minePrefsKey, myReportKeys.value.toList());
+  }
+
+  /// Marks [key] as this device's own report — called right after filing
+  /// one, so "Delete" stays offered on it even after leaving and
+  /// reopening the page.
+  void markMine(String key) {
+    if (myReportKeys.value.contains(key)) return;
+    myReportKeys.value = {...myReportKeys.value, key};
+    _persistMine();
+  }
+
+  /// Removes [key] — the local half of deleting your own report. Callers
+  /// also broadcast VBX: (see hops_app.dart's _deleteVibeReport) so nearby
+  /// devices still actively hearing the original tag drop it too; this
+  /// only ever handles this one device's own view/bookkeeping.
+  void removeReport(String key) {
+    if (!reports.value.containsKey(key) && !myReportKeys.value.contains(key)) return;
+    final next = Map<String, VibeReport>.from(reports.value)..remove(key);
+    reports.value = next;
+    _persist();
+    if (myReportKeys.value.contains(key)) {
+      myReportKeys.value = {...myReportKeys.value}..remove(key);
+      _persistMine();
+    }
   }
 
   /// Records a report. Returns true only if this is a *new* sighting (a

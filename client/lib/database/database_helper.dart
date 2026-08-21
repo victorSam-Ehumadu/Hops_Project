@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 class DatabaseHelper {
   static const _databaseName = "MeshNetwork.db";
-  static const _databaseVersion = 9;
+  static const _databaseVersion = 10;
 
   static const table = 'messages';
   static const vibeTable = 'vibe_records';
@@ -59,6 +59,11 @@ class DatabaseHelper {
   // "make this device discoverable" system dialog, connecting directly
   // instead. Same separate-upsert reasoning as rotating_seed above.
   static const cpColRfcommMac = 'rfcomm_mac';
+  // This contact's "thinking" status (see edit_identity_screen.dart) —
+  // learned the same way as bio, riding the same profile-exchange payload
+  // (hops_chat_service.dart's sendProfile, type 0x02), so it's kept in the
+  // same upsertContactProfile call as bio rather than a separate one.
+  static const cpColThinking = 'thinking';
 
   // Columns for Tasks
   static const taskColId = 'id';
@@ -161,7 +166,8 @@ class DatabaseHelper {
         $cpColBio TEXT,
         $cpColUpdatedAt INTEGER NOT NULL,
         $cpColRotatingSeed TEXT,
-        $cpColRfcommMac TEXT
+        $cpColRfcommMac TEXT,
+        $cpColThinking TEXT
       )
     ''');
   }
@@ -214,6 +220,9 @@ class DatabaseHelper {
     }
     if (oldVersion < 9) {
       await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColRfcommMac TEXT');
+    }
+    if (oldVersion < 10) {
+      await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColThinking TEXT');
     }
   }
 
@@ -274,6 +283,27 @@ class DatabaseHelper {
     return await db.delete(tasksTable, where: '$taskColId = ?', whereArgs: [id]);
   }
 
+  // ---------- Full local export ----------
+  /// Every row this device has stored, across every table — backs Account
+  /// Management's "Export My Data". This app has no cloud copy of any of
+  /// this by design (see CLAUDE.md's offline-first architecture), so this
+  /// is the one way to get a copy that survives something happening to
+  /// THIS specific phone — a wipe, a factory reset, moving to a new
+  /// device — beyond whatever Android's own Auto Backup already covers.
+  /// Table names double as the JSON keys so the exported file is
+  /// self-describing without needing a separate schema doc next to it.
+  Future<Map<String, dynamic>> exportAllData() async {
+    final db = await database;
+    return {
+      'app': 'Hops',
+      'exported_at': DateTime.now().toIso8601String(),
+      table: await db.query(table),
+      vibeTable: await db.query(vibeTable),
+      tasksTable: await db.query(tasksTable),
+      contactProfilesTable: await db.query(contactProfilesTable),
+    };
+  }
+
   // ---------- Messages ----------
   Future<int> insertMessage(Map<String, dynamic> row) async {
     Database db = await instance.database;
@@ -297,6 +327,20 @@ class DatabaseHelper {
     Database db = await instance.database;
     return await db.update(table, {columnDelivered: 1},
         where: '$columnId = ?', whereArgs: [id]);
+  }
+
+  // "Delete my message" (chat_terminal.dart) — removes the row from THIS
+  // device's own copy of the thread. chat_terminal.dart's
+  // _confirmDeleteMessage also best-effort notifies the peer over RFCOMM
+  // (RfcommChatService.sendDeleteMessage) so their matching row gets
+  // deleted here too, on their device, when they call this same function
+  // in response — but only while a live connection to them exists at the
+  // moment of deleting. Over an often-disconnected P2P transport with no
+  // server relay, a delete requested while the peer is unreachable can't
+  // be queued or retried, so it stays local-only in that case.
+  Future<int> deleteMessage(String id) async {
+    Database db = await instance.database;
+    return await db.delete(table, where: '$columnId = ?', whereArgs: [id]);
   }
 
   // Messages I sent to this peer that never got confirmed as delivered —
@@ -344,16 +388,18 @@ class DatabaseHelper {
     String username, {
     String? avatarPath,
     String? bio,
+    String? thinking,
   }) async {
     Database db = await instance.database;
     await db.rawInsert('''
-      INSERT INTO $contactProfilesTable ($cpColUsername, $cpColAvatarPath, $cpColBio, $cpColUpdatedAt)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO $contactProfilesTable ($cpColUsername, $cpColAvatarPath, $cpColBio, $cpColThinking, $cpColUpdatedAt)
+      VALUES (?, ?, ?, ?, ?)
       ON CONFLICT($cpColUsername) DO UPDATE SET
         $cpColAvatarPath = excluded.$cpColAvatarPath,
         $cpColBio = excluded.$cpColBio,
+        $cpColThinking = excluded.$cpColThinking,
         $cpColUpdatedAt = excluded.$cpColUpdatedAt
-    ''', [username, avatarPath, bio, DateTime.now().millisecondsSinceEpoch]);
+    ''', [username, avatarPath, bio, thinking, DateTime.now().millisecondsSinceEpoch]);
   }
 
   // Learned the same way as avatar/bio — see hops_chat_service.dart's

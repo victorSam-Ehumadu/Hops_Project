@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:client/services/avatar_path_notifier.dart';
+import 'package:client/utils/profanity_filter.dart';
 
 class EditIdentityScreen extends StatefulWidget {
   const EditIdentityScreen({super.key});
@@ -13,8 +15,22 @@ class EditIdentityScreen extends StatefulWidget {
 }
 
 class _EditIdentityScreenState extends State<EditIdentityScreen> {
+  // Character limits — nothing here used to be bounded at all, so a
+  // nickname or bio of any length would happily get typed in (and, for
+  // nickname especially, break layouts elsewhere that assumed something
+  // short — the app bar, contact tiles, the profile header).
+  static const int _kNicknameMaxLength = 24;
+  static const int _kBioMaxLength = 140;
+  static const int _kThinkingMaxLength = 60;
+
   final TextEditingController _nicknameController = TextEditingController();
   final TextEditingController _bioController = TextEditingController();
+  // "What are you thinking?" — shown as a thought-bubble next to your
+  // avatar on your own Profile screen and, once a contact profile syncs
+  // (see hops_chat_service.dart's sendProfile), on theirs when they view
+  // you in Contacts. Deliberately short — a running commentary field, not
+  // a second bio.
+  final TextEditingController _thinkingController = TextEditingController();
   String? _avatarPath;
 
   @override
@@ -27,6 +43,7 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
     final prefs = await SharedPreferences.getInstance();
     _nicknameController.text = prefs.getString('nickname') ?? '';
     _bioController.text = prefs.getString('bio') ?? '';
+    _thinkingController.text = prefs.getString('thinking_status') ?? '';
     _avatarPath = prefs.getString('avatar_path');
     setState(() {});
   }
@@ -55,6 +72,7 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
     setState(() => _avatarPath = savedImage.path);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('avatar_path', savedImage.path);
+    avatarPathRevision.value++;
 
     if (previousPath != null && previousPath != savedImage.path) {
       final oldFile = File(previousPath);
@@ -76,12 +94,19 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
       if (await file.exists()) await file.delete();
     }
     setState(() => _avatarPath = null);
+    avatarPathRevision.value++;
   }
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    final nickname = _nicknameController.text.trim();
-    final bio = _bioController.text.trim();
+    // Censored before saving, not just before display — bio/thinking sync
+    // to contacts (see hops_chat_service.dart's sendProfile), so the
+    // stored value is what actually reaches someone else's screen; a
+    // display-only filter would leave the raw, uncensored text sitting in
+    // the payload another device receives and could render its own way.
+    final nickname = censorProfanity(_nicknameController.text.trim());
+    final bio = censorProfanity(_bioController.text.trim());
+    final thinking = censorProfanity(_thinkingController.text.trim());
 
     if (nickname.isNotEmpty) {
       await prefs.setString('nickname', nickname);
@@ -93,6 +118,11 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
     } else {
       await prefs.remove('bio');
     }
+    if (thinking.isNotEmpty) {
+      await prefs.setString('thinking_status', thinking);
+    } else {
+      await prefs.remove('thinking_status');
+    }
 
     if (mounted) {
       Navigator.pop(context, true);
@@ -103,6 +133,7 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
   void dispose() {
     _nicknameController.dispose();
     _bioController.dispose();
+    _thinkingController.dispose();
     super.dispose();
   }
 
@@ -155,6 +186,7 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
             // Nickname field
             TextField(
               controller: _nicknameController,
+              maxLength: _kNicknameMaxLength,
               style: TextStyle(color: colors.onSurface),   // typed text
               decoration: InputDecoration(
                 labelText: 'Nickname',
@@ -180,12 +212,42 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
             TextField(
               controller: _bioController,
               maxLines: 3,
+              maxLength: _kBioMaxLength,
               style: TextStyle(color: colors.onSurface),   // typed text
               decoration: InputDecoration(
                 labelText: 'Bio',
                 labelStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.7)),
                 hintText: 'Tell people about yourself',
                 hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.4)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 1.5),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: colors.primary, width: 2),
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // "Thinking" field — a short thought-bubble status shown next
+            // to the avatar on Profile (yours) and Contact Profile (a
+            // contact's, once it's synced to them — see
+            // hops_chat_service.dart's sendProfile).
+            TextField(
+              controller: _thinkingController,
+              maxLength: _kThinkingMaxLength,
+              style: TextStyle(color: colors.onSurface),   // typed text
+              decoration: InputDecoration(
+                labelText: "What are you thinking?",
+                labelStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.7)),
+                hintText: 'Shown as a thought bubble on your profile',
+                hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.4)),
+                prefixIcon: Icon(Icons.chat_bubble_outline, color: colors.primary),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(color: colors.primary, width: 1.5),

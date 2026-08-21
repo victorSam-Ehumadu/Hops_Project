@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/services/key_directory.dart';
 import 'package:client/views/community_alerts.dart';
+import 'package:client/utils/profanity_filter.dart';
 
 class AdminCommunityAlertsTab extends StatefulWidget {
   const AdminCommunityAlertsTab({super.key});
@@ -58,7 +59,7 @@ class _AdminCommunityAlertsTabState extends State<AdminCommunityAlertsTab> {
         // crash this lint exists to catch.
         final messenger = ScaffoldMessenger.of(context);
         final msgId =
-            await AdminBleHub.instance.broadcastAdminChatMessage(message, username);
+            await AdminBleHub.instance.broadcastAdminChatMessage(censorProfanity(message), username);
         // Surfaced rather than swallowed — a failed broadcast still leaves
         // the message in this admin's own list, so without this it looks
         // sent when nothing left the device.

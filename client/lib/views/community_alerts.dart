@@ -958,7 +958,21 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
       ),
     );
     if (reason == null || !mounted) return;
+    await _deleteMessage(msg, reason);
+  }
 
+  // Streamlined self-delete — only ever reachable when isMe (see
+  // _buildBubble's onLongPress below), i.e. an admin removing their OWN
+  // alert. Skips the "why is it being removed" picker entirely: that's a
+  // moderation-flavored question that doesn't make sense to ask someone
+  // about their own content, and showing "breaking the rules" as the
+  // tombstone reason for your own removed message would be actively
+  // unfair. Uses the exact same underlying broadcast/apply mechanism as
+  // admin moderation (_deleteMessage) — the wire format doesn't
+  // distinguish "why," only "what and who."
+  Future<void> _deleteOwnMessage(CommunityMessage msg) => _deleteMessage(msg, CommunityDeleteReason.removedBySender);
+
+  Future<void> _deleteMessage(CommunityMessage msg, CommunityDeleteReason reason) async {
     final ok = await AdminBleHub.instance.broadcastMessageDeletion(
       senderTag: msg.senderTag!,
       msgId: msg.msgId!,
@@ -1048,23 +1062,30 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
                   _buildTombstone(msg, colors, isMe)
                 else
                 GestureDetector(
-                  // In the admin app a long-press offers moderation
-                  // (remove for everyone, or report through the normal
-                  // flow); in the student app it's reporting only.
-                  //
-                  // Reporting your own message makes no sense — only
-                  // wired up for messages from someone else.
-                  onLongPress: widget.amAdmin
-                      ? () => _showAdminMessageActions(msg)
-                      : (isMe || msg.realUsername == null)
-                          ? null
-                          : () => showReportContentSheet(
-                                context,
-                                contentType: 'chat_message',
-                                targetUsername: msg.realUsername,
-                                snapshotText: msg.text,
-                                contentCreatedAt: msg.timestamp,
-                              ),
+                  // Three cases, in priority order:
+                  //  1. Your own message (only ever possible for the admin
+                  //     who sent it — students can't post here at all) —
+                  //     a direct, no-questions-asked delete. See
+                  //     _deleteOwnMessage's comment for why this skips the
+                  //     moderation reason picker.
+                  //  2. Someone ELSE's message, viewed by an admin — full
+                  //     moderation (remove for everyone with a reason, or
+                  //     report).
+                  //  3. Someone else's message, viewed by a student —
+                  //     reporting only.
+                  onLongPress: (isMe && msg.senderTag != null && msg.msgId != null)
+                      ? () => _deleteOwnMessage(msg)
+                      : widget.amAdmin
+                          ? () => _showAdminMessageActions(msg)
+                          : (msg.realUsername == null)
+                              ? null
+                              : () => showReportContentSheet(
+                                    context,
+                                    contentType: 'chat_message',
+                                    targetUsername: msg.realUsername,
+                                    snapshotText: msg.text,
+                                    contentCreatedAt: msg.timestamp,
+                                  ),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 9),

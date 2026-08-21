@@ -1,0 +1,410 @@
+/* website/styles.css
+ *
+ * Shared styles for every page on the Hops marketing site. Plain CSS, no
+ * build step, no framework — the site is four static HTML files, so a
+ * preprocessor or bundler would be pure overhead. Palette below is lifted
+ * directly from the app's "Hops Default" theme (client/lib/theme/app_theme.dart)
+ * so the website and the app read as the same product rather than a
+ * generic landing page bolted on afterward.
+ */
+
+:root {
+  --primary: #165c6f;
+  --primary-container: #367588;
+  --accent: #417676;
+  --on-accent: #c4fbfa;
+  --bg: #e2fffe;
+  --surface: #d2f5f4;
+  --text: #002020;
+  --text-soft: #002020b3; /* text @ 70% */
+  --white: #ffffff;
+  --radius: 20px;
+  --radius-sm: 12px;
+  --shadow: 0 8px 24px rgba(0, 32, 32, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+h1, h2, h3, .logo-word {
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 800;
+  margin: 0 0 0.5em;
+}
+
+p {
+  margin: 0 0 1em;
+}
+
+a {
+  color: var(--primary);
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────── */
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 18px 24px;
+  background: var(--white);
+  box-shadow: 0 2px 12px rgba(0, 32, 32, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.site-nav .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--primary);
+}
+
+.site-nav .brand img {
+  width: 36px;
+  height: 40px;
+}
+
+.site-nav .brand .logo-word {
+  font-size: 20px;
+  margin: 0;
+  color: var(--primary);
+}
+
+.site-nav .links {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.site-nav .links a {
+  text-decoration: none;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 14px;
+  padding: 6px 4px;
+  border-bottom: 2px solid transparent;
+}
+
+.site-nav .links a:hover,
+.site-nav .links a.active {
+  border-bottom-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-block;
+  padding: 14px 28px;
+  border-radius: 100px;
+  font-weight: 800;
+  text-decoration: none;
+  font-size: 15px;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--white);
+  box-shadow: 0 6px 16px rgba(22, 92, 111, 0.35);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px rgba(22, 92, 111, 0.4);
+}
+
+.btn-secondary {
+  background: var(--white);
+  color: var(--primary);
+  border: 2px solid var(--primary);
+}
+
+.btn-secondary:hover {
+  background: var(--surface);
+}
+
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────── */
+
+.hero {
+  padding: 72px 0 56px;
+  text-align: center;
+}
+
+.hero img.mascot {
+  width: 120px;
+  margin: 0 auto 20px;
+}
+
+.hero h1 {
+  font-size: clamp(32px, 5vw, 52px);
+  color: var(--primary);
+}
+
+.hero p.tagline {
+  font-size: 18px;
+  color: var(--text-soft);
+  max-width: 560px;
+  margin: 0 auto 28px;
+}
+
+.hero .actions {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* ── Cards / grids ───────────────────────────────────────────────────── */
+
+.section {
+  padding: 56px 0;
+}
+
+.section h2 {
+  color: var(--primary);
+  font-size: 28px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.section .lede {
+  text-align: center;
+  color: var(--text-soft);
+  max-width: 620px;
+  margin: 0 auto 40px;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+}
+
+.card {
+  background: var(--white);
+  border-radius: var(--radius);
+  padding: 26px;
+  box-shadow: var(--shadow);
+}
+
+.card .icon {
+  font-size: 32px;
+  margin-bottom: 10px;
+}
+
+.card h3 {
+  font-size: 17px;
+  color: var(--primary);
+  margin-bottom: 6px;
+}
+
+.card p {
+  font-size: 14px;
+  color: var(--text-soft);
+  margin: 0;
+}
+
+/* ── FAQ (native <details>, no JS needed) ───────────────────────────── */
+
+.faq-item {
+  background: var(--white);
+  border-radius: var(--radius-sm);
+  padding: 4px 20px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+
+.faq-item summary {
+  cursor: pointer;
+  font-weight: 800;
+  padding: 16px 0;
+  color: var(--primary);
+  list-style: none;
+}
+
+.faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-item summary::before {
+  content: '+';
+  display: inline-block;
+  width: 20px;
+  font-size: 18px;
+}
+
+.faq-item[open] summary::before {
+  content: '\2212'; /* minus sign */
+}
+
+.faq-item .answer {
+  padding: 0 0 16px 20px;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+/* ── Shop tiers ──────────────────────────────────────────────────────── */
+
+.tier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.tier {
+  background: var(--white);
+  border-radius: var(--radius);
+  padding: 30px 24px;
+  text-align: center;
+  box-shadow: var(--shadow);
+  border: 2px solid transparent;
+}
+
+.tier.featured {
+  border-color: var(--primary);
+}
+
+.tier .badge {
+  font-size: 34px;
+  margin-bottom: 8px;
+}
+
+.tier .amount {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.tier .desc {
+  font-size: 13px;
+  color: var(--text-soft);
+  margin-bottom: 18px;
+  min-height: 40px;
+}
+
+.note-box {
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 18px 22px;
+  font-size: 14px;
+  color: var(--text-soft);
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+/* ── Contact form (mailto-based, no backend) ────────────────────────── */
+
+.contact-form {
+  max-width: 520px;
+  margin: 0 auto;
+  background: var(--white);
+  border-radius: var(--radius);
+  padding: 30px;
+  box-shadow: var(--shadow);
+}
+
+.contact-form label {
+  display: block;
+  font-weight: 700;
+  font-size: 13px;
+  margin: 14px 0 6px;
+  color: var(--primary);
+}
+
+.contact-form input,
+.contact-form textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--surface);
+  font-family: inherit;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.contact-form input:focus,
+.contact-form textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.contact-form button {
+  margin-top: 18px;
+  width: 100%;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────── */
+
+.site-footer {
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.site-footer a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+/* ── Sub-nav (About page's About/FAQ/Contact jump links) ───────────── */
+
+.subnav {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 24px 0 8px;
+}
+
+.subnav a {
+  text-decoration: none;
+  font-weight: 800;
+  color: var(--primary-container);
+  font-size: 14px;
+}

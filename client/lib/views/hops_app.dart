@@ -35,12 +35,23 @@ import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/account_management_screen.dart' show wipeLocalIdentityAndReturnToGatekeeper;
 import 'package:client/models/feature_item.dart';
 import 'package:client/views/vibe_check_page.dart';
+import 'package:client/views/study_bunny_finder_page.dart';
+import 'package:client/views/lost_found_board_page.dart';
 import 'package:client/views/watch_me_page.dart';
 import 'package:client/views/task_tracker_page.dart';
 import 'package:client/views/hops_share_page.dart';
+import 'package:client/views/hops_shop_page.dart';
 import 'package:client/services/notification_service.dart';
+import 'package:client/services/cosmetic_prefs.dart';
+import 'package:client/theme/avatar_frames.dart';
 import 'package:client/services/unread_tracker.dart';
 import 'package:client/services/vibe_report_store.dart';
+import 'package:client/services/study_bunny_store.dart';
+import 'package:client/services/lost_found_store.dart';
+import 'package:client/services/sos_service.dart';
+import 'package:client/services/avatar_path_notifier.dart';
+import 'package:client/services/accessibility_prefs.dart';
+import 'package:client/views/sos_settings_page.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:flutter/services.dart';
 import 'package:client/views/community_alerts.dart';
@@ -115,9 +126,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // Global task-due reminder — moved here from task_tracker_page.dart,
   // which only ever checked while that exact screen was open and only
   // ever looked at whatever calendar date happened to be selected. See
-  // _startTaskReminderCheck.
+  // _startTaskReminderCheck. Keyed "$taskId:$stage" rather than just
+  // task id, since one task can now fire up to four separate reminders
+  // (a day before, 2 hours before, 1 hour before, and at the time) —
+  // a per-task-only set would let the first stage's notification block
+  // every later one for that same task.
   Timer? _taskReminderTimer;
-  final Set<String> _remindedTaskIds = {};
+  final Set<String> _remindedTaskStages = {};
 
   // Periodic "did anything about my identity change remotely" check —
   // there's no push-notification infrastructure in this app, so this is
@@ -257,6 +272,31 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   final Set<String> _handledWatchAcks = {};
   final Set<String> _handledEmgNames = {};    // dedup for incoming EMG: alerts
   final Set<String> _handledEmgOffNames = {}; // dedup for incoming EMG_OFF: cancels_cance
+  // Dedup for fully-reassembled Lost & Found posts (keyed by postId — see
+  // _pendingLnfChunks below for the in-progress reassembly buffers) AND
+  // for LNR: resolutions (keyed by the full "LNR:<postId>" string, which
+  // can never collide with a bare postId). Also gates relay in both cases.
+  // "I'm interested" (SBI:) taps addressed to this device's own active
+  // study tag, deduped for a few seconds after each one is processed. An
+  // SBI: advertisement stays on-air for _sendStudyInterest's whole 5-second
+  // window, and the always-on scanner reports the SAME advertisement many
+  // times over that window — without this, one tap fired a notification
+  // (and an interest-count bump) once per scan hit instead of once per
+  // tap. Deliberately time-bounded rather than a permanent dedup set: a
+  // later, genuinely new tap on the same tag (by the same or a different
+  // person) should still count.
+  // Drives the "more below" down-arrow hint on the Features tab (see
+  // _buildFeaturesTab/_updateFeaturesScrollHint) — starts false (hidden)
+  // rather than assuming there's more to scroll to, since a short device
+  // catalog on a tall screen may not scroll at all.
+  final ScrollController _featuresScrollController = ScrollController();
+  bool _featuresCanScrollMore = false;
+
+  final Set<String> _recentSbiIds = {};
+  final Set<String> _handledLnfNames = {};
+  // In-progress Lost & Found chunk reassembly, keyed by postId — mirrors
+  // _pendingFlareSigChunks' shape for Emergency Flare signature chunks.
+  final Map<String, _LnfBuffer> _pendingLnfChunks = {};
   final Set<String> _handledChatPingNames = {}; // dedup for incoming CHT: pings
 
   final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
@@ -314,7 +354,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // Same reason: reports heard before the app was last closed should
     // still be on the list (within their lifetime) when it reopens.
     VibeReportStore.instance.load();
+    CosmeticPrefs.instance.load();
+    AccessibilityPrefs.instance.load();
     _loadCurrentIdentityMetrics();
+    // Also reload on every avatar_path write, from ANYWHERE — without this,
+    // the app-bar avatar bubble (visible on every tab, including Contacts)
+    // only ever refreshed right after its own Profile-screen navigation
+    // returned, so an avatar changed via the Character Creator or Hops
+    // Shop (reached some other way) never updated it until the app was
+    // restarted. Same fix radar_screen.dart and profile_screen.dart
+    // already have — see avatar_path_notifier.dart's header comment.
+    avatarPathRevision.addListener(_loadCurrentIdentityMetrics);
     _captureOriginalBluetoothName();
     _loadEnabledFeatures();
     _loadFeatureOrderAndPins();
@@ -354,7 +404,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // manually pull to refresh. Skipped while a nearby_connections session
     // (chat/Hops Share) is active — that's already a more radio-sensitive
     // window and doesn't need a second source of contention added to it.
-    _scanRestartTimer = Timer.periodic(const Duration(minutes: 4), (_) async {
+    //
+    // Was 4 minutes — shortened for genuinely noisy/high-density venues
+    // (packed room, lots of ambient BLE), where the scan stall this guards
+    // against happens more often, not less; capping the *maximum* time
+    // spent silently stalled at 90s (rather than 4 minutes) matters more
+    // than the modest extra battery/CPU cost of restarting scan more
+    // often — restarting a scan is a cheap OS call, not a heavy operation.
+    _scanRestartTimer = Timer.periodic(const Duration(seconds: 90), (_) async {
       if (nearbyConnectionsSessionCount.value > 0) return;
       if (_activePairingCode != null || _pairingClientActive) return;
       await FlutterBluePlus.stopScan();
@@ -380,6 +437,67 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     if (shortcutNotifier.value != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _onShortcutTriggered());
     }
+    // Silent SOS (Quick Settings tile / in-app volume-hold) — same
+    // cold/warm split as shortcutNotifier just above, see
+    // services/sos_service.dart's header comment for the native side.
+    sosTriggeredNotifier.addListener(_onSosTriggered);
+    if (sosTriggeredNotifier.value) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onSosTriggered());
+    }
+    _maybePromptSilentSosSetup();
+  }
+
+  // One-time nudge toward Profile → Silent SOS — a safety feature that
+  // needs an actual setup step (adding the Quick Settings tile) is worth
+  // more than sitting undiscovered in a settings list, but a modal dialog
+  // here would compete with the terms-acceptance/walkthrough flows for
+  // "first thing a new user sees," so this is a single dismissible
+  // SnackBar instead, shown once ever (same one-time-flag convention as
+  // 'terms_accepted'/'walkthrough_seen' — see CLAUDE.md).
+  static const _sosPromptShownKey = 'sos_prompt_shown_v1';
+  Future<void> _maybePromptSilentSosSetup() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_sosPromptShownKey) ?? false) return;
+    await prefs.setBool(_sosPromptShownKey, true);
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          // Explicit colors rather than theme defaults — the default
+          // SnackBarAction text color washed out against some of this
+          // app's 10 themes, making "SET UP" hard to actually see. A fixed
+          // dark background + bright amber action guarantees contrast
+          // regardless of which theme is active.
+          backgroundColor: const Color(0xFF212121),
+          content: const Text(
+            "New: Silent SOS can send an alert without opening Hops first.",
+            style: TextStyle(color: Colors.white),
+          ),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: "SET UP",
+            textColor: Colors.amberAccent,
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SosSettingsPage()),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+
+  // Opens the exact same confirm-then-reason dialog the in-app Emergency
+  // Flare button and the existing app-icon shortcut both use — a tile tap
+  // or a volume-hold never bypasses that confirmation, deliberately (see
+  // HopsSosTileService.kt's header comment for why).
+  void _onSosTriggered() {
+    if (!sosTriggeredNotifier.value) return;
+    sosTriggeredNotifier.value = false;
+    setState(() {
+      _currentIndex = 0;
+      _pendingFlareShortcut = true;
+    });
   }
 
   // Handles a tap on any of the app-icon shortcuts registered in
@@ -463,10 +581,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _featuresScrollController.dispose();
+    avatarPathRevision.removeListener(_loadCurrentIdentityMetrics);
     nearbyConnectionsSessionCount.removeListener(_onNearbyConnectionsSessionCountChanged);
     chatPingRequest.removeListener(_onChatPingRequested);
     bleDirectMessageOutbox.removeListener(_onBleDirectMessageRequested);
     shortcutNotifier.removeListener(_onShortcutTriggered);
+    sosTriggeredNotifier.removeListener(_onSosTriggered);
     _directMsgCycleTimer?.cancel();
     _discoverableAutoOffTimer?.cancel();
     _flareCancelTimer?.cancel();
@@ -1250,6 +1371,220 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     });
   }
 
+  // Deletes your own Vibe Check report early. [reportKey] is the exact
+  // "VBT:<location>:<level>" string VibeReportStore keys reports by (see
+  // vibe_check_page.dart's onDeleteVibeReport). Not relayed — a vibe
+  // report was never meant to reach past direct range, so neither does
+  // deleting one; anyone who's already moved out of range simply keeps
+  // whatever they last heard until it expires on its own.
+  Future<void> _deleteVibeReport(String reportKey) async {
+    if (!reportKey.startsWith("VBT:")) return;
+    final advName = "VBX:${reportKey.substring(4)}";
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      BlePeripheral.stopAdvertising();
+      _advertisePresenceBeacon();
+      _startContinuousScan();
+    });
+  }
+
+  // Study Bunny Finder — structurally identical to _advertiseVibeTag above,
+  // just a longer on-air window (kStudyTagAdvertiseDuration, a real study
+  // session rather than a 30-second crowd snapshot) and no numeric level.
+  // [id] is generated by the page (study_bunny_finder_page.dart's
+  // _generateTagId) — passed in, not generated here, both so the caller
+  // can record its OWN tag into StudyBunnyStore under the exact key this
+  // broadcasts (same "show my own report immediately" pattern
+  // _advertiseVibeTag's caller relies on) AND so this device can recognize
+  // an SBI: "I'm interested" reply as addressed to THIS session — see
+  // _myActiveStudyTagId below.
+  String? _myActiveStudyTagId;
+
+  Future<void> _advertiseStudyTag(String id, String subject) async {
+    final advName = "SBF:$id:$subject";
+    if (advName.length > 29) { _showToastFeedbackAlert("Subject too long"); return; }
+    _myActiveStudyTagId = id;
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(kStudyTagAdvertiseDuration, () {
+      if (!mounted) return;
+      if (_myActiveStudyTagId == id) _myActiveStudyTagId = null;
+      BlePeripheral.stopAdvertising();
+      _advertisePresenceBeacon();
+      _startContinuousScan();
+    });
+  }
+
+  // Ends your own study session early — mirrors _cancelEmergencyFlare's
+  // "broadcast a short cancel/off signal" shape, just for SBF: instead of
+  // EMG:. Not relayed: a study tag's reach was never meant to extend past
+  // direct range the way Lost & Found's does, so neither does its deletion.
+  Future<void> _deleteStudyTag(String id) async {
+    if (_myActiveStudyTagId == id) _myActiveStudyTagId = null;
+    final advName = "SBX:$id";
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      BlePeripheral.stopAdvertising();
+      _advertisePresenceBeacon();
+      _startContinuousScan();
+    });
+  }
+
+  // "I'm interested" tap on someone else's study tag — a brief, un-relayed
+  // ping (same reasoning as _deleteStudyTag: study sessions are a direct-
+  // range feature) that the ORIGINAL poster's device recognizes via the
+  // SBI: scan handler matching against its own _myActiveStudyTagId.
+  // Deliberately carries no identity of the tapper — study tags are
+  // anonymous end to end, this doesn't create an exception.
+  Future<void> _sendStudyInterest(String id) async {
+    final advName = "SBI:$id";
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      BlePeripheral.stopAdvertising();
+      _advertisePresenceBeacon();
+      _startContinuousScan();
+    });
+  }
+
+  // The ORIGINAL poster's device broadcasting an updated interest count
+  // after recognizing a new SBI: reply — so every OTHER nearby device that
+  // already has this tag (from hearing its SBF:) sees the count too, not
+  // just the poster. Not relayed, same as SBI:/SBX: — study tags are a
+  // direct-range feature end to end.
+  Future<void> _advertiseStudyInterestCount(String id, int count) async {
+    final advName = "SBC:$id:$count";
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      BlePeripheral.stopAdvertising();
+      _advertisePresenceBeacon();
+      _startContinuousScan();
+    });
+  }
+
+  // Lost & Found board post. [postId] is generated by the page
+  // (lost_found_board_page.dart's _generatePostId) — passed in rather than
+  // generated here so the caller can record its OWN post into
+  // LostFoundStore under the exact same key this broadcasts, the same
+  // "show my own post immediately, since I never hear my own
+  // advertisement" pattern _advertiseVibeTag's caller (vibe_check_page.dart)
+  // already relies on.
+  //
+  // [object]/[location] are two separate fields, not one freeform line —
+  // both for Lost and Found (a Found post is "found this object at this
+  // location," same shape). At 30 characters each (up to 61 combined) the
+  // two no longer fit in a single ~29-byte advertisement name, so this is
+  // now CHUNKED and reassembled — see hops_constants.dart's
+  // encodeLostFoundChunk/decodeLostFoundChunk header comment for the wire
+  // format, and _runLostFoundCycle below for the actual on-air cycling.
+  // Reach still comes from every RECEIVING device relaying a completed
+  // post once it's fully reassembled (see the LNF: scan handler and
+  // _scheduleLostFoundRelay below), not from the original sender
+  // re-advertising forever.
+  Future<void> _advertiseLostFound(String postId, LostFoundType type, String object, String location) async {
+    final typeChar = type == LostFoundType.lost ? 'L' : 'F';
+    final chunks = splitLostFoundText('$object|$location');
+    unawaited(_runLostFoundCycle(postId, typeChar, chunks));
+  }
+
+  // Serializes every Lost & Found on-air cycle (posting a new one AND
+  // relaying one heard from someone else) so two overlapping multi-chunk
+  // cycles never fight over the single shared BLE-peripheral advertising
+  // slot and corrupt each other's chunks — same problem
+  // admin_ble_hub.dart's _chatSendQueue solves for Community Alerts,
+  // scaled down since there's no "return once the first chunk is out"
+  // contract needed here.
+  Future<void> _lnfSendQueue = Future.value();
+  // True for the whole duration of an in-flight multi-chunk cycle below —
+  // checked by _startRotatingIdRefreshTimer so its own periodic re-advertise
+  // can't clobber a chunk mid-cycle (same "skip while something more
+  // important is actively advertising" guard that pairing and Emergency
+  // Flare already had, just missing for this newer chunked flow). Without
+  // this, a post could silently arrive on the sender's side but never
+  // finish broadcasting on the air — the rotating timer only has to land
+  // once during the ~2-10 second cycle to overwrite whatever chunk was
+  // about to go out with the plain presence beacon instead, and every
+  // reassembly buffer waiting on it then goes stale and gets dropped.
+  bool _lnfCycleActive = false;
+
+  Future<void> _runLostFoundCycle(String postId, String typeChar, List<String> chunks) async {
+    final myTurn = _lnfSendQueue;
+    final done = Completer<void>();
+    _lnfSendQueue = done.future;
+    await myTurn;
+
+    _lnfCycleActive = true;
+    try {
+      const perChunkDuration = Duration(milliseconds: 1200);
+      const totalCycles = 2; // repeated once for reliability, same reasoning as Community Alerts' chunk cycling
+      for (var cycle = 0; cycle < totalCycles; cycle++) {
+        for (var i = 0; i < chunks.length; i++) {
+          if (!mounted) return;
+          try {
+            await _advertiseWithName(
+              encodeLostFoundChunk(
+                postId: postId,
+                typeChar: typeChar,
+                chunkIndex: i,
+                totalChunks: chunks.length,
+                chunkText: chunks[i],
+              ),
+              [],
+            );
+          } catch (_) {
+            // Best-effort per chunk — one dropped chunk in the middle of a
+            // cycle is exactly what the repeat cycle exists to cover.
+          }
+          await Future.delayed(perChunkDuration);
+        }
+      }
+      if (!mounted) return;
+      await BlePeripheral.stopAdvertising();
+      _advertisePresenceBeacon();
+      _startContinuousScan();
+    } finally {
+      _lnfCycleActive = false;
+      if (!done.isCompleted) done.complete();
+    }
+  }
+
+  // Relays a fully-reassembled Lost & Found post one hop further, the same
+  // jittered "don't all key up the radio at once" pattern _scheduleEmgRelay
+  // uses — this is that idea adapted for a multi-chunk broadcast instead
+  // of a single fixed string, since relaying now means re-running the
+  // whole chunk cycle, not replaying one advertisement.
+  void _scheduleLostFoundRelay(String postId, String typeChar, String object, String location) {
+    final jitter = Duration(milliseconds: 300 + Random().nextInt(700));
+    Future.delayed(jitter, () {
+      if (!mounted) return;
+      final chunks = splitLostFoundText('$object|$location');
+      unawaited(_runLostFoundCycle(postId, typeChar, chunks));
+    });
+  }
+
+  // Marks a Lost & Found post resolved — either "Mark as Found" (a Lost
+  // post's item turned up) or a plain "Delete" (either type). Relayed the
+  // same one hop the original post was (_scheduleEmgRelay), so "it's
+  // resolved" reaches everyone the post itself did, not just direct range.
+  Future<void> _resolveLostFound(String postId) async {
+    final advName = "LNR:$postId";
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      BlePeripheral.stopAdvertising();
+      _advertisePresenceBeacon();
+      _startContinuousScan();
+    });
+  }
+
   Future<void> acceptFriendRequest(String sender) async {
     final advName = "FA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
@@ -1460,6 +1795,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCurrentIdentityMetrics() async {
+    if (!mounted) return;
     final prefs = await SharedPreferences.getInstance();
     final avatarPath = prefs.getString('avatar_path');
     setState(() {
@@ -1478,24 +1814,94 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // and runs for as long as HopsApp itself is alive, not just while that
   // one screen happens to be open. Fires a real notification instead of
   // an in-app dialog, which could never have reached you anywhere else.
+  //
+  // Reminder schedule: a task with a set time (taskColStartTime — stored
+  // as a time-of-day offset, see task_tracker_page.dart) gets FOUR
+  // reminders counting down to it — a day before, 2 hours before, 1 hour
+  // before, and right at the time. A task with no set time, just a due
+  // DATE, only gets the first of those — fired at 12:00 AM the day
+  // before, since "2 hours before" means nothing without a time to count
+  // down to.
   void _startTaskReminderCheck() {
     _taskReminderTimer?.cancel();
     _taskReminderTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
-      final now = DateTime.now().millisecondsSinceEpoch;
+      if (!mounted) return;
+      final now = DateTime.now();
       final tasks = await DatabaseHelper.instance.getTasks();
+      if (!mounted) return; // re-check — getTasks() is async, could return after unmount
       for (final task in tasks) {
+        if (task[DatabaseHelper.taskColCompleted] != 0) continue;
+        final dueDateMs = task[DatabaseHelper.taskColDueDate] as int?;
+        if (dueDateMs == null) continue;
+
         final id = task[DatabaseHelper.taskColId] as String;
-        if (task[DatabaseHelper.taskColCompleted] == 0 &&
-            task[DatabaseHelper.taskColDueDate] != null &&
-            (task[DatabaseHelper.taskColDueDate] as int) <= now &&
-            !_remindedTaskIds.contains(id)) {
-          _remindedTaskIds.add(id);
-          UnreadTracker.instance.mark(UnreadSource.taskReminder);
-          await NotificationService.showTaskReminderNotification(
-              taskTitle: task[DatabaseHelper.taskColTitle] as String);
+        final title = task[DatabaseHelper.taskColTitle] as String;
+        final dueDate = DateTime.fromMillisecondsSinceEpoch(dueDateMs);
+        final dueDay = DateTime(dueDate.year, dueDate.month, dueDate.day);
+        final startMs = task[DatabaseHelper.taskColStartTime] as int?;
+
+        if (startMs == null) {
+          _maybeFireTaskReminder(
+            taskId: id,
+            stage: 'dayBefore',
+            title: title,
+            fireAt: dueDay.subtract(const Duration(days: 1)),
+            now: now,
+            message: '"$title" is due tomorrow.',
+          );
+          continue;
         }
+
+        final taskTime = dueDay.add(Duration(milliseconds: startMs));
+        final timeLabel = TimeOfDay.fromDateTime(taskTime).format(context);
+        _maybeFireTaskReminder(
+          taskId: id, stage: 'dayBefore', title: title, now: now,
+          fireAt: taskTime.subtract(const Duration(days: 1)),
+          message: '"$title" is due tomorrow at $timeLabel.',
+        );
+        _maybeFireTaskReminder(
+          taskId: id, stage: 'twoHours', title: title, now: now,
+          fireAt: taskTime.subtract(const Duration(hours: 2)),
+          message: '"$title" is due in 2 hours, at $timeLabel.',
+        );
+        _maybeFireTaskReminder(
+          taskId: id, stage: 'oneHour', title: title, now: now,
+          fireAt: taskTime.subtract(const Duration(hours: 1)),
+          message: '"$title" is due in 1 hour, at $timeLabel.',
+        );
+        _maybeFireTaskReminder(
+          taskId: id, stage: 'atTime', title: title, now: now,
+          fireAt: taskTime,
+          message: '"$title" is due now.',
+        );
       }
     });
+  }
+
+  // Fires (and dedupes) exactly one reminder stage for one task — see
+  // _startTaskReminderCheck's header comment for the four stages. Reached
+  // once [now] has caught up to [fireAt]; if the app was closed across
+  // several thresholds (e.g. reopened the day of a task that was due
+  // tomorrow last time it checked), every threshold that's since passed
+  // fires in that same sweep rather than being silently skipped — a late
+  // reminder is still useful, a missing one isn't.
+  void _maybeFireTaskReminder({
+    required String taskId,
+    required String stage,
+    required String title,
+    required DateTime fireAt,
+    required DateTime now,
+    required String message,
+  }) {
+    final key = '$taskId:$stage';
+    if (_remindedTaskStages.contains(key) || now.isBefore(fireAt)) return;
+    _remindedTaskStages.add(key);
+    UnreadTracker.instance.mark(UnreadSource.taskReminder);
+    NotificationService.showTaskReminderNotification(
+      taskTitle: title,
+      body: message,
+      reminderKey: key,
+    );
   }
 
   // Pull-based stand-in for push notifications (see field comments above).
@@ -1660,9 +2066,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _rotatingIdRefreshTimer?.cancel();
     _rotatingIdRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       // Skip while something more important is actively advertising —
-      // pairing and Emergency Flare both run their own short-lived
-      // advertisement windows that this shouldn't clobber.
-      if (_activePairingCode != null || _isFlareActive) return;
+      // pairing, Emergency Flare, and an in-flight Lost & Found chunk cycle
+      // all run their own short-lived advertisement windows that this
+      // shouldn't clobber (see _lnfCycleActive's comment for what went
+      // wrong before this check existed).
+      if (_activePairingCode != null || _isFlareActive || _lnfCycleActive) return;
       _advertisePresenceBeacon();
     });
   }
@@ -1737,6 +2145,118 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               // at" without interrupting.
               if (isNew) UnreadTracker.instance.mark(UnreadSource.vibeCheck);
             }
+          }
+        }
+        // Someone deleting their own Vibe Check report early.
+        if (name.startsWith("VBX:")) {
+          final targetKey = "VBT:${name.substring(4)}";
+          VibeReportStore.instance.removeReport(targetKey);
+        }
+        // Study Bunny Finder. Same "detect in the always-on scan handler,
+        // not the feature's own page" reasoning as VBT: above — see
+        // study_bunny_store.dart's header comment.
+        if (name.startsWith("SBF:")) {
+          // Fixed offsets, not a colon split — the subject itself is free
+          // text and could contain ':'. "SBF:" (4) + id (4) + ':' (1) = 9.
+          if (name.length > 9) {
+            final id = name.substring(4, 8);
+            final subject = name.substring(9);
+            if (subject.isNotEmpty) {
+              final isNew = StudyBunnyStore.instance.record(id: id, subject: subject);
+              if (isNew) UnreadTracker.instance.mark(UnreadSource.studyBunny);
+            }
+          }
+        }
+        // "I'm interested" reply to a Study Bunny tag — only meaningful to
+        // the device whose OWN active session this is addressed to; every
+        // other device just ignores it (it's not stored, not relayed).
+        // Deduped via _recentSbiIds (see its own comment) so the one
+        // notification/count-bump this represents doesn't fire once per
+        // scan hit of the same still-advertising SBI:.
+        if (name.startsWith("SBI:")) {
+          final id = name.substring(4);
+          if (id.isNotEmpty && id == _myActiveStudyTagId && !_recentSbiIds.contains(id)) {
+            _recentSbiIds.add(id);
+            Future.delayed(const Duration(seconds: 8), () => _recentSbiIds.remove(id));
+            final subject = StudyBunnyStore.instance.reports.value[id]?.subject ?? 'your session';
+            await NotificationService.showStudyInterestNotification(subject: subject);
+            final newCount = StudyBunnyStore.instance.incrementInterest(id);
+            if (newCount != null) unawaited(_advertiseStudyInterestCount(id, newCount));
+          }
+        }
+        // Interest-count update for a Study Bunny tag, broadcast by its
+        // poster (see _advertiseStudyInterestCount) — updates the count
+        // shown on every other device that already has this tag from
+        // hearing its SBF:. A no-op if we never heard that SBF: at all.
+        if (name.startsWith("SBC:")) {
+          final parts = name.substring(4).split(':');
+          if (parts.length == 2) {
+            final count = int.tryParse(parts[1]);
+            if (count != null) StudyBunnyStore.instance.setInterestCount(parts[0], count);
+          }
+        }
+        // Poster deleting their own Study Bunny tag early.
+        if (name.startsWith("SBX:")) {
+          final id = name.substring(4);
+          if (id.isNotEmpty) StudyBunnyStore.instance.remove(id);
+        }
+        // Lost & Found board post — unlike VBT:/SBF: above, this one also
+        // RELAYS one hop further (same _scheduleEmgRelay helper Emergency
+        // Flare uses) so a post reaches beyond direct BLE range. See
+        // lost_found_store.dart's header comment for why.
+        // Lost & Found post — chunked (see hops_constants.dart's
+        // encodeLostFoundChunk/decodeLostFoundChunk), reassembled here the
+        // same way Emergency Flare's signature chunks are (_pendingFlareSigChunks
+        // below is the template this mirrors). Runs on every scan result
+        // carrying an LNF: chunk, not just the first, since chunks keep
+        // arriving for a couple of seconds after the first one appears.
+        if (name.startsWith(kLostFoundPrefix)) {
+          final decoded = decodeLostFoundChunk(name);
+          if (decoded != null && !_handledLnfNames.contains(decoded.postId)) {
+            final buffer = _pendingLnfChunks.putIfAbsent(
+                decoded.postId, () => _LnfBuffer(decoded.totalChunks, decoded.typeChar));
+            buffer.chunks[decoded.chunkIndex] = decoded.text;
+            buffer.lastSeen = DateTime.now();
+            if (buffer.isComplete) {
+              _pendingLnfChunks.remove(decoded.postId);
+              _handledLnfNames.add(decoded.postId);
+              // Bounded the same way EMG:'s dedup is — long enough that a
+              // relay storm can't loop back through a device that's
+              // already relayed this exact post, short enough not to leak
+              // memory over a long session.
+              Future.delayed(const Duration(minutes: 2), () => _handledLnfNames.remove(decoded.postId));
+
+              final fieldParts = buffer.reassembled.split('|');
+              final object = fieldParts.isNotEmpty ? fieldParts[0] : '';
+              final location = fieldParts.length > 1 ? fieldParts.sublist(1).join('|') : '';
+              final type = decoded.typeChar == 'F' ? LostFoundType.found : LostFoundType.lost;
+              if (object.isNotEmpty && location.isNotEmpty) {
+                _scheduleLostFoundRelay(decoded.postId, decoded.typeChar, object, location);
+                final isNew = LostFoundStore.instance.record(postId: decoded.postId, type: type, object: object, location: location);
+                // Badge only, same restraint VBT:/SBF: use — a system
+                // notification for every lost-item post nearby would be
+                // noise more often than it's the specific thing you lost.
+                if (isNew) UnreadTracker.instance.mark(UnreadSource.lostFound);
+              }
+            }
+            // Drop reassembly buffers we've stopped hearing chunks for —
+            // some were missed and the sender's cycle moved on.
+            final staleCutoff = DateTime.now().subtract(const Duration(seconds: 20));
+            _pendingLnfChunks.removeWhere((_, buf) => buf.lastSeen.isBefore(staleCutoff));
+          }
+        }
+        // Lost & Found post resolved ("Mark as Found" or a plain delete) —
+        // relayed the same one hop the original post was, same dedup shape
+        // as LNF: itself just against its own handled-set (a resolution
+        // and its original post share a postId but are different adv
+        // strings, so they need independent dedup).
+        if (name.startsWith("LNR:")) {
+          final postId = name.substring(4);
+          if (postId.isNotEmpty && !_handledLnfNames.contains(name)) {
+            _handledLnfNames.add(name);
+            Future.delayed(const Duration(minutes: 2), () => _handledLnfNames.remove(name));
+            _scheduleEmgRelay(name);
+            LostFoundStore.instance.resolve(postId);
           }
         }
         // ACK
@@ -2046,6 +2566,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       androidUsesFineLocation: true,
       continuousUpdates: true,
       withServices: [Guid(HOPS_SERVICE_UUID)], // ← hardware filter
+      // Explicit, not relying on the package default — lowLatency uses
+      // Android's most aggressive scan duty cycle (vs. balanced/lowPower,
+      // which trade catching every advertisement for battery life). This
+      // is a safety app that needs to actually hear Emergency Flare/Watch
+      // Me packets in a crowded, high-BLE-traffic venue, so that trade is
+      // made deliberately in favor of catching packets.
+      androidScanMode: AndroidScanMode.lowLatency,
     );
   }
 
@@ -2400,6 +2927,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           builder: (_) => VibeCheckPage(
             radarStream: radarStream,
             onAdvertiseVibeTag: _advertiseVibeTag,
+            onDeleteVibeReport: _deleteVibeReport,
           ),
         ),
       );
@@ -2410,6 +2938,26 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     } else if (feature.id == 11) {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => HopsSharePage(myUsername: myUsername)),
+      );
+    } else if (feature.id == 15) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => StudyBunnyFinderPage(
+            myUsername: myUsername,
+            onAdvertiseStudyTag: _advertiseStudyTag,
+            onSendStudyInterest: _sendStudyInterest,
+            onDeleteStudyTag: _deleteStudyTag,
+          ),
+        ),
+      );
+    } else if (feature.id == 16) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => LostFoundBoardPage(
+            onAdvertiseLostFound: _advertiseLostFound,
+            onResolveLostFound: _resolveLostFound,
+          ),
+        ),
       );
     } else if (feature.pageBuilder != null) {
       Navigator.of(context).push(
@@ -2429,7 +2977,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // nor a shortcut to your own profile is particularly relevant while
   // you're looking at your contacts, and a bell needed a home somewhere.
   // Every other tab keeps the default.
-  PreferredSizeWidget _buildSharedCustomAppBar(String title, {bool showMeta = true}) {
+  PreferredSizeWidget _buildSharedCustomAppBar(
+    String title, {
+    bool showMeta = true,
+    Widget Function(ColorScheme colors)? metaReplacement,
+  }) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return AppBar(
@@ -2453,7 +3005,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         ],
       ),
       actions: !showMeta
-          ? [_buildNotificationsBellButton(colors)]
+          ? [metaReplacement?.call(colors) ?? _buildNotificationsBellButton(colors)]
           : [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -2501,19 +3053,71 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           }),
           child: Container(
             margin: const EdgeInsets.only(right: 16),
-            child: CircleAvatar(
-              radius: 16,
-              backgroundColor: colors.primary,
-              backgroundImage: _myAvatarPath != null
-                  ? FileImage(File(_myAvatarPath!))
-                  : null,
-              child: _myAvatarPath == null
-                  ? const Icon(Icons.cruelty_free, size: 18, color: Colors.white)
-                  : null,
+            child: ValueListenableBuilder<String>(
+              valueListenable: CosmeticPrefs.instance.avatarFrame,
+              builder: (context, frameId, _) => HopsAvatarFrame(
+                frameId: frameId,
+                avatarDiameter: 32,
+                child: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: colors.primary,
+                  backgroundImage: _myAvatarPath != null
+                      ? FileImage(File(_myAvatarPath!))
+                      : null,
+                  child: _myAvatarPath == null
+                      ? const Icon(Icons.cruelty_free, size: 18, color: Colors.white)
+                      : null,
+                ),
+              ),
             ),
           ),
         ),
       ],
+    );
+  }
+
+  // Replaces the ambient BLE-density chip on the Features tab specifically
+  // (see _buildFeaturesTab) — that chip is genuinely useful on the Radar/
+  // Community tabs where "who else is around" is the point, but it's dead
+  // weight on a tab about browsing feature cards, and the Hops Shop needed
+  // a persistent home now that it's no longer an addable catalog entry.
+  Widget _buildShopButton(ColorScheme colors) {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const HopsShopPage()),
+      ).then((_) {
+        // Shop purchases/selections (avatar frame, flair, preset avatar
+        // icon) can change what this app bar itself renders, so refresh
+        // the same identity metrics the Profile screen refreshes on
+        // return, even though the Shop was opened from here, not there.
+        _loadCurrentIdentityMetrics();
+      }),
+      child: Container(
+        margin: const EdgeInsets.only(right: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: colors.primary.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(100),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Was a carrot emoji — reads as "your carrot balance," not
+            // "open the Shop", which this button actually does. A
+            // storefront icon says what tapping it does.
+            Icon(Icons.storefront, size: 14, color: colors.primary),
+            const SizedBox(width: 5),
+            Text(
+              'Hops Shop',
+              style: TextStyle(
+                color: colors.primary,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2975,10 +3579,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               )
             : Column(
           children: [
-            // Only worth the extra chrome once there's actually enough
-            // contacts that scrolling to find one is annoying.
-            if (localActiveContacts.length > 4)
-              Padding(
+            // Always shown once there's at least one contact (the empty
+            // state above already covers zero) — was gated behind having
+            // more than 4 contacts on the theory that search is only
+            // useful once scrolling gets tedious, but that just made it
+            // look missing on any account (including a fresh demo one)
+            // that hadn't built up a long list yet.
+            Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                 child: TextField(
                   controller: _contactSearchController,
@@ -3216,21 +3823,85 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     )).then((_) => _refreshContactsTrayList());
   }
 
+  // Re-checked after every build (cheap: only calls setState when the
+  // answer actually changed) rather than solely from the ScrollController's
+  // own listener — the listener alone never fires until the user scrolls
+  // once, so a freshly-opened tab with more content below it would show no
+  // hint at all until the first scroll gesture, which is backwards for a
+  // hint whose whole job is inviting that first scroll.
+  void _updateFeaturesScrollHint() {
+    if (!_featuresScrollController.hasClients || !mounted) return;
+    final pos = _featuresScrollController.position;
+    final canScrollMore = pos.maxScrollExtent - pos.pixels > 24;
+    if (canScrollMore != _featuresCanScrollMore) {
+      setState(() => _featuresCanScrollMore = canScrollMore);
+    }
+  }
+
   Widget _buildFeaturesTab() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateFeaturesScrollHint());
+    final colors = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
     return Scaffold(
-      appBar: _buildSharedCustomAppBar("Features"),
-      body: HopsBackgroundPattern(child: ListView.builder(
-        // Bottom clearance for the floating nav pill — see the identical
-        // fix on the Contacts tab above. Without it, the last card or two
-        // stays hidden behind the pill even once fully scrolled, which is
-        // what made expanding the first few look like "nothing scrolls."
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, kFloatingNavClearance),
-        itemCount: allFeatures.length,
-        itemBuilder: (context, index) {
-          final feature = allFeatures[index];
-          final isEnabled = enabledFeatureIds.contains(feature.id);
-          return _buildFeatureCard(feature, isEnabled);
-        },
+      appBar: _buildSharedCustomAppBar(
+        "Features",
+        showMeta: false,
+        metaReplacement: _buildShopButton,
+      ),
+      body: HopsBackgroundPattern(child: Stack(
+        children: [
+          NotificationListener<ScrollNotification>(
+            onNotification: (_) {
+              _updateFeaturesScrollHint();
+              return false;
+            },
+            child: ListView.builder(
+              controller: _featuresScrollController,
+              // Bottom clearance for the floating nav pill — see the
+              // identical fix on the Contacts tab above. Without it, the
+              // last card or two stays hidden behind the pill even once
+              // fully scrolled, which is what made expanding the first few
+              // look like "nothing scrolls."
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, kFloatingNavClearance),
+              itemCount: allFeatures.length,
+              itemBuilder: (context, index) {
+                final feature = allFeatures[index];
+                final isEnabled = enabledFeatureIds.contains(feature.id);
+                return _buildFeatureCard(feature, isEnabled);
+              },
+            ),
+          ),
+          // "There's more below" — fades out once scrolled within 24px of
+          // the bottom, and never shows at all if the catalog is short
+          // enough to fit without scrolling in the first place.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: kFloatingNavClearance - 24,
+            child: IgnorePointer(
+              child: Center(
+                child: AnimatedOpacity(
+                  opacity: _featuresCanScrollMore ? 1 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: theme.scaffoldBackgroundColor,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.15),
+                          blurRadius: 6,
+                        ),
+                      ],
+                    ),
+                    child: Icon(Icons.keyboard_arrow_down, color: colors.primary, size: 22),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       )),
     );
   }
@@ -3322,15 +3993,40 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text("My Features",
-            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary)),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // The same bunny silhouette the splash screen and Hopper use
+            // elsewhere, tinted to match the title text — a small brand
+            // mark for the tab that's really "your Hops," not just a
+            // grid of icons.
+            ColorFiltered(
+              colorFilter: ColorFilter.mode(colors.primary, BlendMode.srcIn),
+              child: Image.asset('assets/images/hops_bunny.png', width: 22, height: 22, fit: BoxFit.contain),
+            ),
+            const SizedBox(width: 8),
+            Text("My Features",
+                style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary)),
+          ],
+        ),
         elevation: 0,
         backgroundColor: theme.scaffoldBackgroundColor.withValues(alpha: 0.8),
         actions: [
           TextButton.icon(
             icon: Icon(Icons.add_circle_outline, size: 18, color: colors.primary),
             label: Text("Manage", style: TextStyle(color: colors.primary)),
-            onPressed: () => setState(() => _currentIndex = 3),
+            // Animate the PageController the same way a nav-bar tap does
+            // (see _buildNavItem's onTap comment) — a bare
+            // setState(() => _currentIndex = 3) updates the nav pill's
+            // highlight but never actually moves the PageView, since its
+            // displayed page is driven by _pageController, not by
+            // _currentIndex directly. That was the entire "Manage does
+            // nothing" bug: the tab underneath never changed.
+            onPressed: () => _pageController.animateToPage(
+              3,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOutCubic,
+            ),
           ),
           const SizedBox(width: 8),
         ],
@@ -3501,4 +4197,17 @@ class _FlareSigBuffer {
   bool get isComplete => chunks.length >= totalChunks;
   List<int> get reassembled =>
       [for (var i = 0; i < totalChunks; i++) ...?chunks[i]];
+}
+
+// Reassembly buffer for one in-flight Lost & Found post's LNF: chunks —
+// same shape as _FlareSigBuffer above, just over text chunks instead of
+// byte chunks.
+class _LnfBuffer {
+  final int totalChunks;
+  final String typeChar;
+  final Map<int, String> chunks = {};
+  DateTime lastSeen;
+  _LnfBuffer(this.totalChunks, this.typeChar) : lastSeen = DateTime.now();
+  bool get isComplete => chunks.length >= totalChunks;
+  String get reassembled => [for (var i = 0; i < totalChunks; i++) chunks[i] ?? ''].join();
 }

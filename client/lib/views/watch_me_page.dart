@@ -5,6 +5,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/services/unread_tracker.dart';
+import 'package:client/services/accessibility_prefs.dart';
 
 class WatchMePage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
@@ -42,6 +43,18 @@ class WatchMePage extends StatefulWidget {
   State<WatchMePage> createState() => _WatchMePageState();
 }
 
+// Per-buddy signal state — was a handful of bare fields on the State
+// object (one buddy at a time); now one of these per currently-watched
+// buddy, so Watch Me can track everyone in widget.watchingBuddies at once
+// instead of only ever the first one.
+class _BuddySignal {
+  int lastRssi = -100;
+  DateTime? lastSeen;
+  DateTime monitoringStartTime = DateTime.now();
+  bool alertActive = false;
+  bool alertCooldown = false;
+}
+
 class _WatchMePageState extends State<WatchMePage> {
   String? _selectedBuddy;
   bool _isRequesting = false;
@@ -50,12 +63,12 @@ class _WatchMePageState extends State<WatchMePage> {
   StreamSubscription<List<String>>? _pendingSub;
   StreamSubscription<Set<String>>? _watchingSub;
 
-  String? _monitoredBuddy;
-  int _lastRssi = -100;
-  DateTime? _lastSeen;
-  DateTime? _monitoringStartTime;
-  bool _alertActive = false;
-  bool _alertCooldown = false;
+  // Keyed by buddy username — every entry here is someone currently being
+  // actively monitored. One shared scan subscription and check timer cover
+  // all of them (see _syncMonitoring) rather than one pair per buddy,
+  // which would mean N parallel listeners all re-scanning the exact same
+  // stream for a large watch list.
+  final Map<String, _BuddySignal> _monitored = {};
 
   List<String> _pendingRequests = [];
   late Set<String> _watchingBuddies;
@@ -70,18 +83,10 @@ class _WatchMePageState extends State<WatchMePage> {
     _watchingSub = widget.watchingBuddiesStream.listen((buddies) {
       setState(() {
         _watchingBuddies = buddies;
-        if (_monitoredBuddy != null && !buddies.contains(_monitoredBuddy)) {
-          _cancelMonitoring();
-          _monitoredBuddy = null;
-        }
-        if (buddies.isNotEmpty && _monitoredBuddy == null) {
-          _startWatching(buddies.first);
-        }
+        _syncMonitoring();
       });
     });
-    if (_watchingBuddies.isNotEmpty && _monitoredBuddy == null) {
-      _startWatching(_watchingBuddies.first);
-    }
+    _syncMonitoring();
   }
 
   @override
@@ -93,72 +98,85 @@ class _WatchMePageState extends State<WatchMePage> {
     super.dispose();
   }
 
-  void _cancelMonitoring() {
-    _scanSub?.cancel();
-    _checkTimer?.cancel();
-    _alertActive = false;
-    _alertCooldown = false;
-    _monitoringStartTime = null;
-  }
+  // Reconciles _monitored against _watchingBuddies — adds a fresh
+  // _BuddySignal for anyone newly being watched (so THEIR 15-second "not
+  // found yet" grace period starts from when watching actually began, not
+  // from whenever the very first buddy was added), drops anyone no longer
+  // watched, and makes sure the shared subscription/timer are running
+  // whenever there's at least one buddy to track.
+  void _syncMonitoring() {
+    for (final b in _watchingBuddies) {
+      _monitored.putIfAbsent(b, () => _BuddySignal());
+    }
+    _monitored.removeWhere((b, _) => !_watchingBuddies.contains(b));
 
-  void _startWatching(String buddy) {
-    _cancelMonitoring();
-    _monitoredBuddy = buddy;
-    _lastRssi = -100;
-    _lastSeen = null;
-    _alertActive = false;
-    _alertCooldown = false;
-    _monitoringStartTime = DateTime.now();
+    if (_monitored.isEmpty) {
+      _scanSub?.cancel();
+      _scanSub = null;
+      _checkTimer?.cancel();
+      _checkTimer = null;
+      return;
+    }
 
-    _scanSub = widget.radarStream.listen((results) {
-      final seed = widget.contactSeeds[buddy];
-      if (seed == null) return; // can't recognize their beacon without it — see _buildSignalBar
+    _scanSub ??= widget.radarStream.listen((results) {
       for (final r in results) {
         final name = r.advertisementData.advName;
         if (!name.startsWith("HPS:")) continue;
-        if (matchesRotatingToken(seed, name.substring(4))) {
-          _lastRssi = r.rssi;
-          _lastSeen = DateTime.now();
-          _alertCooldown = false;
+        final token = name.substring(4);
+        for (final entry in _monitored.entries) {
+          final seed = widget.contactSeeds[entry.key];
+          if (seed == null) continue; // can't recognize their beacon without it — see _buildSignalBar
+          if (matchesRotatingToken(seed, token)) {
+            entry.value
+              ..lastRssi = r.rssi
+              ..lastSeen = DateTime.now()
+              ..alertCooldown = false;
+          }
         }
       }
       if (mounted) setState(() {});
     });
 
-    _checkTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+    _checkTimer ??= Timer.periodic(const Duration(seconds: 2), (timer) {
       if (!mounted) return;
       final now = DateTime.now();
-      if (_lastSeen == null &&
-          _monitoringStartTime != null &&
-          now.difference(_monitoringStartTime!).inSeconds >= 15 &&
-          !_alertCooldown &&
-          !_alertActive) {
-        _triggerAlert("Buddy not found – may be out of range or Bluetooth off");
-        return;
-      }
-      if (_lastSeen != null && now.difference(_lastSeen!).inSeconds >= 10) {
-        if (!_alertCooldown && !_alertActive) {
-          _triggerAlert("Buddy disappeared!");
+      for (final entry in _monitored.entries) {
+        final buddy = entry.key;
+        final sig = entry.value;
+        if (sig.lastSeen == null &&
+            now.difference(sig.monitoringStartTime).inSeconds >= 15 &&
+            !sig.alertCooldown &&
+            !sig.alertActive) {
+          _triggerAlert(buddy, sig, "$buddy not found – may be out of range or Bluetooth off");
+          continue;
         }
-      } else if (_lastRssi < -80 &&
-          !_alertActive &&
-          !_alertCooldown &&
-          _lastSeen != null) {
-        _triggerAlert("Buddy's signal is weak — they may be far away, blocked by walls, or on a different floor.");
+        if (sig.lastSeen != null && now.difference(sig.lastSeen!).inSeconds >= 10) {
+          if (!sig.alertCooldown && !sig.alertActive) {
+            _triggerAlert(buddy, sig, "$buddy disappeared!");
+          }
+        } else if (sig.lastRssi < -80 && !sig.alertActive && !sig.alertCooldown && sig.lastSeen != null) {
+          _triggerAlert(buddy, sig,
+              "$buddy's signal is weak — they may be far away, blocked by walls, or on a different floor.");
+        }
       }
     });
   }
 
   void _stopWatching(String buddy) {
-    _cancelMonitoring();
-    _monitoredBuddy = null;
+    _monitored.remove(buddy);
+    if (_monitored.isEmpty) {
+      _scanSub?.cancel();
+      _scanSub = null;
+      _checkTimer?.cancel();
+      _checkTimer = null;
+    }
     widget.onStopWatching(buddy);
   }
 
-  void _triggerAlert(String message) {
-    if (_alertActive) return;
-    _alertActive = true;
-    _alertCooldown = true;
+  void _triggerAlert(String buddy, _BuddySignal sig, String message) {
+    if (sig.alertActive) return;
+    sig.alertActive = true;
+    sig.alertCooldown = true;
     HapticFeedback.heavyImpact();
     // Fires regardless of whether this screen is even mounted right now —
     // the in-app dialog below only ever helped if Watch Me happened to be
@@ -178,7 +196,7 @@ class _WatchMePageState extends State<WatchMePage> {
           ElevatedButton(
             onPressed: () {
               Navigator.of(ctx).pop();
-              if (mounted) setState(() => _alertActive = false);
+              if (mounted) setState(() => sig.alertActive = false);
             },
             child: const Text("OK"),
           ),
@@ -193,29 +211,73 @@ class _WatchMePageState extends State<WatchMePage> {
   // reading would be actively misleading for a safety feature. These
   // thresholds are the same rough zones iBeacon's proximity API uses
   // (Immediate/Near/Far) rather than anything device-calibrated.
-  ({String label, String emoji, Color color}) _proximityInfo(int rssi, bool everSeen) {
+  // [colorblind] swaps the red/yellow/green "traffic light" set for a
+  // blue/orange/purple one — the standard colorblind-safe substitution
+  // (Okabe-Ito palette) for the two most common forms of color blindness,
+  // where red and green are the pair that's hardest to tell apart. The
+  // emoji dots change with it (🟢🟡🔴 read as color even to someone who
+  // can't see the underlying Color value) so the swap is consistent
+  // everywhere this shows up, not just in the progress bar's fill color.
+  ({String label, String emoji, Color color}) _proximityInfo(int rssi, bool everSeen, bool colorblind) {
     if (!everSeen) return (label: "Not seen yet", emoji: "⚪", color: Colors.grey);
-    if (rssi >= -60) return (label: "Right next to you", emoji: "🟢", color: Colors.green);
-    if (rssi >= -75) return (label: "Nearby", emoji: "🟡", color: Colors.orange);
-    return (label: "Far, may be out of sight", emoji: "🔴", color: Colors.red);
+    if (rssi >= -60) {
+      return colorblind
+          ? (label: "Right next to you", emoji: "🔵", color: const Color(0xFF0072B2))
+          : (label: "Right next to you", emoji: "🟢", color: Colors.green);
+    }
+    if (rssi >= -75) {
+      return colorblind
+          ? (label: "Nearby", emoji: "🟠", color: const Color(0xFFE69F00))
+          : (label: "Nearby", emoji: "🟡", color: Colors.orange);
+    }
+    return colorblind
+        ? (label: "Far, may be out of sight", emoji: "🟣", color: const Color(0xFFCC79A7))
+        : (label: "Far, may be out of sight", emoji: "🔴", color: Colors.red);
   }
 
-  Widget _buildSignalBar(int rssi) {
+  Widget _buildSignalBar(String buddy, _BuddySignal sig) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: AccessibilityPrefs.instance.colorblindMode,
+      builder: (context, colorblind, _) => _buildSignalBarContent(buddy, sig, colorblind),
+    );
+  }
+
+  Widget _buildSignalBarContent(String buddy, _BuddySignal sig, bool colorblind) {
     final colors = Theme.of(context).colorScheme;
-    final everSeen = _lastSeen != null;
-    final proximity = _proximityInfo(rssi, everSeen);
-    final ratio = ((rssi + 100) / 70.0).clamp(0.0, 1.0);
+    final everSeen = sig.lastSeen != null;
+    final proximity = _proximityInfo(sig.lastRssi, everSeen, colorblind);
+    final ratio = ((sig.lastRssi + 100) / 70.0).clamp(0.0, 1.0);
+    // Before the first sighting, a flat "Not seen yet" reads as frozen —
+    // there's no way to tell "just started, still looking" apart from
+    // "actually stuck" without this. A small spinner next to the label
+    // makes clear this is actively scanning, not stalled, for however
+    // long BLE discovery genuinely takes (a real few-second floor —
+    // advertising + scan duty cycles on both phones, not something a
+    // check-interval on this screen can shrink further).
+    final stillLooking = !everSeen &&
+        DateTime.now().difference(sig.monitoringStartTime).inSeconds < 15;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text(proximity.emoji, style: const TextStyle(fontSize: 18)),
-            const SizedBox(width: 8),
+            if (stillLooking)
+              const Padding(
+                padding: EdgeInsets.only(right: 8, top: 1),
+                child: SizedBox(
+                  width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Text(proximity.emoji, style: const TextStyle(fontSize: 18)),
+              ),
             Flexible(
               child: Text(
-                proximity.label,
+                stillLooking ? "Scanning for $buddy…" : proximity.label,
                 style: TextStyle(
                     fontWeight: FontWeight.bold, fontSize: 16, color: proximity.color),
                 overflow: TextOverflow.ellipsis,
@@ -225,7 +287,7 @@ class _WatchMePageState extends State<WatchMePage> {
         ),
         const SizedBox(height: 6),
         Text(
-          "Signal: $rssi dBm",
+          "Signal: ${sig.lastRssi} dBm",
           style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -240,7 +302,7 @@ class _WatchMePageState extends State<WatchMePage> {
         const SizedBox(height: 8),
         Text(
           everSeen
-              ? "Last seen: ${_lastSeen!.hour}:${_lastSeen!.minute.toString().padLeft(2, '0')}"
+              ? "Last seen: ${sig.lastSeen!.hour}:${sig.lastSeen!.minute.toString().padLeft(2, '0')}"
               : "Not seen yet",
           style: TextStyle(color: colors.onSurface),
           maxLines: 1,
@@ -354,26 +416,58 @@ class _WatchMePageState extends State<WatchMePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_monitoredBuddy != null) ...[
+            if (_monitored.isNotEmpty) ...[
               Text(
-                "Monitoring: $_monitoredBuddy",
-                style: const TextStyle(fontWeight: FontWeight.w600),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                _monitored.length > 1 ? "Watching ${_monitored.length} people" : "Monitoring",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: colors.primary),
               ),
               const SizedBox(height: 8),
-              if (!widget.contactSeeds.containsKey(_monitoredBuddy))
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    "You haven't chatted with $_monitoredBuddy yet — open a chat with "
-                    "them once so Watch Me can recognize their signal.",
-                    style: TextStyle(
-                        fontSize: 12, color: colors.error, fontStyle: FontStyle.italic),
-                  ),
-                ),
-              _buildSignalBar(_lastRssi),
-              const SizedBox(height: 24),
+              // One card per watched buddy — each tracks and alerts on
+              // their OWN signal independently, so watching several people
+              // at once means several live signal bars, not just the
+              // first buddy you added.
+              ..._monitored.entries.map((entry) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Card(
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    entry.key,
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () => _stopWatching(entry.key),
+                                  child: const Text("Stop"),
+                                ),
+                              ],
+                            ),
+                            if (!widget.contactSeeds.containsKey(entry.key))
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  "You haven't chatted with ${entry.key} yet — open a chat with "
+                                  "them once so Watch Me can recognize their signal.",
+                                  style: TextStyle(
+                                      fontSize: 12, color: colors.error, fontStyle: FontStyle.italic),
+                                ),
+                              ),
+                            _buildSignalBar(entry.key, entry.value),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )),
+              const SizedBox(height: 12),
             ],
             Text(
               "Watch Requests",
@@ -454,26 +548,6 @@ class _WatchMePageState extends State<WatchMePage> {
                 ),
               )),
             const SizedBox(height: 16),
-            if (_watchingBuddies.isNotEmpty) ...[
-              const Text(
-                "Currently watching:",
-                style: TextStyle(fontWeight: FontWeight.w600),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              ..._watchingBuddies.map((b) => ListTile(
-                title: Text(
-                  b,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: ElevatedButton(
-                  onPressed: () => _stopWatching(b),
-                  child: const Text("Stop"),
-                ),
-              )),
-              const SizedBox(height: 16),
-            ],
             Text(
               "Send watch request to:",
               style: TextStyle(

@@ -3,16 +3,24 @@ package com.example.client
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.StatusBarManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import java.util.function.Consumer
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -24,6 +32,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         lateinit var context: Context
         private const val REQUEST_DISCOVERABLE = 4201
+        private const val VOLUME_HOLD_SOS_MS = 3000L
     }
 
     private val activeServices = mutableMapOf<String, RfcommChatService>()
@@ -52,9 +61,59 @@ class MainActivity : FlutterActivity() {
 
     private var receiverRegistered = false
 
+    // ── Silent SOS Quick Settings tile ────────────────────────────────────
+    // See HopsSosTileService.kt for why a tile tap doesn't fire the flare
+    // directly. Two delivery paths to Dart, matching the two ways this
+    // Activity can receive the tile's launch intent:
+    //   - Cold start (Hops wasn't running): the intent that CREATED this
+    //     Activity carries the action, caught in onCreate below and held
+    //     here until Dart calls consumePendingSos once it's ready to
+    //     receive it — the same "engine wasn't alive yet to catch a
+    //     listener" problem shortcutNotifier's cold-start handling solves
+    //     for the existing app-icon shortcut (see main.dart/hops_app.dart).
+    //   - Warm start (Hops already running): MainActivity's launchMode is
+    //     singleTop, so a second launch intent arrives via onNewIntent
+    //     instead of a new onCreate — delivered straight to Dart through
+    //     sosChannel since the engine's already up.
+    private var sosChannel: MethodChannel? = null
+    private var pendingSos: Boolean = false
+
+    // In-app fallback for when Hops is already open on screen (the Quick
+    // Settings tile above is the primary path — this one only ever fires
+    // while this Activity itself is receiving key events, i.e. Hops is
+    // foregrounded). Holding volume-down for 3 continuous seconds fires
+    // the same sosTriggered signal the tile does; a normal short press
+    // still adjusts system volume as always, since this never consumes
+    // the event.
+    //
+    // Originally implemented by watching KeyEvent.repeatCount on
+    // ACTION_DOWN, on the assumption a held key would keep re-delivering
+    // ACTION_DOWN with an incrementing repeat count the way a held
+    // character key does. That's why it didn't work: hardware buttons like
+    // volume keys don't auto-repeat that way on Android — a hold produces
+    // exactly one ACTION_DOWN and, on release, one ACTION_UP, with nothing
+    // in between. Fixed with an actual timer instead: ACTION_DOWN schedules
+    // a delayed callback 3s out; ACTION_UP (release before the hold
+    // completes) cancels it. Still not testable from this environment —
+    // some OEM Android skins intercept volume keys before an app's
+    // dispatchKeyEvent ever sees them, so this needs verifying on the
+    // actual target hardware.
+    private val volumeDownHandler = Handler(Looper.getMainLooper())
+    private var volumeDownSosRunnable: Runnable? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         MainActivity.context = applicationContext
+        if (intent?.action == HopsSosTileService.ACTION_TRIGGER_SOS) {
+            pendingSos = true
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == HopsSosTileService.ACTION_TRIGGER_SOS) {
+            sosChannel?.invokeMethod("sosTriggered", null)
+        }
     }
 
     override fun onDestroy() {
@@ -63,6 +122,31 @@ class MainActivity : FlutterActivity() {
             unregisterReceiver(foundDeviceReceiver)
             receiverRegistered = false
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    // repeatCount == 0 guards against scheduling a second
+                    // timer on top of an existing one, in the (rare, but
+                    // possible on some OEM skins) case where ACTION_DOWN
+                    // does repeat for a held hardware key.
+                    if (event.repeatCount == 0 && volumeDownSosRunnable == null) {
+                        val runnable = Runnable { sosChannel?.invokeMethod("sosTriggered", null) }
+                        volumeDownSosRunnable = runnable
+                        volumeDownHandler.postDelayed(runnable, VOLUME_HOLD_SOS_MS)
+                    }
+                }
+                KeyEvent.ACTION_UP -> {
+                    // Released before the hold completed — cancel, don't fire.
+                    volumeDownSosRunnable?.let { volumeDownHandler.removeCallbacks(it) }
+                    volumeDownSosRunnable = null
+                }
+            }
+        }
+        // Never consumed — volume still adjusts normally either way.
+        return super.dispatchKeyEvent(event)
     }
 
     // Completes ensureDiscoverable's pending result. resultCode from
@@ -279,6 +363,62 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
 
+                else -> result.notImplemented()
+            }
+        }
+
+        // ── Silent SOS tile channel ───────────────────────────────────────
+        sosChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.example.client/sos_tile"
+        )
+        sosChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                // Consumed once, at Dart startup — mirrors quick_actions'
+                // own cold-start handling for the existing shortcut.
+                "consumePendingSos" -> {
+                    val had = pendingSos
+                    pendingSos = false
+                    result.success(had)
+                }
+                // Prompts the user with Android's own "Add tile?" system
+                // dialog (API 33+ only — StatusBarManager.requestAddTileService
+                // doesn't exist below that; despite the name, this lives on
+                // StatusBarManager, not TileService itself). Below API 33,
+                // the Dart side falls back to showing manual "swipe down
+                // twice, tap edit" instructions instead — see sos_service.dart.
+                "requestAddTile" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        try {
+                            val statusBarManager = getSystemService(StatusBarManager::class.java)
+                            val componentName = ComponentName(this, HopsSosTileService::class.java)
+                            val icon = Icon.createWithResource(this, R.mipmap.ic_launcher_monochrome)
+                            // Built as an explicit Consumer<Int> rather than a
+                            // trailing lambda — Kotlin's automatic SAM
+                            // conversion for this method's last
+                            // functional-interface parameter isn't reliable,
+                            // and left it unable to infer the callback
+                            // parameter's type.
+                            val resultConsumer = Consumer<Int> { status ->
+                                val accepted =
+                                    status == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
+                                    status == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
+                                result.success(accepted)
+                            }
+                            statusBarManager.requestAddTileService(
+                                componentName,
+                                "Hops SOS",
+                                icon,
+                                ContextCompat.getMainExecutor(this),
+                                resultConsumer
+                            )
+                        } catch (e: Exception) {
+                            result.error("ADD_TILE_ERROR", e.message, null)
+                        }
+                    } else {
+                        result.success(false)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

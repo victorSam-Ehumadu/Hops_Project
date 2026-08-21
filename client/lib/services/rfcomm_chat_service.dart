@@ -61,9 +61,19 @@ enum ChatConnectionState { connecting, connected, disconnected, failed }
 class RfcommChatService {
   final String myUsername;
   final String peerUsername;
-  final void Function(String message)? onMessageReceived;
+  // [id] is the same id the sender's own row was stored under (see
+  // sendMessage) — carrying it across the wire, rather than each side
+  // minting its own uuid for "the same" message, is what makes
+  // onMessageDeleted below able to remove the right row on this end too.
+  final void Function(String id, String message)? onMessageReceived;
+  // The peer deleted one of *their* messages (i.e. one of ours, from this
+  // side's perspective) and it was still connected long enough to tell us
+  // — see sendDeleteMessage. Best-effort only: if we're not connected when
+  // they delete, this never arrives and our copy just stays put, same as
+  // any other message sent while disconnected.
+  final void Function(String id)? onMessageDeleted;
   final void Function(ChatConnectionState state)? onStateChanged;
-  final void Function(String bio, Uint8List? avatarBytes)? onProfileReceived;
+  final void Function(String bio, String thinking, Uint8List? avatarBytes)? onProfileReceived;
   final void Function(Uint8List seed)? onRotatingSeedReceived;
   // A MAC address this device already has on file for this peer from a
   // prior successful RFCOMM connection (see chat_terminal.dart, which
@@ -89,6 +99,12 @@ class RfcommChatService {
   static const String _prefixChat = 'MSG:';
   static const String _prefixProfile = 'PRF:';
   static const String _prefixSeed = 'SED:';
+  static const String _prefixDelete = 'DEL:';
+  // uuid v4's canonical string form is always exactly 36 characters
+  // (8-4-4-4-12 hex, hyphens included) — used below to split a decoded
+  // MSG: payload back into its id and text without needing a delimiter
+  // that outgoing text would then have to avoid.
+  static const int _kMessageIdLength = 36;
 
   static const int _maxConnectAttempts = 5;
   // Android's classic-Bluetooth inquiry scan runs for roughly 12 seconds
@@ -126,6 +142,7 @@ class RfcommChatService {
     required this.myUsername,
     required this.peerUsername,
     this.onMessageReceived,
+    this.onMessageDeleted,
     this.onStateChanged,
     this.onProfileReceived,
     this.onRotatingSeedReceived,
@@ -349,15 +366,25 @@ class RfcommChatService {
         _setState(ChatConnectionState.failed);
         return;
       }
+      // Both roles tear down and re-open a fresh native session before
+      // retrying — this used to only happen for the host. The client
+      // branch just called _runAsClient() again on the SAME instance,
+      // which was the actual bug behind "stuck on Connecting… forever,
+      // only on some phones": BluetoothSocket.connect() is a blocking
+      // native call with no built-in timeout, and on some OEM Bluetooth
+      // stacks it can hang indefinitely instead of ever throwing. With no
+      // teardown, a hung attempt just sat there forever while every
+      // subsequent retry piled a NEW concurrent connect attempt on top of
+      // it instead of replacing it. disconnect() now actually closes the
+      // in-flight socket to unblock a hung connect() (see
+      // RfcommChatService.kt's pendingSocket) — but that only works if the
+      // retry actually calls it, which the client branch never did.
+      try {
+        await _peerChannel.invokeMethod('disconnect');
+      } catch (_) {}
+      _sessionOpen = false;
+      await _openSession();
       if (_amHost) {
-        // Interrupt the blocked accept() and re-open a fresh session/
-        // server socket — RfcommChatService.kt has no way to "retry" an
-        // in-progress accept() otherwise.
-        try {
-          await _peerChannel.invokeMethod('disconnect');
-        } catch (_) {}
-        _sessionOpen = false;
-        await _openSession();
         await _runAsHost();
       } else {
         await _runAsClient();
@@ -395,15 +422,28 @@ class RfcommChatService {
     try {
       if (line.startsWith(_prefixChat)) {
         final bytes = base64Decode(line.substring(_prefixChat.length));
-        onMessageReceived?.call(utf8.decode(bytes, allowMalformed: true));
+        final decoded = utf8.decode(bytes, allowMalformed: true);
+        if (decoded.length < _kMessageIdLength) return; // malformed — no id to key it by
+        final id = decoded.substring(0, _kMessageIdLength);
+        final text = decoded.substring(_kMessageIdLength);
+        onMessageReceived?.call(id, text);
+      } else if (line.startsWith(_prefixDelete)) {
+        final id = line.substring(_prefixDelete.length);
+        if (id.isNotEmpty) onMessageDeleted?.call(id);
       } else if (line.startsWith(_prefixProfile)) {
         final bytes = base64Decode(line.substring(_prefixProfile.length));
         if (bytes.isEmpty) return;
         final bioLen = bytes[0];
-        if (bytes.length < 1 + bioLen) return;
+        if (bytes.length < 1 + bioLen + 1) return; // +1 for the thinkingLen byte that follows
         final bio = utf8.decode(bytes.sublist(1, 1 + bioLen), allowMalformed: true);
-        final avatarBytes = bytes.length > 1 + bioLen ? Uint8List.fromList(bytes.sublist(1 + bioLen)) : null;
-        onProfileReceived?.call(bio, avatarBytes);
+        final thinkingLenIndex = 1 + bioLen;
+        final thinkingLen = bytes[thinkingLenIndex];
+        final thinkingStart = thinkingLenIndex + 1;
+        if (bytes.length < thinkingStart + thinkingLen) return;
+        final thinking = utf8.decode(bytes.sublist(thinkingStart, thinkingStart + thinkingLen), allowMalformed: true);
+        final avatarStart = thinkingStart + thinkingLen;
+        final avatarBytes = bytes.length > avatarStart ? Uint8List.fromList(bytes.sublist(avatarStart)) : null;
+        onProfileReceived?.call(bio, thinking, avatarBytes);
       } else if (line.startsWith(_prefixSeed)) {
         final bytes = base64Decode(line.substring(_prefixSeed.length));
         if (bytes.isEmpty) return;
@@ -427,19 +467,37 @@ class RfcommChatService {
     }
   }
 
-  Future<bool> sendMessage(String text) {
+  // [id] is the row id the caller already stored its own outgoing copy
+  // under — sent alongside the text (not separately) so a single MSG: line
+  // still carries everything needed, and so the two ends' copies of "the
+  // same" message share one id from the moment it's first sent, which is
+  // what lets a later sendDeleteMessage(id) reach the right row on both
+  // sides instead of just the sender's.
+  Future<bool> sendMessage(String id, String text) {
     // Strip embedded newlines — a literal \n would corrupt the native
     // side's readLine()-based framing (see this file's header comment).
     // Chat input is single-line anyway (chat_terminal.dart's TextField),
     // so this only ever matters for pasted multi-line text.
     final safe = text.replaceAll('\n', ' ').replaceAll('\r', ' ');
-    return _sendLine(_prefixChat + base64Encode(utf8.encode(safe)));
+    return _sendLine(_prefixChat + base64Encode(utf8.encode(id + safe)));
   }
 
-  Future<bool> sendProfile({required String bio, Uint8List? avatarBytes}) {
+  // "Delete for everyone" — best-effort, live-connection-only (see
+  // onMessageDeleted's comment above). [id] must be an id the peer also
+  // has on file for this message, i.e. one that was actually sent via
+  // sendMessage above rather than written locally some other way.
+  Future<bool> sendDeleteMessage(String id) => _sendLine(_prefixDelete + id);
+
+  Future<bool> sendProfile({required String bio, required String thinking, Uint8List? avatarBytes}) {
     final bioBytesFull = utf8.encode(bio);
     final bioBytes = bioBytesFull.length > 255 ? bioBytesFull.sublist(0, 255) : bioBytesFull;
-    final payload = Uint8List.fromList([bioBytes.length, ...bioBytes, ...?avatarBytes]);
+    final thinkingBytesFull = utf8.encode(thinking);
+    final thinkingBytes = thinkingBytesFull.length > 255 ? thinkingBytesFull.sublist(0, 255) : thinkingBytesFull;
+    final payload = Uint8List.fromList([
+      bioBytes.length, ...bioBytes,
+      thinkingBytes.length, ...thinkingBytes,
+      ...?avatarBytes,
+    ]);
     return _sendLine(_prefixProfile + base64Encode(payload));
   }
 

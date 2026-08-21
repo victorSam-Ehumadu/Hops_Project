@@ -14,6 +14,7 @@ import 'package:client/views/hops_splash_screen.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/widgets/alarm_ringing_banner.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:client/services/sos_service.dart';
 
 final ValueNotifier<int> themeNotifier = ValueNotifier<int>(0);
 // -1 means "no font chosen yet" — keeps the pre-existing system-default
@@ -176,6 +177,9 @@ void main() async {
     ShortcutItem(type: 'emergency_flare', localizedTitle: 'Emergency Flare'),
     ShortcutItem(type: 'community_alerts', localizedTitle: 'Community Alerts'),
   ]);
+
+  // Silent SOS Quick Settings tile — see services/sos_service.dart.
+  await SosService.init();
 
   runApp(const HopsRoot());
 }
