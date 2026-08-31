@@ -9,6 +9,7 @@ import 'package:client/services/hops_constants.dart';
 import 'package:client/services/cosmetic_prefs.dart';
 import 'package:client/services/avatar_path_notifier.dart';
 import 'package:client/theme/radar_icons.dart';
+import 'package:client/views/hops_shop_page.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/widgets/hops_background_pattern.dart';
 import 'package:client/widgets/hops_card.dart';
@@ -36,20 +37,17 @@ class RadarScreen extends StatefulWidget {
   // chat_terminal.dart) — used to resolve an observed "HPS:<token>" beacon
   // back to a real name. Absent entries just render as anonymous.
   final Map<String, List<int>> contactSeeds;
-  final ValueChanged<String>? onActivateFlare;
-  // Official Alert composing/broadcasting moved to the separate Admin app
-  // (see lib/services/official_alert_service.dart) — this screen no
-  // longer has any admin-only trigger UI at all, only the personal
-  // Emergency Flare above. Receiving an Official Alert someone else sent
-  // is unaffected — that's handled in hops_app.dart, not here.
+  // Neither the Emergency Flare NOR the Official Alert has a trigger on
+  // this screen any more. Official Alert composing moved to the separate
+  // Admin app (lib/services/official_alert_service.dart); the personal
+  // flare's old red app-bar button is gone too — it's now reached only by
+  // holding Volume Down (MainActivity.kt), the Quick Settings tile
+  // (HopsSosTileService.kt), or the app-icon shortcut, all three of which
+  // open the confirm dialog straight from hops_app.dart so it appears
+  // over whatever screen you're on. Receiving either kind of alert is
+  // unaffected — that's handled in hops_app.dart, not here.
   final VoidCallback? onRescan;
   final int nearbyBleCount;
-  // Set true for exactly one build when the "Emergency Flare" app-icon
-  // shortcut brought the user here — auto-opens the same confirm dialog
-  // the button itself uses. onAutoFlareDialogConsumed lets HopsApp clear
-  // its own flag immediately so this doesn't refire on a later rebuild.
-  final bool autoOpenFlareDialog;
-  final VoidCallback? onAutoFlareDialogConsumed;
   // Discoverable mode — see hops_constants.dart's kDiscoverableProtocolMarker.
   // Off by default; when on, broadcasts myUsername in the clear alongside
   // the anonymous beacon so a friend physically standing nearby can
@@ -67,11 +65,8 @@ class RadarScreen extends StatefulWidget {
     required this.onDeclineRequest,
     required this.friendUsernames,
     this.contactSeeds = const {},
-    this.onActivateFlare,
     this.onRescan,
     this.nearbyBleCount = 0,
-    this.autoOpenFlareDialog = false,
-    this.onAutoFlareDialogConsumed,
     this.isDiscoverable = false,
     this.onSetDiscoverable,
   });
@@ -81,7 +76,7 @@ class RadarScreen extends StatefulWidget {
 }
 
 class _RadarScreenState extends State<RadarScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final Map<String, ScanResult> _devices = {};
   StreamSubscription<List<ScanResult>>? _sub;
   late AnimationController _radarController;
@@ -218,12 +213,6 @@ class _RadarScreenState extends State<RadarScreen>
       });
     });
 
-    if (widget.autoOpenFlareDialog) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        widget.onAutoFlareDialogConsumed?.call();
-        if (mounted) _showFlareConfirmDialog();
-      });
-    }
   }
 
   Future<void> _loadAvatar() async {
@@ -243,77 +232,6 @@ class _RadarScreenState extends State<RadarScreen>
     _pulseController.dispose();
     avatarPathRevision.removeListener(_loadAvatar);
     super.dispose();
-  }
-
-  // Extracted so both the button's own long-press AND the "Emergency
-  // Flare" app-icon shortcut (see initState/autoOpenFlareDialog) trigger
-  // the exact same confirm step — the shortcut is a faster way to *reach*
-  // this dialog, not a way to skip it.
-  void _showFlareConfirmDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Activate Emergency Flare?"),
-        content: const Text(
-            "This will alert all nearby Hops users. Use only in real emergencies."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _showReasonInputDialog();
-            },
-            child: const Text("NEXT",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showReasonInputDialog() {
-    final reasonController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("What is the emergency?"),
-        content: TextField(
-          controller: reasonController,
-          autofocus: true,
-          maxLength: 25,
-          decoration: const InputDecoration(
-            hintText: "e.g., Fire in Lab 3",
-          ),
-          onSubmitted: (_) {
-            final reason = reasonController.text.trim();
-            if (reason.isEmpty) return;
-            Navigator.pop(ctx);
-            widget.onActivateFlare?.call(reason);
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              final reason = reasonController.text.trim();
-              if (reason.isEmpty) return;
-              Navigator.pop(ctx);
-              widget.onActivateFlare?.call(reason);
-            },
-            child: const Text("ACTIVATE",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
   }
 
   double _rssiToRadius(int rssi) {
@@ -495,42 +413,42 @@ class _RadarScreenState extends State<RadarScreen>
           ),
 
           const SizedBox(width: 8),
-          // The button only ever responded to a long-press with zero
-          // affordance — a first-time tap did nothing and looked broken.
-          // Tooltip covers long-press hover/hold hints; the plain tap
-          // fallback tells mouse/first-time users what to actually do.
+          // Was the red Emergency Flare button. Removed rather than
+          // relocated: a hold-to-fire control living permanently in the
+          // app bar is easy to set off by accident, and useless in the
+          // situation it exists for — visibly unlocking your phone,
+          // opening Hops, finding Home and press-holding a red button is
+          // exactly what you can't do when you actually need a flare.
+          // Holding Volume Down for five seconds now raises the same
+          // confirm dialog from anywhere in the app (hops_app.dart's
+          // _showFlareConfirmDialog, MainActivity.kt's
+          // VOLUME_HOLD_SOS_MS); the Quick Settings tile and app-icon
+          // shortcut are unchanged and route to that same dialog.
+          //
+          // The Hops Shop takes the freed slot, mirroring the entry point
+          // already on the Features tab (hops_app.dart's _buildShopButton)
+          // so it's reachable from Home too. Kept as a same-sized circular
+          // icon button rather than that tab's wider labelled pill — this
+          // bar also carries the BLE-density chip and the avatar, and a
+          // second pill overflows it on narrow screens.
           Tooltip(
-            message: "Hold to activate Emergency Flare",
+            message: "Hops Shop",
             child: GestureDetector(
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                        "Press and hold this button to activate the Emergency Flare"),
-                    duration: Duration(seconds: 3),
-                  ),
-                );
-              },
-              onLongPress: () {
-                _showFlareConfirmDialog();
-              },
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const HopsShopPage()),
+              ),
               child: Container(
                 width: 40,
                 height: 40,
                 margin: const EdgeInsets.only(right: 8),
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.red,
+                  color: colors.primary.withValues(alpha: 0.12),
                 ),
-                child: const Icon(Icons.warning_amber_rounded,
-                    color: Colors.white, size: 22),
+                child: Icon(Icons.storefront, color: colors.primary, size: 20),
               ),
             ),
           ),
-          // Official Alert's trigger used to live here, admin-gated — it's
-          // composed from the separate Admin app now (see
-          // lib/services/official_alert_service.dart), so there's nothing
-          // admin-specific left in this bar at all.
           GestureDetector(
             onTap: () async {
               await Navigator.of(context).push(

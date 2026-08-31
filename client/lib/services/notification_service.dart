@@ -3,10 +3,82 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:client/services/cosmetic_prefs.dart';
+import 'package:client/services/hops_constants.dart';
 import 'package:client/theme/ping_sound_packs.dart';
 
 class NotificationService {
-  static const int _emgNotificationId = 0; // fixed — used by show AND cancel
+  // ── Emergency/Official alert notification ids ─────────────────────────────
+  // Allocated per ALERT, not fixed. There used to be a single id 0 shared by
+  // every flare and Official Alert, on the assumption two could never
+  // meaningfully overlap. They can, and when they did the results were bad:
+  // a second concurrent flare silently overwrote the first (one id = one
+  // notification, so the first sender and reason simply vanished), and an
+  // EMG_OFF: from EITHER sender cancelled that one shared id — so one person
+  // standing down killed a different person's still-active alarm on every
+  // device in range.
+  //
+  // Now each distinct alert — keyed by its full advertisement string, e.g.
+  // "EMG:Vic:Fire in Lab", which is already unique per sender+reason and is
+  // already what the receive-side dedup sets key on — gets its own id and
+  // its own notification. They stack, and each is cancelled independently.
+  static const int _emgNotificationIdBase = 1000;
+  static const int _emgNotificationIdCount = 100;
+
+  /// Live alerts on THIS device: advertisement string → notification id.
+  /// Also the single source of truth for [isAlarmRinging] and for whether
+  /// the siren should still be looping.
+  static final Map<String, int> _activeAlertIds = {};
+  static int _nextAlertId = _emgNotificationIdBase;
+
+  /// Id for [alertKey], allocating one on first use. Ids wrap after
+  /// [_emgNotificationIdCount] distinct alerts — far more than can plausibly
+  /// be live at once, and by the time it wraps the original holder is long
+  /// cancelled. The in-use scan makes that safe even if it somehow isn't:
+  /// handing a live alert's id to a second key would let cancelling either
+  /// one dismiss both.
+  static int _idForAlert(String alertKey) =>
+      _activeAlertIds.putIfAbsent(alertKey, () {
+        final taken = _activeAlertIds.values.toSet();
+        var id = _nextAlertId;
+        for (var i = 0; i < _emgNotificationIdCount && taken.contains(id); i++) {
+          id = _emgNotificationIdBase +
+              ((id + 1 - _emgNotificationIdBase) % _emgNotificationIdCount);
+        }
+        _nextAlertId = _emgNotificationIdBase +
+            ((id + 1 - _emgNotificationIdBase) % _emgNotificationIdCount);
+        return id;
+      });
+
+  /// How long a received alert stays up on THIS device without being
+  /// refreshed before it gives up and dismisses itself.
+  ///
+  /// An alert is normally cleared by its sender's stand-down (EMG_OFF: /
+  /// ADM_OFF:), but that's a BLE broadcast like any other and is perfectly
+  /// capable of never arriving — the sender walks out of range, or their
+  /// phone dies, in the seconds between. That used to be survivable because
+  /// one shared notification id meant the next alert simply overwrote the
+  /// orphan. Now that alerts stack, an orphan would sit there ringing
+  /// forever, so each one carries its own deadline.
+  ///
+  /// Sized off the longest sender-side broadcast window (a flare's
+  /// kEmergencyFlareDuration; an Official Alert self-cancels at 30s) plus a
+  /// wide margin, so this only ever fires when the stand-down genuinely
+  /// went missing — never while the emergency is still live.
+  static final Duration _alertAutoExpiry =
+      kEmergencyFlareDuration + const Duration(seconds: 30);
+
+  static final Map<String, Timer> _alertExpiryTimers = {};
+
+  /// (Re)arms [alertKey]'s self-dismissal deadline. Called on every show, so
+  /// an alert that's still actively being re-broadcast keeps pushing its own
+  /// deadline out rather than expiring mid-emergency.
+  static void _armAlertExpiry(String alertKey) {
+    _alertExpiryTimers.remove(alertKey)?.cancel();
+    _alertExpiryTimers[alertKey] = Timer(_alertAutoExpiry, () {
+      _alertExpiryTimers.remove(alertKey);
+      cancelEmergencyNotification(alertKey: alertKey);
+    });
+  }
 
   // Fixed ids for the routine notification kinds below — each kind reuses
   // its own id so a second occurrence updates/replaces the first rather
@@ -69,20 +141,24 @@ class NotificationService {
   );
 
   static AudioPlayer? _alertPlayer;
+  /// Whether [_alertPlayer] actually managed to load and play the siren
+  /// asset — see _ensureAlarmSounding.
+  static bool _customSoundPlaying = false;
 
-  /// True while an emergency alarm (a personal Emergency Flare or an
-  /// Official Alert — either kind, own or someone else's, received or
-  /// self-triggered) is actively ringing on THIS device: the notification
-  /// is up and, if the sound loaded, the siren is looping.
+  /// True while at least one emergency alarm (a personal Emergency Flare or
+  /// an Official Alert — either kind, own or someone else's) is ringing on
+  /// THIS device: its notification is up and, if the sound loaded, the siren
+  /// is looping.
   ///
   /// Exists so the app can offer an in-app "stop this for me" affordance
   /// (see hops_app.dart/admin_shell.dart's alarm banner) beyond the
   /// notification's own action button — that button only helps if someone
   /// thinks to pull down the notification shade, which isn't obvious mid-
-  /// panic with a phone blaring in your hand. Set true by both show*
-  /// methods below, false by cancelEmergencyNotification — which is the
-  /// ONLY function that touches this, so "ringing" and "the thing that
-  /// actually stops the ringing" can never drift out of sync.
+  /// panic with a phone blaring in your hand.
+  ///
+  /// Derived from [_activeAlertIds] and updated ONLY by [_syncAlarmState],
+  /// so "ringing", "the siren is playing", and "there is something to stop"
+  /// can never drift apart the way three independently-set flags would.
   static final ValueNotifier<bool> isAlarmRinging = ValueNotifier<bool>(false);
 
   static Future<void> init() async {
@@ -99,9 +175,14 @@ class NotificationService {
     await _plugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
-        // User tapped "Stop for me" (or the notification body itself)
+        // User tapped "Stop for me" (or the notification body itself).
+        // The payload carries the alert key (see the show* methods), so
+        // this silences only the alert that was actually tapped — with two
+        // concurrent flares up, dismissing one must not silence the other.
+        // A null payload means it wasn't one of ours; fall back to
+        // cancelling everything rather than doing nothing.
         if (response.actionId == 'dismiss' || response.actionId == null) {
-          cancelEmergencyNotification();
+          cancelEmergencyNotification(alertKey: response.payload);
         }
       },
     );
@@ -338,34 +419,20 @@ class NotificationService {
   // ── Show (called when an EMG: advertisement is first received) ────────────
 
   static Future<void> showEmergencyNotification({
+    required String alertKey,
     required String sender,
     required String reason,
   }) async {
-    // Stop any previous alert still playing before starting a new one
-    await _stopAlertSound();
-    isAlarmRinging.value = true;
-
-    // Start looping alarm sound. Track success separately from whether
-    // _alertPlayer is null — it's assigned unconditionally below, so
-    // `_alertPlayer == null` was never true here even when setAsset/play
-    // threw, which meant the "fall back to the channel's own sound"
-    // branch a few lines down could never actually trigger and a failed
-    // asset load meant a silent (vibrate-only) emergency alert.
-    _alertPlayer = AudioPlayer();
-    bool customSoundPlaying = false;
-    try {
-      await _alertPlayer!.setAsset('assets/sounds/alert.wav');
-      await _alertPlayer!.setLoopMode(LoopMode.one);
-      await _alertPlayer!.play();
-      customSoundPlaying = true;
-    } catch (_) {
-      // Audio failed — notification channel sound acts as fallback
-    }
+    final id = _idForAlert(alertKey);
+    _armAlertExpiry(alertKey);
+    final customSoundPlaying = await _ensureAlarmSounding();
+    _syncAlarmState();
 
     await _plugin.show(
-      _emgNotificationId,
+      id,
       '🚨 Emergency from $sender',
       reason.isNotEmpty ? reason : 'Emergency alert!',
+      payload: alertKey,
       NotificationDetails(
         android: AndroidNotificationDetails(
           _emergencyChannel.id,
@@ -400,17 +467,25 @@ class NotificationService {
   // interrupted just to relabel the alert a few seconds later.
 
   static Future<void> updateEmergencyVerificationStatus({
+    required String alertKey,
     required String sender,
     required String reason,
     required bool verified,
   }) async {
+    // Gone already — the sender stood down, or the user dismissed it —
+    // so there is nothing to relabel. Re-showing here would resurrect a
+    // notification the user has already deliberately silenced, which the
+    // old fixed-id version did every time a late signature landed.
+    final id = _activeAlertIds[alertKey];
+    if (id == null) return;
     final title = verified
         ? '✅ Verified Emergency from $sender'
         : '⚠️ Unverified Emergency from $sender';
     await _plugin.show(
-      _emgNotificationId,
+      id,
       title,
       reason.isNotEmpty ? reason : 'Emergency alert!',
+      payload: alertKey,
       NotificationDetails(
         android: AndroidNotificationDetails(
           _emergencyChannel.id,
@@ -437,33 +512,29 @@ class NotificationService {
   }
 
   // ── Official Alert (admin-only tier, ADM:/ADM_OFF:) ───────────────────────
-  // Reuses the same notification id/channel/audio player as a personal
-  // Emergency Flare rather than duplicating that whole plumbing — the two
-  // are extremely unlikely to be simultaneously active (Official Alerts are
-  // gated to a small, trusted admin group), and if they ever do overlap,
-  // showing whichever is most recent isn't an unreasonable behavior anyway.
+  // Shares the channel and the single looping siren with a personal
+  // Emergency Flare, but gets its own notification id like any other alert
+  // — the two tiers CAN be live at once (an admin broadcasting a campus
+  // alert during an incident is exactly when a student is most likely to
+  // flare), and the old shared id meant whichever arrived second erased
+  // the first.
 
   static Future<void> showOfficialAlertNotification({
+    required String alertKey,
     required String sender,
     required String reason,
     String? adminTitle,
   }) async {
-    await _stopAlertSound();
-    isAlarmRinging.value = true;
-
-    _alertPlayer = AudioPlayer();
-    bool customSoundPlaying = false;
-    try {
-      await _alertPlayer!.setAsset('assets/sounds/alert.wav');
-      await _alertPlayer!.setLoopMode(LoopMode.one);
-      await _alertPlayer!.play();
-      customSoundPlaying = true;
-    } catch (_) {}
+    final id = _idForAlert(alertKey);
+    _armAlertExpiry(alertKey);
+    final customSoundPlaying = await _ensureAlarmSounding();
+    _syncAlarmState();
 
     await _plugin.show(
-      _emgNotificationId,
+      id,
       '🔴 OFFICIAL ALERT — ${adminTitle ?? sender} (unverified)',
       reason.isNotEmpty ? reason : 'Official campus alert',
+      payload: alertKey,
       NotificationDetails(
         android: AndroidNotificationDetails(
           _emergencyChannel.id,
@@ -497,19 +568,27 @@ class NotificationService {
   // officialdom is actively misleading in a way an unverified personal
   // report isn't.
   static Future<void> updateOfficialAlertVerificationStatus({
+    required String alertKey,
     required String sender,
     required String reason,
     String? adminTitle,
     required bool verified,
   }) async {
     if (!verified) {
-      await cancelEmergencyNotification();
+      // Cancels ONLY the spoofed alert. This used to cancel the one shared
+      // id, so a rejected fake Official Alert also silenced every genuine
+      // flare ringing at the same moment — a trivial way to mute the whole
+      // room by broadcasting one bad signature.
+      await cancelEmergencyNotification(alertKey: alertKey);
       return;
     }
+    final id = _activeAlertIds[alertKey];
+    if (id == null) return; // already stood down or dismissed
     await _plugin.show(
-      _emgNotificationId,
+      id,
       '✅ OFFICIAL ALERT — ${adminTitle ?? sender}',
       reason.isNotEmpty ? reason : 'Official campus alert',
+      payload: alertKey,
       NotificationDetails(
         android: AndroidNotificationDetails(
           _emergencyChannel.id,
@@ -535,20 +614,111 @@ class NotificationService {
     );
   }
 
-  // ── Cancel (called when EMG_OFF: is received OR user taps Deactivate) ─────
-  // Stops the looping audio AND removes the persistent notification.
+  // ── Cancel ────────────────────────────────────────────────────────────────
+  // Removes one alert's notification, or all of them, and stops the siren
+  // once nothing is left ringing.
+  //
+  // [alertKey] null means "silence everything on this device" — what the
+  // in-app alarm banner does, since a user tapping it wants quiet, not a
+  // per-alert triage. A non-null key removes just that alert, which is what
+  // an EMG_OFF:/ADM_OFF: stand-down and a per-notification "Stop for me"
+  // must do: one sender standing down has no business silencing anybody
+  // else's still-live emergency.
 
-  static Future<void> cancelEmergencyNotification() async {
-    isAlarmRinging.value = false;
-    await _stopAlertSound();
-    await _plugin.cancel(_emgNotificationId);
+  static Future<void> cancelEmergencyNotification({String? alertKey}) async {
+    if (alertKey == null) {
+      final ids = _activeAlertIds.values.toList();
+      _activeAlertIds.clear();
+      for (final timer in _alertExpiryTimers.values) {
+        timer.cancel();
+      }
+      _alertExpiryTimers.clear();
+      for (final id in ids) {
+        await _plugin.cancel(id);
+      }
+    } else {
+      final id = _activeAlertIds.remove(alertKey);
+      if (id == null) return; // not live — nothing to do, and don't touch the siren
+      _alertExpiryTimers.remove(alertKey)?.cancel();
+      await _plugin.cancel(id);
+    }
+    await _syncAlarmStateAsync();
   }
 
-  // ── Internal audio helper ─────────────────────────────────────────────────
+  /// Cancels every live alert whose key starts with [prefix].
+  ///
+  /// The stand-down advertisements carry only a sender ("EMG_OFF:<sender>"),
+  /// while an alert's key is its full "EMG:<sender>:<reason>" string — so a
+  /// stand-down is matched by prefix, and correctly clears that sender's
+  /// alert whatever reason they gave. Note the sender tag is truncated to 8
+  /// characters on the wire, so two people whose names share those first 8
+  /// characters can still cancel each other; that ambiguity is inherent to
+  /// the wire format and can't be resolved here.
+  static Future<void> cancelAlertsMatching(String prefix) async {
+    final matched = _activeAlertIds.keys
+        .where((k) => k.startsWith(prefix))
+        .toList(growable: false);
+    if (matched.isEmpty) return;
+    for (final key in matched) {
+      final id = _activeAlertIds.remove(key);
+      _alertExpiryTimers.remove(key)?.cancel();
+      if (id != null) await _plugin.cancel(id);
+    }
+    await _syncAlarmStateAsync();
+  }
+
+  // ── Internal alarm-state helpers ──────────────────────────────────────────
+
+  /// Starts the looping siren if it isn't already going, and reports whether
+  /// our own audio is playing (false means the caller should let the
+  /// notification channel's own sound act as the fallback).
+  ///
+  /// Deliberately does NOT restart a siren that's already looping: a second
+  /// concurrent alert arriving used to call _stopAlertSound() and build a
+  /// fresh player, which cut the first alert's siren for the gap in
+  /// between. One alarm sound for any number of alerts is also simply what
+  /// you want — two overlapping sirens are less intelligible, not more
+  /// urgent.
+  static Future<bool> _ensureAlarmSounding() async {
+    if (_alertPlayer != null) return _customSoundPlaying;
+    // Success is tracked separately from `_alertPlayer != null` because the
+    // player is assigned unconditionally — so a thrown setAsset/play used to
+    // leave the "fall back to the channel's own sound" branch unreachable,
+    // and a failed asset load meant a silent (vibrate-only) emergency.
+    final player = AudioPlayer();
+    _alertPlayer = player;
+    _customSoundPlaying = false;
+    try {
+      await player.setAsset('assets/sounds/alert.wav');
+      await player.setLoopMode(LoopMode.one);
+      await player.play();
+      _customSoundPlaying = true;
+    } catch (_) {
+      // Audio failed — notification channel sound acts as fallback.
+    }
+    return _customSoundPlaying;
+  }
+
+  /// Point [isAlarmRinging] at the truth. Synchronous half, for call sites
+  /// that only ever add an alert.
+  static void _syncAlarmState() {
+    isAlarmRinging.value = _activeAlertIds.isNotEmpty;
+  }
+
+  /// As [_syncAlarmState], but also stops the siren once the last alert is
+  /// gone. Keeping the sound teardown here — rather than at each cancel call
+  /// site — is what guarantees the siren can't outlive the notifications or
+  /// vice versa.
+  static Future<void> _syncAlarmStateAsync() async {
+    _syncAlarmState();
+    if (_activeAlertIds.isEmpty) await _stopAlertSound();
+  }
 
   static Future<void> _stopAlertSound() async {
-    await _alertPlayer?.stop();
-    await _alertPlayer?.dispose();
+    final player = _alertPlayer;
     _alertPlayer = null;
+    _customSoundPlaying = false;
+    await player?.stop();
+    await player?.dispose();
   }
 }

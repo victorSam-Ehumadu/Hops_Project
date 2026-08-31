@@ -20,6 +20,14 @@
 // broadcasts EMG_OFF, and stays exactly as it was. This banner only ever
 // calls NotificationService.cancelEmergencyNotification(), which touches
 // no radio and tells nobody else anything.
+//
+// Called with no argument, so it silences EVERY alert ringing here, not
+// just one. That's the right scope for this control specifically: it's a
+// single "make it stop" affordance shown when the phone is blaring, and
+// making someone dismiss alerts one at a time mid-panic would be absurd.
+// Per-alert dismissal exists too — each notification's own "Stop for me"
+// action carries that alert's key — so nothing is lost by the banner being
+// the blunt instrument.
 import 'package:flutter/material.dart';
 import 'package:client/services/notification_service.dart';
 

@@ -137,6 +137,11 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
   Future<void> _fixNotifications() async {
     if (_notificationsAllowed) {
       await NotificationService.showOfficialAlertNotification(
+        // Fixed key, so repeatedly tapping the row replaces the same test
+        // notification instead of stacking a new one each time. It can't
+        // collide with a real alert's key — no advertisement carries a
+        // "TEST:" prefix.
+        alertKey: "TEST:self",
         sender: "Hops Admin",
         reason: "Test alert — alerting is working",
       );

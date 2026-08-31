@@ -14,7 +14,6 @@ const List<_HopsTip> _tips = [
   _HopsTip(Icons.wifi_off_rounded, "Hops works entirely offline — no signal, no problem. Everything runs over Bluetooth."),
   _HopsTip(Icons.touch_app_outlined, "See a dot on the radar? Tap it to send that person a friend request."),
   _HopsTip(Icons.visibility, "Turn on Discoverable (top-right of the radar) so friends can see your name and quick-add you — off by default, and always your choice."),
-  _HopsTip(Icons.qr_code_2, "In a hurry? Generate a pairing code and let a friend scan it instead of typing — or flip it to a QR code."),
   _HopsTip(Icons.shield_outlined, "Your chats are only ever exchanged directly, device-to-device — never through a server."),
   _HopsTip(Icons.visibility_off_outlined, "Strangers show up as anonymous dots on radar until you've chatted, sent a friend request, or set up Watch Me — that's on purpose."),
   _HopsTip(Icons.campaign_outlined, "Community Alerts are official broadcasts from Hops admins — they reach every nearby Hopper instantly."),

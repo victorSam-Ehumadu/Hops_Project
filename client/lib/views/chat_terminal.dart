@@ -369,10 +369,36 @@ class _IndividualChatTerminalViewState
     String? savedAvatarPath;
     if (avatarBytes != null && avatarBytes.isNotEmpty) {
       try {
+        // Timestamped filename, not a fixed 'contact_avatar_<peer>.jpg' —
+        // same fix (and same reason) as edit_identity_screen.dart's own
+        // _pickAvatar. A fixed path was the actual bug behind "avatar
+        // doesn't update / old avatar keeps showing": Flutter's global
+        // imageCache keys a decoded FileImage by its path, and never
+        // notices the bytes on disk changed underneath an unchanged path —
+        // so overwriting the same file left every screen showing whatever
+        // was first decoded there, forever, no matter how many times the
+        // peer re-sent a new photo. A fresh path each time is a genuinely
+        // new cache key, so it always paints.
+        final previousPath = _peerAvatarPath;
         final dir = await getApplicationDocumentsDirectory();
-        final file = File('${dir.path}/contact_avatar_${widget.peerName}.jpg');
+        final file = File(
+            '${dir.path}/contact_avatar_${widget.peerName}_${DateTime.now().millisecondsSinceEpoch}.jpg');
         await file.writeAsBytes(avatarBytes, flush: true);
         savedAvatarPath = file.path;
+
+        // Clean up the old cached copy now that nothing points at it —
+        // otherwise a peer who changes their photo often leaves an
+        // ever-growing pile of stale avatar files behind on disk.
+        if (previousPath != null && previousPath != savedAvatarPath) {
+          final oldFile = File(previousPath);
+          if (await oldFile.exists()) {
+            try {
+              await oldFile.delete();
+            } catch (_) {
+              // Best-effort cleanup — not worth surfacing an error for this.
+            }
+          }
+        }
       } catch (_) {
         // Keep whatever avatar (if any) was already cached rather than
         // losing it over a failed write.

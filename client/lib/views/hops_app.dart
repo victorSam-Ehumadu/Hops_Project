@@ -142,11 +142,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // if it's been banned. See _syncIdentityStatus.
   Timer? _identitySyncTimer;
 
-  // Set when the "Emergency Flare" app-icon shortcut fires — tells the
-  // freshly-(re)built RadarScreen to auto-open its confirm dialog once,
-  // then gets cleared so revisiting Home normally doesn't re-trigger it.
-  bool _pendingFlareShortcut = false;
-
   // Hops & Robbers runner tag — see _advertisePresenceBeacon/_setGameRunnerTag.
   bool _isGameRunnerTagActive = false;
   String? _gameRunnerUsername;
@@ -285,13 +280,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // tap. Deliberately time-bounded rather than a permanent dedup set: a
   // later, genuinely new tap on the same tag (by the same or a different
   // person) should still count.
-  // Drives the "more below" down-arrow hint on the Features tab (see
-  // _buildFeaturesTab/_updateFeaturesScrollHint) — starts false (hidden)
-  // rather than assuming there's more to scroll to, since a short device
-  // catalog on a tall screen may not scroll at all.
-  final ScrollController _featuresScrollController = ScrollController();
-  bool _featuresCanScrollMore = false;
-
   final Set<String> _recentSbiIds = {};
   final Set<String> _handledLnfNames = {};
   // In-progress Lost & Found chunk reassembly, keyed by postId — mirrors
@@ -487,17 +475,118 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     });
   }
 
-  // Opens the exact same confirm-then-reason dialog the in-app Emergency
-  // Flare button and the existing app-icon shortcut both use — a tile tap
-  // or a volume-hold never bypasses that confirmation, deliberately (see
-  // HopsSosTileService.kt's header comment for why).
+  // ---------- Emergency Flare confirmation ----------
+  //
+  // Lives here, on HopsApp itself, rather than on the Radar screen where
+  // the old red app-bar button used to own it. Two reasons:
+  //
+  //   1. There is no in-app flare button any more (see radar_screen.dart)
+  //      — every remaining trigger is external (volume-hold, Quick
+  //      Settings tile, app-icon shortcut), so none of them has a natural
+  //      home on one particular tab.
+  //   2. HopsApp is the MaterialApp's `home`, so `Navigator.of(context)`
+  //      here resolves to the ROOT navigator. Pushing the dialog off this
+  //      context puts it above every pushed route — Wordle, a chat, the
+  //      Shop, Settings — so the prompt genuinely appears on whatever
+  //      screen you're already on. That's the whole point: this used to
+  //      jump the PageView to Home first, which both yanked you out of
+  //      what you were doing and (in an emergency) wasted the seconds it
+  //      took to notice the screen had changed under you.
+  //
+  // The confirmation itself is deliberately NOT skippable from any of
+  // these paths — see HopsSosTileService.kt's header comment.
+
+  // Guards against stacking a second copy of the dialog on top of the
+  // first: a volume-hold that fires while the prompt is already up (an
+  // easy thing to do — you're panicking and holding the button again)
+  // would otherwise leave two dialogs to dismiss, with only the top one
+  // visible.
+  bool _flareDialogOpen = false;
+
+  void _showFlareConfirmDialog() {
+    if (!mounted || _flareDialogOpen) return;
+    _flareDialogOpen = true;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Activate Emergency Flare?"),
+        content: const Text(
+            "This will alert all nearby Hops users. Use only in real emergencies."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showFlareReasonDialog();
+            },
+            child: const Text("NEXT",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+      // Cleared however the dialog closes — button, back gesture, or
+      // barrier tap — so a cancelled prompt can always be reopened.
+    ).whenComplete(() => _flareDialogOpen = false);
+  }
+
+  void _showFlareReasonDialog() {
+    final reasonController = TextEditingController();
+    _flareDialogOpen = true;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("What is the emergency?"),
+        content: TextField(
+          controller: reasonController,
+          autofocus: true,
+          maxLength: 25,
+          decoration: const InputDecoration(
+            hintText: "e.g., Fire in Lab 3",
+          ),
+          onSubmitted: (_) {
+            final reason = reasonController.text.trim();
+            if (reason.isEmpty) return;
+            Navigator.pop(ctx);
+            _broadcastEmergencyFlare(reason);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              final reason = reasonController.text.trim();
+              if (reason.isEmpty) return;
+              Navigator.pop(ctx);
+              _broadcastEmergencyFlare(reason);
+            },
+            child: const Text("ACTIVATE",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    ).whenComplete(() {
+      _flareDialogOpen = false;
+      reasonController.dispose();
+    });
+  }
+
   void _onSosTriggered() {
     if (!sosTriggeredNotifier.value) return;
     sosTriggeredNotifier.value = false;
-    setState(() {
-      _currentIndex = 0;
-      _pendingFlareShortcut = true;
-    });
+    // No page change at all — see _showFlareConfirmDialog's comment. The
+    // previous version jumped the PageView to Home (and before that,
+    // desynced the nav pill from the actual page by only setting
+    // _currentIndex), both of which are now unnecessary: the dialog
+    // renders over whatever route is on top.
+    _showFlareConfirmDialog();
   }
 
   // Handles a tap on any of the app-icon shortcuts registered in
@@ -509,16 +598,24 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     shortcutNotifier.value = null;
     switch (type) {
       case 'community_alerts':
-        setState(() => _currentIndex = 2);
+        // See _onSosTriggered's comment — setState alone on _currentIndex
+        // never moves the actual PageView.
+        if (_pageController.hasClients) {
+          _pageController.animateToPage(
+            2,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+          );
+        } else {
+          setState(() => _currentIndex = 2);
+        }
         break;
       case 'emergency_flare':
-        // Jumps to Home and opens the *same* confirm-then-reason dialog
-        // flow the button itself uses — a shortcut skipping straight past
-        // that friction would undermine the whole reason it's there.
-        setState(() {
-          _currentIndex = 0;
-          _pendingFlareShortcut = true;
-        });
+        // Opens the same confirm-then-reason dialog every other flare
+        // trigger uses, in place, without changing tabs — a shortcut
+        // skipping straight past that friction would undermine the whole
+        // reason it's there.
+        _showFlareConfirmDialog();
         break;
     }
   }
@@ -581,7 +678,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _featuresScrollController.dispose();
     avatarPathRevision.removeListener(_loadCurrentIdentityMetrics);
     nearbyConnectionsSessionCount.removeListener(_onNearbyConnectionsSessionCountChanged);
     chatPingRequest.removeListener(_onChatPingRequested);
@@ -1016,19 +1112,85 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // string before" dedup set — every device relays each distinct flare
   // string at most once, ever, so the flood is bounded by the number of
   // devices that hear it, not by an explicit hop limit, and can't loop.
+  // Relays are QUEUED, one at a time, rather than each firing its own
+  // independent advertise-then-revert pair. There is only one radio and one
+  // advertisement slot, so overlapping relays used to trample each other:
+  // hearing flare B while still relaying flare A replaced A's broadcast
+  // mid-window, and then A's four-second timer — still armed, still
+  // unaware — reverted straight to the presence beacon and cut B's relay
+  // short. Two people flaring at once therefore relayed roughly one and a
+  // half flares between them. Serialising means each queued payload gets
+  // its own full window.
+  final List<String> _emgRelayQueue = [];
+  bool _emgRelayRunning = false;
+
+  /// True from the moment our own flare starts broadcasting until its
+  /// EMG_OFF: stand-down window has finished — i.e. for as long as this
+  /// device has something of its own on the air that a relay must not
+  /// displace.
+  ///
+  /// Wider than _isFlareActive on purpose. _isFlareActive goes false the
+  /// instant the flare is cancelled, but the cancel then spends five more
+  /// seconds broadcasting EMG_OFF:, and a relay starting inside that window
+  /// would replace it — so the stand-down never reaches the people whose
+  /// phones are still ringing because of us. Guarding only on _isFlareActive
+  /// would have fixed the flare and left its cancellation just as fragile.
+  bool _ownFlareHoldsRadio = false;
+
+  /// How long each relayed payload is re-broadcast for before the next
+  /// queued one (or the presence beacon) takes the slot back.
+  static const Duration _kEmgRelayWindow = Duration(seconds: 4);
+
   void _scheduleEmgRelay(String localName) {
-    // Small random jitter so every device that just heard the same
-    // broadcast doesn't key up the radio in perfect lockstep and collide.
-    final jitter = Duration(milliseconds: 300 + Random().nextInt(700));
-    Future.delayed(jitter, () async {
-      if (!mounted) return;
-      await _advertiseWithName(localName, []);
-      Future.delayed(const Duration(seconds: 4), () {
+    // Our own flare outranks relaying anyone else's. Nobody else can send
+    // ours, whereas theirs is being relayed by every other device that
+    // heard it — so giving up the slot here would take our own emergency
+    // off the air (for four seconds per relay, and silently: _isFlareActive
+    // stayed true, so the UI kept insisting the flare was live) in exchange
+    // for redundant coverage of someone else's.
+    if (_isFlareActive || _ownFlareHoldsRadio) return;
+    if (_emgRelayQueue.contains(localName)) return;
+    _emgRelayQueue.add(localName);
+    if (!_emgRelayRunning) _runEmgRelayQueue();
+  }
+
+  Future<void> _runEmgRelayQueue() async {
+    if (_emgRelayRunning) return;
+    _emgRelayRunning = true;
+    try {
+      while (_emgRelayQueue.isNotEmpty) {
+        // Small random jitter so every device that just heard the same
+        // broadcast doesn't key up the radio in perfect lockstep and collide.
+        await Future.delayed(
+            Duration(milliseconds: 300 + Random().nextInt(700)));
         if (!mounted) return;
-        BlePeripheral.stopAdvertising();
-        _advertisePresenceBeacon();
-      });
-    });
+        // Re-checked each pass, not just on enqueue: our own flare may have
+        // started while earlier entries were being relayed.
+        if (_isFlareActive || _ownFlareHoldsRadio) {
+          _emgRelayQueue.clear();
+          return;
+        }
+        final payload = _emgRelayQueue.removeAt(0);
+        try {
+          await _advertiseWithName(payload, []);
+        } catch (_) {
+          // Radio busy or momentarily unavailable — skip this payload
+          // rather than abandoning everything queued behind it.
+          continue;
+        }
+        await Future.delayed(_kEmgRelayWindow);
+        if (!mounted) return;
+      }
+    } finally {
+      _emgRelayRunning = false;
+    }
+    // Hand the slot back only once the queue is genuinely drained, and only
+    // if nothing more important claimed it meanwhile — the old code
+    // reverted unconditionally, which is how a relay that overlapped the
+    // start of our own flare could kill it outright.
+    if (!mounted || _isFlareActive || _ownFlareHoldsRadio) return;
+    await BlePeripheral.stopAdvertising();
+    await _advertisePresenceBeacon();
   }
 
   void _cancelEmergencyFlare({bool silent = false}) {
@@ -1041,10 +1203,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final sender = myUsername.length > 8
         ? myUsername.substring(0, 8)
         : myUsername;
+    // Held across the stand-down window too, not released with
+    // _isFlareActive below — see _ownFlareHoldsRadio. A relay slipping into
+    // this window would silently replace the EMG_OFF: and strand every
+    // nearby phone still ringing on our behalf.
+    _ownFlareHoldsRadio = true;
     _advertiseWithName("EMG_OFF:$sender", []);
 
     // After 5 seconds of broadcasting EMG_OFF, revert to normal HPS beacon
     Future.delayed(const Duration(seconds: 5), () {
+      _ownFlareHoldsRadio = false;
+      if (!mounted) return;
       BlePeripheral.stopAdvertising();
       _advertisePresenceBeacon();
     });
@@ -1067,6 +1236,26 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // which would start an HPS advertisement we'd immediately kill anyway.
     _flareCancelTimer?.cancel();
     _flareCancelTimer = null;
+
+    // Known up-front to be impossible on this hardware (see
+    // _bleAdvertiseSupported) — say so now rather than run the retry loop
+    // below and leave the user believing help is on its way. The retries
+    // would all "succeed" from Dart's point of view anyway; nothing would
+    // ever leave the radio.
+    if (!_bleAdvertiseSupported) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+                "⚠️ This phone's Bluetooth can't broadcast, so the flare can't be sent from here. "
+                "Ask someone nearby to send one instead."),
+            backgroundColor: Colors.red.shade900,
+            duration: const Duration(seconds: 10),
+          ),
+        );
+      }
+      return;
+    }
 
     const maxSenderLen = 8;
     const maxReasonLen = 14;
@@ -1120,6 +1309,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     }
     debugPrint("🚨 Broadcasting emergency: $advName");
 
+    _ownFlareHoldsRadio = true;
     setState(() => _isFlareActive = true);
     // Fail-open, verify-after: the alert above is already live and audible
     // on nearby devices by the time this signature has even finished
@@ -1289,10 +1479,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         if (valid) {
           if (requireAdmin) {
             await NotificationService.updateOfficialAlertVerificationStatus(
-                sender: sender, reason: reason, adminTitle: entry.adminTitle, verified: true);
+                alertKey: advName,
+                sender: sender,
+                reason: reason,
+                adminTitle: entry.adminTitle,
+                verified: true);
           } else {
             await NotificationService.updateEmergencyVerificationStatus(
-                sender: sender, reason: reason, verified: true);
+                alertKey: advName, sender: sender, reason: reason, verified: true);
           }
           return;
         }
@@ -1306,11 +1500,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       // officialdom is actively misleading in a way an unverified
       // personal report isn't.
       await NotificationService.updateOfficialAlertVerificationStatus(
-          sender: sender, reason: reason, verified: false);
+          alertKey: advName, sender: sender, reason: reason, verified: false);
       return;
     }
     await NotificationService.updateEmergencyVerificationStatus(
-        sender: sender, reason: reason, verified: false);
+        alertKey: advName, sender: sender, reason: reason, verified: false);
   }
 
   Future<void> _saveWatchState() async {
@@ -2075,10 +2269,88 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     });
   }
 
+  // ---------- Can this device actually transmit? ----------
+  //
+  // Everything Hops sends — presence, friend requests, Emergency Flare —
+  // goes out as a BLE *advertisement*, which needs the peripheral
+  // (broadcaster) role. Scanning does not: any Android 5.0+ phone can hear
+  // Hops traffic, but a meaningful number of budget/older handsets ship
+  // chipsets whose firmware supports the central role only, and on those
+  // BluetoothAdapter.isMultipleAdvertisementSupported() is false and
+  // advertising silently never happens.
+  //
+  // That asymmetry is exactly what "the flare rings on one phone and not
+  // the other" looks like from the outside, and it was completely invisible
+  // before this: BlePeripheral.startAdvertising() hands the request to an
+  // Android Handler and returns immediately, so a *successful* Dart call
+  // proves nothing. The real verdict arrives asynchronously through
+  // AdvertiseCallback.onStartFailure, which the plugin surfaces only via
+  // setAdvertisingStatusUpdateCallback — never wired up until now, so every
+  // advertising failure (unsupported hardware, Bluetooth mid-toggle,
+  // ADVERTISE_FAILED_DATA_TOO_LARGE from an over-long advertisement name)
+  // was swallowed whole. The try/catch around _advertisePresenceBeacon
+  // below can't see any of them; it only catches the request being
+  // rejected outright.
+  bool _bleAdvertiseSupported = true;
+
+  void _handleAdvertisingStatusUpdate(bool advertising, String? error) {
+    if (error == null) return;
+    debugPrint('❌ BLE advertising failed: $error');
+    // A flare that failed to go out must never keep claiming it's live —
+    // same rule _broadcastEmergencyFlare already applies to the errors it
+    // *can* see. This is the path that catches the ones it can't.
+    if (_isFlareActive) {
+      _flareCancelTimer?.cancel();
+      _flareCancelTimer = null;
+      _flareSigCycleTimer?.cancel();
+      _flareSigCycleTimer = null;
+      if (mounted) {
+        setState(() => _isFlareActive = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                "⚠️ Emergency flare did NOT go out ($error). Check Bluetooth is on, then try again."),
+            backgroundColor: Colors.red.shade900,
+            duration: const Duration(seconds: 10),
+          ),
+        );
+      }
+    }
+  }
+
   void _initializeParallelBleTransceiverEngine() async {
     if (_bleInitialized) return;
     _bleInitialized = true;
     await BlePeripheral.initialize();
+    // Registered before the first advertisement so nothing can fail
+    // unobserved in the gap.
+    BlePeripheral.setAdvertisingStatusUpdateCallback(
+        _handleAdvertisingStatusUpdate);
+    try {
+      // Throws (rather than returning false) on a device with no LE
+      // advertiser — see the plugin's own isSupported implementation.
+      _bleAdvertiseSupported = await BlePeripheral.isSupported();
+    } catch (_) {
+      _bleAdvertiseSupported = false;
+    }
+    if (!_bleAdvertiseSupported) {
+      debugPrint(
+          '⚠️ This device cannot advertise over BLE — receive-only Hops.');
+      // Told once, plainly, rather than left to be discovered as "my flare
+      // does nothing and nobody sees me on radar." Receiving still works
+      // in full, so this is a warning, not a blocking error.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                "This phone's Bluetooth can receive Hops alerts but can't broadcast them — "
+                "others won't see you on radar, and your Emergency Flare won't reach anyone."),
+            duration: Duration(seconds: 12),
+          ),
+        );
+      });
+    }
     await _ensureRotatingSeedLoaded();
     try {
       await _advertisePresenceBeacon();
@@ -2436,6 +2708,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               final reason =
               parts.length > 1 ? parts.sublist(1).join(':') : 'Emergency';
               await NotificationService.showEmergencyNotification(
+                // The full advertisement string is the alert's identity —
+                // unique per sender+reason, and already what _handledEmgNames
+                // dedups on, so two concurrent flares can never collide.
+                alertKey: name,
                 sender: sender,
                 reason: reason,
               );
@@ -2480,8 +2756,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             // EMG_OFF: would leave anyone further down the chain stuck
             // with an alarm that never gets dismissed.
             _scheduleEmgRelay(name);
-            // Dismiss the emergency notification on this device
-            await NotificationService.cancelEmergencyNotification();
+            // Dismiss ONLY this sender's flare. It used to cancel the one
+            // shared notification unconditionally, so whoever stood down
+            // first silenced everybody else's still-active alarm too —
+            // "EMG_OFF:" is 8 characters, and the trailing ':' keeps the
+            // match on a whole sender tag rather than a prefix of one.
+            await NotificationService.cancelAlertsMatching(
+                "EMG:${name.substring(8)}:");
           }
         }
 
@@ -2512,6 +2793,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               // as a personal flare. Downgraded to a hard rejection (not
               // "Unverified") if the signature/role check below fails.
               await NotificationService.showOfficialAlertNotification(
+                alertKey: name,
                 sender: sender,
                 reason: reason,
               );
@@ -2544,7 +2826,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               _handledAdmOffNames.remove(name);
             });
             _scheduleEmgRelay(name);
-            await NotificationService.cancelEmergencyNotification();
+            // Same per-sender scoping as EMG_OFF: above — "ADM_OFF:" is
+            // also exactly 8 characters.
+            await NotificationService.cancelAlertsMatching(
+                "ADM:${name.substring(8)}:");
           }
         }
       }
@@ -3182,14 +3467,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         onDeclineRequest: declineRequest,
         friendUsernames: friendUsernames,
         contactSeeds: _contactSeeds,
-        onActivateFlare: (String reason) => _broadcastEmergencyFlare(reason),
         onRescan: () {
           FlutterBluePlus.stopScan();
           _startContinuousScan();
         },
         nearbyBleCount: _nearbyBleCount,
-        autoOpenFlareDialog: _pendingFlareShortcut,
-        onAutoFlareDialogConsumed: () => _pendingFlareShortcut = false,
         isDiscoverable: _isDiscoverable,
         onSetDiscoverable: _setDiscoverable,
       ),
@@ -3727,10 +4009,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // Kept separate from the sheet's own (shadowed) `context` below — that
     // one belongs to the bottom sheet route and is mid-removal by the time
     // Navigator.pop() runs inside an onPressed callback, so pushing a new
-    // route off of it (the pairing-code dialog, the QR scanner) was racing
-    // the sheet's own close animation. Pushing off this outer, always-
-    // mounted screen context instead is what actually fixed the pairing
-    // code dialog rendering as a blank dimmed screen.
+    // route off of it (the pairing-code dialog) was racing the sheet's own
+    // close animation. Pushing off this outer, always-mounted screen
+    // context instead is what actually fixed the pairing code dialog
+    // rendering as a blank dimmed screen.
     final screenContext = context;
     showModalBottomSheet(
       context: context,
@@ -3823,86 +4105,29 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     )).then((_) => _refreshContactsTrayList());
   }
 
-  // Re-checked after every build (cheap: only calls setState when the
-  // answer actually changed) rather than solely from the ScrollController's
-  // own listener — the listener alone never fires until the user scrolls
-  // once, so a freshly-opened tab with more content below it would show no
-  // hint at all until the first scroll gesture, which is backwards for a
-  // hint whose whole job is inviting that first scroll.
-  void _updateFeaturesScrollHint() {
-    if (!_featuresScrollController.hasClients || !mounted) return;
-    final pos = _featuresScrollController.position;
-    final canScrollMore = pos.maxScrollExtent - pos.pixels > 24;
-    if (canScrollMore != _featuresCanScrollMore) {
-      setState(() => _featuresCanScrollMore = canScrollMore);
-    }
-  }
-
   Widget _buildFeaturesTab() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _updateFeaturesScrollHint());
-    final colors = Theme.of(context).colorScheme;
-    final theme = Theme.of(context);
     return Scaffold(
       appBar: _buildSharedCustomAppBar(
         "Features",
         showMeta: false,
         metaReplacement: _buildShopButton,
       ),
-      body: HopsBackgroundPattern(child: Stack(
-        children: [
-          NotificationListener<ScrollNotification>(
-            onNotification: (_) {
-              _updateFeaturesScrollHint();
-              return false;
-            },
-            child: ListView.builder(
-              controller: _featuresScrollController,
-              // Bottom clearance for the floating nav pill — see the
-              // identical fix on the Contacts tab above. Without it, the
-              // last card or two stays hidden behind the pill even once
-              // fully scrolled, which is what made expanding the first few
-              // look like "nothing scrolls."
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, kFloatingNavClearance),
-              itemCount: allFeatures.length,
-              itemBuilder: (context, index) {
-                final feature = allFeatures[index];
-                final isEnabled = enabledFeatureIds.contains(feature.id);
-                return _buildFeatureCard(feature, isEnabled);
-              },
-            ),
-          ),
-          // "There's more below" — fades out once scrolled within 24px of
-          // the bottom, and never shows at all if the catalog is short
-          // enough to fit without scrolling in the first place.
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: kFloatingNavClearance - 24,
-            child: IgnorePointer(
-              child: Center(
-                child: AnimatedOpacity(
-                  opacity: _featuresCanScrollMore ? 1 : 0,
-                  duration: const Duration(milliseconds: 200),
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: theme.scaffoldBackgroundColor,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.15),
-                          blurRadius: 6,
-                        ),
-                      ],
-                    ),
-                    child: Icon(Icons.keyboard_arrow_down, color: colors.primary, size: 22),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      )),
+      body: HopsBackgroundPattern(
+        child: ListView.builder(
+          // Bottom clearance for the floating nav pill — see the
+          // identical fix on the Contacts tab above. Without it, the
+          // last card or two stays hidden behind the pill even once
+          // fully scrolled, which is what made expanding the first few
+          // look like "nothing scrolls."
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, kFloatingNavClearance),
+          itemCount: allFeatures.length,
+          itemBuilder: (context, index) {
+            final feature = allFeatures[index];
+            final isEnabled = enabledFeatureIds.contains(feature.id);
+            return _buildFeatureCard(feature, isEnabled);
+          },
+        ),
+      ),
     );
   }
 

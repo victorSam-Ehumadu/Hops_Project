@@ -46,6 +46,18 @@ class CarrotWallet {
 
   bool _loaded = false;
 
+  /// Test-only. [load] is a one-shot guarded by [_loaded], and this is a
+  /// process-wide singleton, so without a way to clear that guard every
+  /// test after the first inherits the previous one's balance and owned
+  /// set — making results depend on test order. Resets the in-memory state
+  /// only; the caller is expected to have reset SharedPreferences too.
+  @visibleForTesting
+  void resetForTest() {
+    _loaded = false;
+    balance.value = 0;
+    owned.value = <String>{};
+  }
+
   Future<void> load() async {
     if (_loaded) return;
     _loaded = true;

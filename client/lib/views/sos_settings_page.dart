@@ -73,9 +73,9 @@ class _SosSettingsPageState extends State<SosSettingsPage> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    "Either one opens the exact same confirm-then-reason dialog the Emergency Flare "
-                    "button already uses on Home — neither ever sends an alert with zero confirmation, "
-                    "so an accidental tap or a snug pocket won't trigger a false alarm.",
+                    "Both open the same confirm-then-reason dialog, right over whatever screen you're "
+                    "already on — neither ever sends an alert with zero confirmation, so an accidental "
+                    "tap or a snug pocket won't trigger a false alarm.",
                     style: TextStyle(fontSize: 12.5, height: 1.5, color: colors.onSurface.withValues(alpha: 0.7)),
                   ),
                 ],
@@ -143,7 +143,7 @@ class _SosSettingsPageState extends State<SosSettingsPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    "While Hops is already open (any screen), hold the Volume Down button for 3 "
+                    "While Hops is already open (any screen), hold the Volume Down button for 5 "
                     "seconds. Nothing else needed to set up — this one always works, but only while "
                     "the app is on screen, which is why the tile above is the main option.",
                     style: TextStyle(fontSize: 12.5, height: 1.5, color: colors.onSurface.withValues(alpha: 0.7)),

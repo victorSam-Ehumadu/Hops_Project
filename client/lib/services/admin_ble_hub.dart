@@ -173,10 +173,16 @@ class AdminBleHub {
           );
           changed = true;
           // Fires once per newly-seen alert, not per scan result for it.
+          // Keyed by the full advertisement string, same as the student app
+          // — the hub's own `key` is sender-only (it's what dedups repeat
+          // sightings of one alert), which is too coarse to identify a
+          // notification.
           if (isOfficial) {
-            NotificationService.showOfficialAlertNotification(sender: sender, reason: reason);
+            NotificationService.showOfficialAlertNotification(
+                alertKey: name, sender: sender, reason: reason);
           } else {
-            NotificationService.showEmergencyNotification(sender: sender, reason: reason);
+            NotificationService.showEmergencyNotification(
+                alertKey: name, sender: sender, reason: reason);
           }
         } else {
           existing.lastSeen = DateTime.now();
@@ -209,10 +215,12 @@ class AdminBleHub {
         final key = "${isOfficial ? 'ADM' : 'EMG'}:${name.substring(8)}";
         if (alerts.remove(key) != null) {
           changed = true;
-          // Shared fixed-id notification — only correct to dismiss if
-          // nothing else is still live, otherwise this would silence a
-          // second, still-active alert.
-          if (alerts.isEmpty) NotificationService.cancelEmergencyNotification();
+          // Notifications are per-alert now, so this cancels exactly the
+          // one that stood down. The old workaround — only dismiss when
+          // nothing else was live — was forced by the single shared id, and
+          // had the opposite failure: with a second alert still up, the
+          // stood-down one's notification was left ringing indefinitely.
+          NotificationService.cancelAlertsMatching("$key:");
         }
       }
     }
@@ -240,13 +248,17 @@ class AdminBleHub {
           }
           if (requireAdmin) {
             NotificationService.updateOfficialAlertVerificationStatus(
+                alertKey: advName,
                 sender: sender,
                 reason: alert?.reason ?? '',
                 adminTitle: entry.adminTitle,
                 verified: true);
           } else {
             NotificationService.updateEmergencyVerificationStatus(
-                sender: sender, reason: alert?.reason ?? '', verified: true);
+                alertKey: advName,
+                sender: sender,
+                reason: alert?.reason ?? '',
+                verified: true);
           }
           return;
         }
@@ -265,10 +277,16 @@ class AdminBleHub {
     // an active spoofing attempt and its alarm is cancelled outright.
     if (requireAdmin) {
       NotificationService.updateOfficialAlertVerificationStatus(
-          sender: sender, reason: alert?.reason ?? '', verified: false);
+          alertKey: advName,
+          sender: sender,
+          reason: alert?.reason ?? '',
+          verified: false);
     } else {
       NotificationService.updateEmergencyVerificationStatus(
-          sender: sender, reason: alert?.reason ?? '', verified: false);
+          alertKey: advName,
+          sender: sender,
+          reason: alert?.reason ?? '',
+          verified: false);
     }
   }
 

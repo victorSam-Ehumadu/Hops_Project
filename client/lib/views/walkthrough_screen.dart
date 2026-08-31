@@ -24,8 +24,8 @@ class _WalkthroughScreenState extends State<WalkthroughScreen> {
     {
       'icon': Icons.warning_amber_rounded,
       'title': 'Emergency Flare',
-      'desc': 'Long‑press the red button to alert nearby users in an emergency. They will hear a loud alarm even if their phone is on silent.',
-      'detail': 'The alert lasts 30 seconds and every nearby device that hears it relays it onward for a few more seconds, so it can reach people further away than your own Bluetooth range. Hit Cancel right away if it was triggered by mistake.',
+      'desc': 'Hold Volume Down for 5 seconds to alert nearby users in an emergency. They will hear a loud alarm even if their phone is on silent.',
+      'detail': 'It works from any screen in Hops — you never have to go looking for a button. You can also add a Hops SOS tile to your Quick Settings (see Settings → Silent SOS) to trigger it without unlocking. Either way it asks you to confirm first. The alert lasts a minute and every nearby device that hears it relays it onward for a few more seconds, so it can reach people further away than your own Bluetooth range. Hit Cancel right away if it was triggered by mistake.',
     },
     {
       'icon': Icons.chat_bubble_outline,

@@ -56,6 +56,16 @@ class _HopsSharePageState extends State<HopsSharePage> {
   int? _sendingPayloadId;
   // Invalidated by _cancelSend — see its use in _sendPickedFile.
   Object? _sendToken;
+  // Mirror of _sendingPayloadId/_sendProgress for the INCOMING direction.
+  // Nearby Connections reports IN_PROGRESS updates for a file the peer is
+  // sending us in exactly the same way as one we're sending, so the
+  // receiving end can show a real progress bar too — instead of the screen
+  // sitting silent until a "Received X" snackbar suddenly appears at the
+  // end, which for a large file over Bluetooth is indistinguishable from
+  // nothing happening at all.
+  int? _receivingPayloadId;
+  double? _receiveProgress;
+  String? _receivingFileName;
   bool _hasPermissions = false;
   bool _checkingPermissions = true;
 
@@ -149,55 +159,121 @@ class _HopsSharePageState extends State<HopsSharePage> {
       widget.myUsername,
       Strategy.P2P_CLUSTER,
       serviceId: _serviceId,           // ← was missing; used the package default before
-      onConnectionInitiated: (id, info) {
-        // info.endpointName is the OTHER side's own nickname, i.e. their
-        // Hops username — this is the only place that name is available
-        // on the accepting side, so it has to be captured here rather
-        // than derived from the endpointId later.
-        _connectedPeerName = info.endpointName;
-        Nearby().acceptConnection(
-          id,
-          onPayLoadRecieved: (endpointId, payload) =>
-              _onPayloadReceived(endpointId, payload),
-          onPayloadTransferUpdate: _onTransferUpdate,
-        );
-        setState(() {
-          _connectedEndpointId = id;
-          _isConnected = true;
-        });
-      },
-      onConnectionResult: (id, status) {
-        setState(() {
-          if (status == Status.CONNECTED) {
-            _connectedEndpointId = id;
-            _isConnected = true;
-            // Radio housekeeping — advertising/discovery are no longer
-            // needed once the connection is up, and leaving them running
-            // competes with it for the same BLE radio (this is also part
-            // of what was making "Connect" slow — see _connectToDevice's
-            // matching comment). hops_chat_service.dart established this
-            // exact pattern first.
-            Nearby().stopAdvertising();
-            Nearby().stopDiscovery();
-          } else {
-            _connectedEndpointId = null;
-            _isConnected = false;
-            _connectedPeerName = null;
-          }
-        });
-      },
-      onDisconnected: (id) {
-        _incoming.clear();
-        setState(() {
-          _connectedEndpointId = null;
-          _isConnected = false;
-          _connectedPeerName = null;
-        });
-        // Bring advertising+discovery back so the screen is usable again
-        // instead of going quietly dead after a disconnect.
-        _startNearbyDiscoveryAndAdvertising();
-      },
+      onConnectionInitiated: _handleConnectionInitiated,
+      onConnectionResult: _handleConnectionResult,
+      onDisconnected: _handleDisconnected,
     );
+  }
+
+  // ── Connection handshake (shared by both directions) ───────────────────────
+  // Nearby Connections registers these three callbacks separately for the
+  // advertiser (startAdvertising) and the discoverer (requestConnection),
+  // and BOTH sets fire on a device doing both at once — which under
+  // P2P_CLUSTER we always are. They used to be two near-duplicate copies
+  // with subtly different behaviour, and that is what broke a simultaneous
+  // "Connect" tap on both phones:
+  //
+  //   1. Each device received onConnectionInitiated TWICE for the same peer
+  //      — once from its own outgoing request, once from the peer's
+  //      incoming one — and called acceptConnection both times. The second
+  //      accept is an out-of-order call on an endpoint that has already
+  //      been accepted; it fails and takes the handshake down with it, so
+  //      NEITHER side ever reached the file-sending screen.
+  //   2. acceptConnection also overwrites the plugin's single payload-
+  //      callback slot, so even a surviving double-accept would leave the
+  //      transfer callbacks wired to the wrong closure.
+  //   3. requestConnection's Future was neither awaited nor caught, so the
+  //      PlatformException thrown by whichever side loses that race went
+  //      nowhere — the spinner just sat there until the 20s timeout.
+  //   4. The advertiser's copy set _isConnected at *accept* time instead of
+  //      waiting for the result, so a handshake that later failed could
+  //      strand a phone on a connected-looking screen with no connection
+  //      behind it.
+  //
+  // Accepting each endpoint at most once collapses a mutual tap into the
+  // single connection Nearby was always going to give us anyway.
+
+  /// Endpoints acceptConnection has already been called for. Cleared on
+  /// disconnect and teardown, so a genuine later reconnect to the same peer
+  /// isn't mistaken for a duplicate.
+  final Set<String> _acceptedEndpoints = {};
+
+  void _handleConnectionInitiated(String id, ConnectionInfo info) {
+    // info.endpointName is the OTHER side's own nickname, i.e. their Hops
+    // username. On an incoming request this is the only place that name is
+    // available at all, so it has to be captured here rather than derived
+    // from the endpointId later.
+    _connectedPeerName = info.endpointName;
+    // A handshake starting is already proof the peer is answering, so the
+    // "peer never responded" watchdog has done its job.
+    _connectTimeout?.cancel();
+    if (!_acceptedEndpoints.add(id)) return; // already accepted this peer
+    Nearby()
+        .acceptConnection(
+      id,
+      onPayLoadRecieved: _onPayloadReceived,
+      onPayloadTransferUpdate: _onTransferUpdate,
+    )
+        .catchError((_) {
+      // Roll the guard back so a retry isn't permanently blocked by a
+      // single failed accept.
+      _acceptedEndpoints.remove(id);
+      return false;
+    });
+  }
+
+  void _handleConnectionResult(String id, Status status) {
+    _connectTimeout?.cancel();
+    if (!mounted) return;
+    if (status == Status.CONNECTED) {
+      setState(() {
+        _connectedEndpointId = id;
+        _isConnected = true;
+        _connectingEndpointId = null;
+      });
+      // Radio housekeeping — advertising/discovery are no longer needed
+      // once the connection is up, and leaving them running competes with
+      // it for the same radio (part of what was making "Connect" slow).
+      // hops_chat_service.dart established this exact pattern first.
+      Nearby().stopAdvertising();
+      Nearby().stopDiscovery();
+      return;
+    }
+    if (_isConnected && _connectedEndpointId == id) {
+      // Already connected to this peer through the other direction of a
+      // simultaneous request — this is the losing half of that race
+      // reporting its own failure, NOT the live connection going away
+      // (that arrives via onDisconnected). Tearing the session down here
+      // would kill a perfectly good connection.
+      setState(() => _connectingEndpointId = null);
+      return;
+    }
+    _acceptedEndpoints.remove(id);
+    setState(() {
+      _connectedEndpointId = null;
+      _isConnected = false;
+      _connectedPeerName = null;
+      _connectingEndpointId = null;
+    });
+    _startDiscovery(); // didn't connect — keep the device list alive
+  }
+
+  void _handleDisconnected(String id) {
+    _incoming.clear();
+    _acceptedEndpoints.remove(id);
+    if (!mounted) return;
+    setState(() {
+      _connectedEndpointId = null;
+      _isConnected = false;
+      _connectedPeerName = null;
+      _connectingEndpointId = null;
+      _receivingPayloadId = null;
+      _receiveProgress = null;
+      _receivingFileName = null;
+    });
+    // Bring advertising+discovery back so the screen is usable again
+    // instead of going quietly dead after a disconnect.
+    _startNearbyDiscoveryAndAdvertising();
   }
 
   void _startDiscovery() {
@@ -222,6 +298,7 @@ class _HopsSharePageState extends State<HopsSharePage> {
     Nearby().stopDiscovery();
     Nearby().stopAllEndpoints();
     _incoming.clear();
+    _acceptedEndpoints.clear();
   }
 
   Future<void> _connectToDevice(String endpointId) async {
@@ -248,7 +325,13 @@ class _HopsSharePageState extends State<HopsSharePage> {
     // way out except leaving the screen.
     _connectTimeout?.cancel();
     _connectTimeout = Timer(const Duration(seconds: 20), () {
-      if (!mounted || _connectingEndpointId != endpointId) return;
+      // The _isConnected guard is new: with both phones tapping Connect at
+      // once, the connection can already be up via the peer's incoming
+      // request by the time this fires, and the old version would then
+      // wipe _connectedPeerName and claim a failure on a live session.
+      if (!mounted || _isConnected || _connectingEndpointId != endpointId) {
+        return;
+      }
       setState(() {
         _connectingEndpointId = null;
         _connectedPeerName = null;
@@ -259,46 +342,38 @@ class _HopsSharePageState extends State<HopsSharePage> {
       );
     });
 
-    Nearby().requestConnection(
-      widget.myUsername,
-      endpointId,
-      onConnectionInitiated: (id, info) {
-        _connectedPeerName = info.endpointName;
-        Nearby().acceptConnection(
-          id,
-          onPayLoadRecieved: (endpointId, payload) =>
-              _onPayloadReceived(endpointId, payload),
-          onPayloadTransferUpdate: _onTransferUpdate,
-        );
-      },
-      onConnectionResult: (id, status) {
-        _connectTimeout?.cancel();
-        if (status == Status.CONNECTED) {
-          // Radio housekeeping — see _startAdvertising's matching comment.
-          Nearby().stopAdvertising();
-          Nearby().stopDiscovery();
-          setState(() {
-            _connectedEndpointId = id;
-            _isConnected = true;
-            _connectingEndpointId = null;
-          });
-        } else {
-          _connectedPeerName = null;
-          setState(() => _connectingEndpointId = null);
-          _startDiscovery(); // didn't connect — keep the device list alive
-        }
-      },
-      onDisconnected: (id) {
-        _incoming.clear();
-        setState(() {
-          _connectedEndpointId = null;
-          _isConnected = false;
-          _connectedPeerName = null;
-          _connectingEndpointId = null;
-        });
-        _startNearbyDiscoveryAndAdvertising();
-      },
-    );
+    // Awaited and caught, unlike before. When both phones tap Connect at
+    // the same moment, one of the two requests necessarily loses the race
+    // and throws (ALREADY_CONNECTED_TO_ENDPOINT / OUT_OF_ORDER_API_CALL);
+    // left uncaught that became an unhandled async error, and the spinner
+    // ran all the way to the 20-second timeout even when the connection
+    // had in fact succeeded through the other direction. Losing that race
+    // is not a failure — the shared handlers are already bringing the same
+    // connection up — so this only reports a problem if nothing connected.
+    try {
+      await Nearby().requestConnection(
+        widget.myUsername,
+        endpointId,
+        onConnectionInitiated: _handleConnectionInitiated,
+        onConnectionResult: _handleConnectionResult,
+        onDisconnected: _handleDisconnected,
+      );
+    } catch (_) {
+      if (!mounted ||
+          _isConnected ||
+          _acceptedEndpoints.contains(endpointId)) {
+        return; // the other direction has it in hand
+      }
+      _connectTimeout?.cancel();
+      setState(() {
+        _connectingEndpointId = null;
+        _connectedPeerName = null;
+      });
+      _startDiscovery();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Couldn't connect to ${device.name} — try again.")),
+      );
+    }
   }
 
   // ── Payload handling ───────────────────────────────────────────────────────
@@ -605,13 +680,52 @@ class _HopsSharePageState extends State<HopsSharePage> {
 
     // Otherwise this is progress on a FILE payload the peer is sending us —
     // the content at entry.filePath/uri isn't safe to read until SUCCESS.
-    if (update.status == PayloadStatus.SUCCESS) {
-      final entry = _incoming[update.id];
-      if (entry != null) {
-        entry.transferDone = true;
-        unawaited(_maybeFinishIncoming(update.id));
-      }
+    // Anything with no _incoming entry (notably the small metadata BYTES
+    // payload that travels alongside each file) isn't a transfer the user
+    // needs to watch, so it's ignored rather than driving the bar.
+    final entry = _incoming[update.id];
+    if (entry == null) return;
+
+    if (update.status == PayloadStatus.IN_PROGRESS) {
+      if (!mounted) return;
+      setState(() {
+        _receivingPayloadId = update.id;
+        // May still be null on the first few updates — the metadata
+        // payload carrying the name can arrive after the bytes start
+        // flowing. The UI falls back to a generic label until it lands.
+        _receivingFileName = entry.fileName;
+        _receiveProgress = update.totalBytes > 0
+            ? update.bytesTransferred / update.totalBytes
+            : null;
+      });
+      return;
     }
+
+    if (update.status == PayloadStatus.SUCCESS) {
+      entry.transferDone = true;
+      if (mounted) setState(_clearReceiveProgress);
+      unawaited(_maybeFinishIncoming(update.id));
+      return;
+    }
+
+    // FAILURE / CANCELED — drop the half-received transfer instead of
+    // leaving both a stuck progress bar and an _incoming entry that can
+    // never complete.
+    _incoming.remove(update.id);
+    if (!mounted) return;
+    setState(_clearReceiveProgress);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("Incoming ${entry.fileName ?? 'file'} didn't finish."),
+      ),
+    );
+  }
+
+  /// Call inside setState — resets the incoming-transfer indicator.
+  void _clearReceiveProgress() {
+    _receivingPayloadId = null;
+    _receiveProgress = null;
+    _receivingFileName = null;
   }
 
   void _sendTextNote() {
@@ -993,6 +1107,62 @@ class _HopsSharePageState extends State<HopsSharePage> {
               ],
             ),
           ),
+          // Receiving side of a transfer. Only rendered while one is
+          // actually in flight — there's nothing useful to show otherwise,
+          // and a permanently-present empty bar would just be noise.
+          if (_receivingPayloadId != null) ...[
+            const SizedBox(height: 16),
+            HopsCard(
+              radius: 20,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.download_outlined, color: colors.primary, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          "Receiving ${_receivingFileName ?? 'a file'}",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                              color: colors.primary),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(100),
+                    child: LinearProgressIndicator(
+                      // Same fallback as the send bar: an indeterminate bar
+                      // rather than one frozen at a misleading 0% while the
+                      // first real update is still on its way.
+                      value: (_receiveProgress != null && _receiveProgress! > 0)
+                          ? _receiveProgress
+                          : null,
+                      minHeight: 6,
+                      backgroundColor: colors.primary.withValues(alpha: 0.12),
+                      color: colors.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _receiveProgress != null
+                        ? "${(_receiveProgress! * 100).toStringAsFixed(0)}% received"
+                        : "Starting transfer…",
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: colors.onSurface.withValues(alpha: 0.5)),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           HopsCard(
             radius: 20,

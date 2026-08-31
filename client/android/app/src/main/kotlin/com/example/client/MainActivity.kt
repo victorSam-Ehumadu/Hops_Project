@@ -32,7 +32,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         lateinit var context: Context
         private const val REQUEST_DISCOVERABLE = 4201
-        private const val VOLUME_HOLD_SOS_MS = 3000L
+        private const val VOLUME_HOLD_SOS_MS = 5000L
     }
 
     private val activeServices = mutableMapOf<String, RfcommChatService>()
@@ -81,7 +81,7 @@ class MainActivity : FlutterActivity() {
     // In-app fallback for when Hops is already open on screen (the Quick
     // Settings tile above is the primary path — this one only ever fires
     // while this Activity itself is receiving key events, i.e. Hops is
-    // foregrounded). Holding volume-down for 3 continuous seconds fires
+    // foregrounded). Holding volume-down for 5 continuous seconds fires
     // the same sosTriggered signal the tile does; a normal short press
     // still adjusts system volume as always, since this never consumes
     // the event.
@@ -93,8 +93,8 @@ class MainActivity : FlutterActivity() {
     // volume keys don't auto-repeat that way on Android — a hold produces
     // exactly one ACTION_DOWN and, on release, one ACTION_UP, with nothing
     // in between. Fixed with an actual timer instead: ACTION_DOWN schedules
-    // a delayed callback 3s out; ACTION_UP (release before the hold
-    // completes) cancels it. Still not testable from this environment —
+    // a delayed callback VOLUME_HOLD_SOS_MS out; ACTION_UP (release before
+    // the hold completes) cancels it. Still not testable from this environment —
     // some OEM Android skins intercept volume keys before an app's
     // dispatchKeyEvent ever sees them, so this needs verifying on the
     // actual target hardware.
