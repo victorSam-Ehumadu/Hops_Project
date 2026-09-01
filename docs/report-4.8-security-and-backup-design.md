@@ -182,6 +182,31 @@ recorded here because the reasoning is not evident from the commands alone.
    is scoped to that folder rather than a blanket `*.sql`, which would also exclude the nineteen
    migration files.
 
+> **Incident, 1 September 2026.** This rule was not in force everywhere when the first dump was
+> taken. The `backups/` entry had been added on a feature branch and had not yet reached `main`,
+> so a commit to `main` that same day added the dump to the repository — password hashes, salts,
+> session tokens, email addresses and the full moderation log, for all nine accounts.
+>
+> It was found the same day, while merging that branch into `main`. The exposure was bounded: the
+> repository is private, so the file was never publicly reachable, and an audit of the full history
+> confirmed nothing else sensitive had ever been committed — no `.env`, no keys, no other dumps.
+>
+> Handling: the file was untracked in the merge commit, which also carried the `backups/` rule onto
+> `main` so the same mistake cannot recur. Every session token in the dump was then invalidated by
+> expiring `token_expires_at` across `profiles`, making the captured credentials useless. The
+> password hashes were left in place — they are salted, the repository is private, and forcing nine
+> resets buys little against an attacker who would already need repository access.
+>
+> The blob still exists in history at that commit. Purging it would require rewriting history and
+> force-pushing a shared branch, which would break every other clone; that cost was judged higher
+> than the residual risk while the repository stays private. **If the repository is ever made
+> public, this must be revisited: the history would need rewriting and every account's password
+> reset.**
+>
+> This is recorded rather than quietly corrected because the failure is instructive. A `.gitignore`
+> rule protects only the branches that have it. A control added on one branch is not a control
+> until it is merged.
+
 ### Recovery objectives
 
 | Objective | Target | Basis |
