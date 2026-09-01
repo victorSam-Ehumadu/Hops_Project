@@ -10,6 +10,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   and moderation only — see "Identity, auth & moderation".
 - `website/` — a static marketing/download site (plain HTML/CSS). No build step, unrelated to the
   app.
+- `scripts/` — PowerShell operational scripts (currently database backup/restore; see "Database
+  backups" below). Not part of any build.
+- `docs/` — academic project documentation: the module guidelines PDF and report sections written
+  against them (`report-4.8-security-and-backup-design.md`). Report prose, not developer docs —
+  this file remains the developer guide.
+- `backups/` — gitignored `pg_dump` output. Never commit anything from here.
 
 ## Commands
 
@@ -25,10 +31,32 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-Note: `test/widget_test.dart` is still the unmodified default Flutter counter-app test (it
-references a nonexistent `MyApp` widget) — `flutter test` currently fails out of the box. Fix or
-replace this test before relying on `flutter test` for verification; don't assume test failures
-here indicate a regression you caused. `flutter analyze` is the real verification gate.
+`flutter test` passes: **104 tests**, all green. The default counter-app `widget_test.dart` that
+used to break the run has been deleted. Treat a failure as a real regression.
+
+What is and isn't covered, so you know what a green run actually proves:
+
+- `test/services/hops_constants_test.dart` (57) — the advertisement wire format: budget
+  arithmetic, community/DM chunk encode/decode round trips, `splitCommunityMessage` (including
+  never splitting a multi-byte character across chunks), rotating presence tokens and their
+  window-rollover tolerance, flare signature chunking reassembled at full RSA-2048 length. This is
+  the highest-value file in the suite — it pins the tightest constraint in the codebase and is
+  pure Dart with no plugins.
+- `test/utils/password_policy_test.dart` (24) — username/email/password rules and strength
+  scoring. One test **pins a known bug rather than asserting correctness**: the weak-password
+  blocklist is unreachable because every entry fails a character-class rule first, so
+  `Password123!` is currently accepted. Read that test's comment before "fixing" it.
+- `test/services/carrot_wallet_test.dart` (13) — balance, purchases, and the
+  `debugUnlimitedCarrots` flag. Reads the flag through a function call, not directly, so both
+  branches stay live and the tests survive the flag being flipped for launch.
+- `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
+
+Not covered, and the obvious next target: `database_helper.dart`. It calls
+`getApplicationDocumentsDirectory()`, so testing it needs path_provider channel mocking plus
+`sqflite_common_ffi` and a native sqlite3 on Windows. Nothing BLE, RFCOMM or Nearby is covered —
+those need two physical devices, and no test suite will change that.
+
+`flutter analyze` is still the primary gate for anything radio-related.
 
 `flutter analyze lib/` currently reports 3 pre-existing infos (two `anonKey` deprecations in the
 two entry points, one `constant_identifier_names` on `HOPS_SERVICE_UUID`). Treat that as the
@@ -266,9 +294,57 @@ Sender tags are truncated to 8 characters on the wire, so two people whose usern
 first 8 characters can still cancel each other's alerts. That's inherent to the wire format and
 can't be fixed in the notification layer.
 
+## Database backups
+
+The Supabase database is the only state that doesn't live on a device, so it's the only thing
+that needs backing up. Two PowerShell scripts, run from the repo root:
+
+```
+powershell -ExecutionPolicy Bypass -File .\scripts\backup-db.ps1      # take a dump
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-backup.ps1  # restore it locally to prove it works
+```
+
+`-ExecutionPolicy Bypass` is required — the machine default is Restricted. It scopes to that one
+invocation.
+
+Things that are non-obvious and cost time to rediscover:
+
+- **`pg_dump` is not on PATH.** The EDB installer doesn't add its `bin` directory, so the command
+  doesn't exist after a successful install. Both scripts resolve the binary themselves out of
+  `C:\Program Files\PostgreSQL\<ver>\bin`, highest major version first.
+- **Use the Session pooler, not Direct connection, and never the Transaction pooler.** The direct
+  host publishes an **AAAA record only** — on an IPv4 network it fails with "could not translate
+  host name", which looks like a typo and isn't. The transaction pooler can hand `pg_dump` a
+  different backend mid-dump, breaking the single repeatable-read snapshot it relies on and
+  producing an inconsistent file. Session pooler is port 5432, user `postgres.<project-ref>`.
+- **The connection URI is read via `Read-Host`, never passed as an argument.** PowerShell writes
+  every typed command to `ConsoleHost_history.txt` in plaintext permanently, and that URI carries
+  the database password. Don't "simplify" this into a parameter.
+- **Verify the completion marker across the last ~10 lines, not the last 3.** `pg_dump` 17.6+
+  emits a trailing `\unrestrict <token>` line *after* `-- PostgreSQL database dump complete`, so a
+  narrow tail window misses the marker on a perfectly good dump. Also test with `-match`, not
+  `-notmatch`: against an array `-notmatch` returns the non-matching *elements*, which is truthy
+  whenever any single line differs.
+- **`backups/` is gitignored**, deliberately as a folder rather than a `*.sql` rule — the latter
+  would also swallow `supabase/migrations/`. A dump holds every row in the cloud database
+  including password hashes and the full moderation log.
+
+Current shape of the backend, useful for sanity-checking a dump: 8 tables, all with RLS enabled
+and **zero policies** (deny-all by design — everything goes through 65 `SECURITY DEFINER`
+functions), 74 `REVOKE`s, 61 `GRANT EXECUTE`s. If a dump comes back with policies in it, something
+changed.
+
+The reasoning behind all of this is written up for the report in
+`docs/report-4.8-security-and-backup-design.md`; keep the two in sync if the procedure changes.
+
 ## Working notes
 
 - Verify with `flutter analyze` (from `client/`), against the 3-info baseline above.
+- **Keep this file current as part of the change, not afterwards.** When a change alters the
+  repository layout, the verification story (test counts, the analyze baseline), a wire-format
+  constraint, or an operational procedure, update the relevant section here in the same commit.
+  The sections most likely to go stale are Commands (test counts and the analyze baseline) and
+  Database backups.
 - Native Kotlin changes (`MainActivity.kt`, `RfcommChatService.kt`, `HopsSosTileService.kt`) need a
   full rebuild/reinstall — hot reload and hot restart won't pick them up. Mixin/class-shape changes
   in Dart need a hot *restart*, not a reload.
