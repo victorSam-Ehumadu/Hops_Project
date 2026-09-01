@@ -224,9 +224,14 @@ and every row returns.
 | Rows in dump | 67 |
 | Functions in dump | 40 |
 | Indexes in dump | 8 |
-| Restore tested on | *(pending — record the date `verify-backup.ps1` is run)* |
-| Rows recovered | *(pending)* |
-| Outcome | *(pending)* |
+| Restore tested on | 1 September 2026 |
+| Restored into | Local PostgreSQL 17.11, scratch database `hops_restore_test` |
+| Tables recovered | 8 of 8 |
+| Rows recovered | 67 of 67 |
+| Outcome | **Verified** — restore completed and the scratch database was dropped |
+
+The demonstration procedure for this, including what to do if the venue has no
+network, is in `backup-demo-runbook.md`.
 
 Row counts captured in the verified dump:
 

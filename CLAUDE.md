@@ -300,12 +300,18 @@ The Supabase database is the only state that doesn't live on a device, so it's t
 that needs backing up. Two PowerShell scripts, run from the repo root:
 
 ```
-powershell -ExecutionPolicy Bypass -File .\scripts\backup-db.ps1      # take a dump
-powershell -ExecutionPolicy Bypass -File .\scripts\verify-backup.ps1  # restore it locally to prove it works
+powershell -ExecutionPolicy Bypass -File .\scripts\backup-db.ps1           # take a dump
+powershell -ExecutionPolicy Bypass -File .\scripts\backup-db.ps1 -Masked   # same, URI input hidden (projector)
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-backup.ps1       # restore it locally to prove it works
+powershell -ExecutionPolicy Bypass -File .\scripts\reset-local-pg-password.ps1   # ELEVATED; forgot the local postgres password
 ```
 
 `-ExecutionPolicy Bypass` is required — the machine default is Restricted. It scopes to that one
 invocation.
+
+Last verified restore: **1 Sep 2026**, 8/8 tables and 67/67 rows into a local scratch database.
+`verify-backup.ps1` never contacts the cloud database and needs no network, so it is safe to run
+anywhere — including as a live demonstration (see `docs/backup-demo-runbook.md`).
 
 Things that are non-obvious and cost time to rediscover:
 
@@ -319,7 +325,14 @@ Things that are non-obvious and cost time to rediscover:
   producing an inconsistent file. Session pooler is port 5432, user `postgres.<project-ref>`.
 - **The connection URI is read via `Read-Host`, never passed as an argument.** PowerShell writes
   every typed command to `ConsoleHost_history.txt` in plaintext permanently, and that URI carries
-  the database password. Don't "simplify" this into a parameter.
+  the database password. Don't "simplify" this into a parameter. The default prompt *echoes* what
+  is pasted, which is useful for diagnosing a bad paste but wrong on a projector — hence `-Masked`.
+- **Don't set `$ErrorActionPreference = "Stop"` in a script that redirects a native program's
+  stderr.** Windows PowerShell 5.1 wraps each stderr line in an ErrorRecord (`NativeCommandError`),
+  so under `Stop` a harmless `NOTICE: database does not exist, skipping` from `dropdb --if-exists`
+  becomes a *terminating* error and aborts the run before the next command. `verify-backup.ps1`
+  uses `Continue` and checks `$LASTEXITCODE` explicitly; `reset-local-pg-password.ps1` keeps `Stop`
+  (it guards the `pg_hba.conf` copy) and scopes `Continue` around its one redirected call.
 - **Verify the completion marker across the last ~10 lines, not the last 3.** `pg_dump` 17.6+
   emits a trailing `\unrestrict <token>` line *after* `-- PostgreSQL database dump complete`, so a
   narrow tail window misses the marker on a perfectly good dump. Also test with `-match`, not

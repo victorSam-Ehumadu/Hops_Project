@@ -24,7 +24,12 @@ param(
     [string]$TestDb = "hops_restore_test"
 )
 
-$ErrorActionPreference = "Stop"
+# Deliberately NOT "Stop". In Windows PowerShell 5.1, redirecting a native
+# executable's stderr wraps each line in an ErrorRecord (NativeCommandError),
+# so an entirely benign message - dropdb reporting "database does not exist,
+# skipping" - becomes a terminating error under Stop and aborts the run.
+# Every external call below is checked explicitly via $LASTEXITCODE instead.
+$ErrorActionPreference = "Continue"
 
 # --- Locate the client binaries -----------------------------------------
 $binDir = $null
@@ -63,15 +68,18 @@ $env:PGPASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
 $env:PGHOST = "localhost"
 $env:PGPORT = "5432"
 $env:PGUSER = "postgres"
+# Suppress the server-side NOTICE that --if-exists emits on a missing database.
+$env:PGOPTIONS = "-c client_min_messages=warning"
 
 try {
     # --- Fresh scratch database -----------------------------------------
     Write-Host ""
     Write-Host "Creating scratch database $TestDb ..." -ForegroundColor DarkGray
-    & $dropdb --if-exists $TestDb 2>$null
-    & $createdb $TestDb
+    & $dropdb --if-exists $TestDb *>$null
+    $mk = & $createdb $TestDb 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Could not create the scratch database. Wrong password?" -ForegroundColor Red
+        Write-Host "Could not create the scratch database." -ForegroundColor Red
+        $mk | ForEach-Object { Write-Host ("   " + $_) -ForegroundColor DarkYellow }
         exit 1
     }
 
@@ -125,7 +133,8 @@ finally {
     # --- Always clean up -------------------------------------------------
     Write-Host ""
     Write-Host "Dropping scratch database ..." -ForegroundColor DarkGray
-    & $dropdb --if-exists $TestDb 2>$null
+    & $dropdb --if-exists $TestDb *>$null
+    Remove-Item Env:PGOPTIONS  -ErrorAction SilentlyContinue
     Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
     Remove-Item Env:PGHOST     -ErrorAction SilentlyContinue
     Remove-Item Env:PGPORT     -ErrorAction SilentlyContinue

@@ -24,7 +24,13 @@
 #>
 
 param(
-    [string]$OutputDir = "backups"
+    [string]$OutputDir = "backups",
+
+    # Hides the URI as it is entered. Use when the screen is being shared
+    # or projected - the default prompt echoes what is pasted, and the URI
+    # contains the database password. Off by default because seeing the
+    # URI is genuinely useful when diagnosing a bad paste.
+    [switch]$Masked
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,7 +77,13 @@ Write-Host "Paste ONLY the URI itself - one line beginning postgresql://"
 Write-Host "and ending /postgres. Not a pg_dump command, not any flags."
 Write-Host ""
 
-$raw = Read-Host "Paste connection URI"
+if ($Masked) {
+    $sec = Read-Host "Paste connection URI (input hidden)" -AsSecureString
+    $raw = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+} else {
+    $raw = Read-Host "Paste connection URI"
+}
 
 if ([string]::IsNullOrWhiteSpace($raw)) {
     Write-Host "Nothing entered. Stopping." -ForegroundColor Yellow
