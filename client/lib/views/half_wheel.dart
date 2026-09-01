@@ -1,7 +1,5 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:client/models/feature_item.dart';
-import 'package:client/theme/hops_theme.dart';
 
 class HalfWheelPicker extends StatelessWidget {
   final List<FeatureItem> features;
@@ -15,14 +13,10 @@ class HalfWheelPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
     if (features.isEmpty) return const SizedBox.shrink();
 
-    final screenWidth = MediaQuery.of(context).size.width;
-    final itemSize = 64.0;
-    final spacing = 16.0;
-    final viewportFraction = 0.25; // each item takes 25% of screen width
+    const itemSize = 64.0;
+    const viewportFraction = 0.25; // each item takes 25% of screen width
 
     return Container(
       height: 260,
@@ -34,7 +28,7 @@ class HalfWheelPicker extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
             blurRadius: 20,
             offset: const Offset(0, -5),
           ),
@@ -86,7 +80,7 @@ class HalfWheelPicker extends StatelessWidget {
                           color: Colors.white,
                           boxShadow: [
                             BoxShadow(
-                              color: Theme.of(context).colorScheme.primary.withOpacity(0.2),
+                              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
                               blurRadius: 10,
                               offset: const Offset(0, 4),
                             ),

@@ -1,12 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="?android:colorBackground" />
+<!--
+    THIS is the launch screen that actually runs.
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
+    Android picks drawable-v21/ over drawable/ on every device running API
+    21 or newer — which, given Flutter's minimum SDK, is every device this
+    app can install on. The plain drawable/ copy next to it is a fallback
+    that will never be selected in practice, so edits made only there have
+    no effect on any real phone.
+
+    The logo is splash_logo.png: a 360x360 copy of the launcher icon
+    (mipmap-*/ic_launcher.png), in full colour and untinted. The launcher
+    icon itself isn't referenced directly because it ships at 1400x1400 in
+    every density bucket, so @mipmap/ic_launcher would be drawn at 1400px
+    and crop off the sides of most screens.
+
+    Both apps share this file — the student and admin entry points are the
+    same Android application, with one manifest and one activity, so there
+    is no per-entry-point launch screen without a build flavour.
+
+    The background colour comes from @color with a values-night/ variant,
+    so the launch window follows the system dark-mode setting instead of
+    being hard-coded white.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background" />
+
+    <item>
+        <!-- No android:tint: this is the real, full-colour logo, not the
+             monochrome line art that used to sit here. -->
         <bitmap
             android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+            android:src="@drawable/splash_logo" />
+    </item>
 </layer-list>

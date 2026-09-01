@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About, FAQ &amp; Contact — Hops</title>
+  <meta name="description" content="Learn how Hops works, get answers to common questions, and get in touch.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <nav class="site-nav">
+    <a class="brand" href="index.html">
+      <img src="assets/hops_bunny.png" alt="Hops mascot">
+      <p class="logo-word">Hops</p>
+    </a>
+    <ul class="links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="about.html" class="active">About &amp; FAQ</a></li>
+      <li><a href="download.html">Download</a></li>
+      <li><a href="shop.html">Support Hops</a></li>
+    </ul>
+  </nav>
+
+  <header class="hero" style="padding-bottom: 0;">
+    <div class="container">
+      <h1>About Hops</h1>
+      <p class="tagline">The story, the answers, and how to reach us.</p>
+    </div>
+    <nav class="subnav">
+      <a href="#about">About Us</a>
+      <a href="#faq">FAQ</a>
+      <a href="#contact">Contact Us</a>
+    </nav>
+  </header>
+
+  <!-- ── About ─────────────────────────────────────────────────────── -->
+  <section id="about" class="section">
+    <div class="container" style="max-width: 720px;">
+      <h2>Why Hops exists</h2>
+      <p>
+        Campus safety tools usually assume you have signal. Hops doesn't — it's built so that
+        an emergency flare, a friend request, or a check-in still works when Wi-Fi is down,
+        cell coverage is spotty, or you're somewhere a network never reached in the first place.
+      </p>
+      <p>
+        Every core feature runs peer-to-peer over Bluetooth: your phone and a nearby phone
+        talk directly, with no server in between reading, storing, or relaying the content.
+        The only thing Hops' backend handles is your account — signing in, recovering a
+        password, and identity for the campus admin team. Everything else — chat, presence,
+        alerts, games, the works — lives entirely on-device and over the air.
+      </p>
+      <p>
+        Hops is built for one campus at a time: the app's admin tools (moderation, official
+        alerts, account management) are run by your own campus's team, not by us centrally.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── FAQ ───────────────────────────────────────────────────────── -->
+  <section id="faq" class="section" style="background: var(--surface);">
+    <div class="container" style="max-width: 720px;">
+      <h2>Frequently asked questions</h2>
+
+      <details class="faq-item">
+        <summary>Does Hops need an internet connection?</summary>
+        <p class="answer">
+          No — Radar, chat, Emergency Flare, Watch Me, Community Alerts, and both mini-games
+          all work over Bluetooth alone. The only things that need a connection at all are
+          signing in/up and password recovery, since those talk to the account system.
+        </p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Is my location tracked?</summary>
+        <p class="answer">
+          No. Hops never records or transmits GPS location. Android requires the Location
+          permission to allow Bluetooth scanning at all — that's an OS requirement, not
+          something Hops uses to know where you are.
+        </p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Who can see my messages?</summary>
+        <p class="answer">
+          Only the person you're chatting with. 1:1 chats go directly between your two
+          devices and are never stored on a server. Community Alerts is the one exception —
+          it's an intentionally public broadcast from campus admins to everyone nearby.
+        </p>
+      </details>
+
+      <details class="faq-item">
+        <summary>What's the Emergency Flare?</summary>
+        <p class="answer">
+          A one-tap alert that broadcasts to every Hops user in Bluetooth range — and relays
+          through their phones to reach further than your signal alone would. Campus admins
+          can also send a signed, verified Official Alert to everyone at once.
+        </p>
+      </details>
+
+      <details class="faq-item">
+        <summary>How do carrots and the Hops Shop work?</summary>
+        <p class="answer">
+          Carrots are earned by playing Hops Hopper and Hops Wordle inside the app, and spent
+          in the in-app Hops Shop on exclusive color themes. Supporting Hops here on the
+          website funds development directly — it's a separate thing from in-app carrots,
+          not a way to buy them. See the Support Hops page for details.
+        </p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Is Hops affiliated with my school?</summary>
+        <p class="answer">
+          Hops is deployed and moderated by your own campus's admin team, who control account
+          management and official alerts for your campus specifically.
+        </p>
+      </details>
+
+      <details class="faq-item">
+        <summary>What devices does Hops support?</summary>
+        <p class="answer">
+          Android phones today, with Windows and Linux desktop builds also available. See the
+          Download page for current links.
+        </p>
+      </details>
+    </div>
+  </section>
+
+  <!-- ── Contact ───────────────────────────────────────────────────── -->
+  <section id="contact" class="section">
+    <div class="container">
+      <h2>Contact Us</h2>
+      <p class="lede">
+        Question, bug report, or something else? Send us a note — this opens your email app
+        with the message pre-filled, nothing is stored here.
+      </p>
+      <form class="contact-form" id="contact-form">
+        <label for="name">Name</label>
+        <input id="name" name="name" type="text" required placeholder="Your name">
+
+        <label for="email">Your email</label>
+        <input id="email" name="email" type="email" required placeholder="you@example.com">
+
+        <label for="message">Message</label>
+        <textarea id="message" name="message" rows="5" required placeholder="How can we help?"></textarea>
+
+        <button type="submit" class="btn btn-primary">Send message</button>
+      </form>
+      <!--
+        TODO: replace CONTACT_EMAIL below with the real support address before
+        this site goes live — this is a placeholder.
+      -->
+      <p style="text-align:center; margin-top:16px; font-size:13px;">
+        Prefer email directly? Reach us at
+        <a href="mailto:contact@hopsapp.example">contact@hopsapp.example</a>
+      </p>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <p>
+      <a href="about.html#contact">Contact</a> ·
+      <a href="about.html#faq">FAQ</a> ·
+      <a href="shop.html">Support Hops</a>
+    </p>
+    <p>&copy; 2026 Hops. Built for campus, built to work offline.</p>
+  </footer>
+
+  <script>
+    // No backend to submit to — this just hands off to the visitor's own
+    // email client with everything pre-filled, so "Contact Us" works with
+    // zero server-side code, same as every other page on this site.
+    // TODO: update the address below alongside the one in the page text.
+    const CONTACT_EMAIL = 'contact@hopsapp.example';
+
+    document.getElementById('contact-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      const name = document.getElementById('name').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const message = document.getElementById('message').value.trim();
+      const subject = encodeURIComponent('Hops contact form — ' + name);
+      const body = encodeURIComponent(message + '\n\n— ' + name + ' (' + email + ')');
+      window.location.href = 'mailto:' + CONTACT_EMAIL + '?subject=' + subject + '&body=' + body;
+    });
+  </script>
+
+</body>
+</html>

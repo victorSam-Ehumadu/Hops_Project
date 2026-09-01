@@ -54,6 +54,20 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
+        <!-- Silent SOS Quick Settings tile — see HopsSosTileService.kt.
+             Reuses the existing launcher monochrome icon rather than
+             shipping a new drawable. -->
+        <service
+            android:name=".HopsSosTileService"
+            android:label="Hops SOS"
+            android:icon="@mipmap/ic_launcher_monochrome"
+            android:exported="true"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- Boot receiver to restart the foreground service after reboot -->
         <receiver android:name="com.pravera.flutter_foreground_task.receiver.BootReceiver"
             android:exported="true">

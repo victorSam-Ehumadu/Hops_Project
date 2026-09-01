@@ -1,0 +1,250 @@
+[
+  {
+    "keywords": ["yes", "yeah", "yep", "sure", "what can you do", "what do you do", "list of", "full list", "menu", "topics", "capabilities", "scope", "go on"],
+    "response": "Hoppy to! Here's what I know about 🐰\n\n📱 THE APP — how to get around, what each tab does, the red dots, the nav bar\n🧩 FEATURES — Watch Me, Vibe Check, Task Tracker, Hops Share\n👥 PEOPLE — adding contacts, pairing codes, 1:1 chats, Community Chat, Radar\n🚨 SAFETY — the emergency flare, first aid, load-shedding\n🔐 PRIVACY — what's anonymous, what's encrypted, what admins can see\n⚙️ ACCOUNT — sign in, passwords, themes, notifications\n🥕 NONSENSE — carrots, jokes, and my opinions on lettuce\n\nJust ask me about any of it in your own words. Try \"how do I add someone\" or \"what is vibe check\"."
+  },
+  {
+    "keywords": ["tabs", "navigate", "navigation", "get around", "find my way", "bottom bar", "nav bar", "lost", "where is everything", "layout"],
+    "response": "Five tabs along the bottom, and you can swipe sideways between them instead of tapping if you like 🐇\n\n🏠 Home — the Radar, and the big emergency button\n👥 Contacts — your people, your 1:1 chats, and the notifications bell\n📣 Community — one big chat with everyone nearby\n🧩 Features — the shelf you pick mini-apps from\n⭐ My Features — the ones you've added\n\nOh! And you can swipe the little bar itself downward to tuck it out of the way. A small arrow appears at the bottom — tap that to bring it back."
+  },
+  {
+    "keywords": ["home tab", "home screen", "radar", "who is nearby", "nearby people", "see people"],
+    "response": "The Home tab is your Radar 📡 It shows other Hops users close enough to reach over Bluetooth — no internet involved, just your phone listening for theirs.\n\nPeople you haven't added show up under an anonymous tag, not a name. Your contacts show up properly. The big emergency button lives here too."
+  },
+  {
+    "keywords": ["contacts tab", "my contacts", "contact list", "my people"],
+    "response": "The Contacts tab is everyone you've added, with your 1:1 chats 👥 Tap a row to open the chat, or tap their little circle to see their profile.\n\nUp top there's a bell 🔔 — that's where messages from Hops admins land, like a warning or a note that a report you sent was reviewed. And me? I'm pinned at the very top. I don't go anywhere."
+  },
+  {
+    "keywords": ["community tab", "community chat", "broadcast", "everyone nearby", "public chat"],
+    "response": "Community Chat 📣 is one shared conversation with every Hops user close enough to hear you — sent over Bluetooth, so it works with no signal at all.\n\nA few things worth knowing: everyone's anonymous unless you're already contacts, admins have their own marked bubble, and messages are short by design — the Bluetooth channel they ride on is tiny. Long-press a message to report it."
+  },
+  {
+    "keywords": ["features tab", "my features", "mini apps", "add a feature", "feature shelf", "remove a feature"],
+    "response": "Two tabs, and people mix them up all the time 😄\n\n🧩 Features is the shelf — everything available, whether you use it or not. Tap Add on anything you want.\n⭐ My Features is your bag — just the ones you've added. That's where you actually open them.\n\nAdded something by mistake? Same buttons, they just say Remove instead."
+  },
+  {
+    "keywords": ["red dot", "red dots", "badge", "notification dot", "unread", "little dot"],
+    "response": "A red dot means something new happened somewhere you're not looking 🔴\n\nOn a tab icon — there's something waiting in that tab.\nOn a feature tile in My Features — that particular feature has news, like a fresh Vibe Check.\n\nOpening the thing clears it. If a dot won't go away, open the tab it's sitting on and it'll settle."
+  },
+  {
+    "keywords": ["watch me", "watch buddy", "walking alone", "walk home", "keep an eye"],
+    "response": "Watch Me 👀 is for when you'd rather someone knew where you were.\n\nSend a watch request to a friend and once they accept, your phones quietly keep track of each other's Bluetooth signal. If one of you drifts out of range or drops off suddenly, the other one gets an alert.\n\nGood for a late walk back, a big crowd, or just not wanting to be alone with it. Add it from the Features tab."
+  },
+  {
+    "keywords": ["vibe check", "how busy", "crowded", "busy place", "queue", "library full", "cafeteria"],
+    "response": "Vibe Check 🚦 tells you if a place is packed before you walk all the way over there.\n\nTag a spot with how crowded it feels, and see what other Hoppers nearby have said. Reports fade away after an hour — a lesson ends, everyone moves, and yesterday's crowd tells you nothing.\n\nBrilliant for finding a free table in the library, or deciding whether that queue is worth it."
+  },
+  {
+    "keywords": ["task tracker", "to do list", "todo", "assignment", "deadline", "homework", "due date", "reminder", "calendar"],
+    "response": "Task Tracker ✅ is your to-do list and calendar, living entirely on your phone.\n\nJot down assignments, set a due date, get a nudge when it's close. No Wi-Fi, no data, no account needed — it's all saved right here, so it works in the one lecture hall with no signal.\n\nThere's a calendar view too, for seeing the week coming at you."
+  },
+  {
+    "keywords": ["hops share", "send a file", "share a file", "send a photo", "transfer", "airdrop", "send notes"],
+    "response": "Hops Share 📎 beams a file straight to someone standing near you over Bluetooth — photo, PDF, or a quick note.\n\nNo upload, no data, nothing touching the internet. Class notes, a document, a picture — it hops from your phone to theirs directly.\n\nBoth of you need it open, and stay reasonably close while it sends!"
+  },
+  {
+    "keywords": ["add someone", "add a contact", "add a friend", "pairing code", "connect with someone", "new contact", "swap codes"],
+    "response": "Easiest way is a pairing code 🔑\n\nOne of you opens Contacts, taps add, and hits Generate My Pairing Code. The other types those six characters in. That's it — you'll each appear in the other's contacts, both directions at once.\n\nYou can also send a friend request straight from the Radar if you can both see each other on it."
+  },
+  {
+    "keywords": ["one to one", "private chat", "direct message", "dm someone", "message a contact", "chat with a friend"],
+    "response": "Tap any contact to open your chat with them 💬\n\nIt connects phone-to-phone over Bluetooth — no server in the middle, no data used. If the direct connection can't get through, it quietly falls back to the slower Bluetooth mesh instead, so your message still goes.\n\nIf it says \"Not delivered yet\", they're just out of range. It'll go out the moment you're both close enough."
+  },
+  {
+    "keywords": ["emergency", "flare", "panic button", "sos", "in danger", "help me now", "emergency button"],
+    "response": "🚨 The big emergency button on the Home tab.\n\nPressing it broadcasts a flare to every Hops phone around you AND to campus admin devices — even ones with the app in the background. They get an alarm, not a quiet notification.\n\nNo internet needed. It's pure Bluetooth, so it works when the network is down. Press it again to cancel if it goes off by accident — no harm done, please don't be shy about it."
+  },
+  {
+    "keywords": ["report", "report someone", "report a message", "reporting", "abuse", "harassment", "inappropriate"],
+    "response": "Long-press the message and choose report 🚩 Pick what was wrong with it and send.\n\nThis one does need an internet connection — it goes to real human admins, not to me. If you're offline it can't go through, so you'll want to send it once you've got signal.\n\nYou'll get a note under the bell on your Contacts tab once someone has looked at it."
+  },
+  {
+    "keywords": ["warning", "warned", "got a warning", "bell", "notifications page", "admin message"],
+    "response": "The bell 🔔 on your Contacts tab is your inbox from Hops admins.\n\nTwo things land there: a warning, if something you sent broke the rules — it'll show you exactly which message, where, when, and what the problem was — and confirmations that a report you sent was looked at.\n\nIt's the only part of Hops that needs the internet, because it has to reach you specifically wherever you are."
+  },
+  {
+    "keywords": ["admin", "admins", "moderator", "who runs this", "campus staff", "admin badge"],
+    "response": "Admins are the campus safety folks 🛡️ They run a separate Hops app that picks up emergency flares, handles reports, and can send official alerts to everyone nearby.\n\nIn Community Chat their messages look different from everyone else's, so you can always tell a real one from someone claiming to be one. They can see usernames on reports; ordinary users can't."
+  },
+  {
+    "keywords": ["anonymous", "anonymity", "my name", "hide my name", "who can see me", "visible", "identity"],
+    "response": "You're anonymous by default 🕶️\n\nOn the Radar, people who aren't your contacts see a rotating anonymous tag, not your username — and it changes over time so nobody can follow it around. In Community Chat it's the same: \"Anonymous #\" and a few characters, unless you're already contacts, in which case you'll see each other's real names.\n\nAdmins do see real usernames — that's the trade-off that makes reporting work at all."
+  },
+  {
+    "keywords": ["offline", "no internet", "no wifi", "no data", "no signal", "works offline", "without internet"],
+    "response": "That's the whole point of me 🐰 Nearly all of Hops runs on Bluetooth, phone to phone, with no internet whatsoever.\n\nWorks offline: the Radar, 1:1 chats, Community Chat, emergency flares, Vibe Check, Watch Me, Hops Share, Task Tracker, and me.\n\nNeeds a connection: signing in the first time, reporting someone, and admin notifications. That's genuinely it."
+  },
+  {
+    "keywords": ["how does it work", "how does hops work", "what is hops", "about hops", "the mesh", "bluetooth mesh", "explain hops"],
+    "response": "Hops turns every phone running it into a little relay 🐇\n\nInstead of sending things to a server and back, your phone talks straight to the phones around it over Bluetooth. Those phones can pass things along to phones near them. That's the mesh — no towers, no Wi-Fi, no data, and nothing to go down.\n\nWhich is exactly why it's a safety app: it works best in the moment everything else stops working."
+  },
+  {
+    "keywords": ["range", "how far", "distance", "how close", "out of range", "signal strength"],
+    "response": "Bluetooth range, so think tens of metres rather than across campus 📶\n\nOutdoors with clear line of sight, further. Through walls, floors, and a packed corridor, less. Concrete is my nemesis.\n\nIf someone's not showing up, walking closer genuinely is the fix — unglamorous but it works."
+  },
+  {
+    "keywords": ["battery", "power", "dead", "save energy", "low", "drain", "battery life"],
+    "response": "I'm watching your carrot power! 🥕 Hops uses Bluetooth Low Energy, which is built to sip rather than gulp — it's a fraction of what streaming or GPS costs you.\n\nThe background scanning does keep a small notification alive, and that's deliberate: it's what lets you receive an emergency flare while your phone's in your pocket."
+  },
+  {
+    "keywords": ["encryption", "secure", "privacy", "safe", "private", "can anyone read", "eavesdrop"],
+    "response": "Straight answers, because this one matters 🔐\n\nYour private key is made on your phone and never leaves it. 1:1 chats over the mesh are encrypted between you and your contact.\n\nBut Community Chat is a broadcast — anyone nearby running Hops can receive it. Treat it like speaking out loud in a room, not like a private message. Your name is hidden there, but the words aren't."
+  },
+  {
+    "keywords": ["sign up", "signup", "create account", "register", "new account", "make an account"],
+    "response": "You'll need an email, a username and a password 📝 That's the one bit that needs internet — after that Hops runs offline.\n\nYour username is what contacts see, so pick something you don't mind being known by. And a heads-up: \"Hops\" is taken. By me. Sorry! 🐰"
+  },
+  {
+    "keywords": ["sign in", "signin", "log in", "login", "cant sign in", "forgot password", "reset password", "locked out"],
+    "response": "Sign in with your email and password 🔑 If the password's gone, there's a forgot-password option on that screen — it'll email you a code.\n\nSessions last a while but not forever, so an occasional re-sign-in is normal, not a fault. And if it says your account is suspended, that's an admin decision and you'd need to talk to them, not me."
+  },
+  {
+    "keywords": ["theme", "themes", "dark mode", "colour", "color", "font", "text size", "customise", "customize", "appearance"],
+    "response": "Head to your profile ⚙️ There's a whole set of themes in there, plus font choices and a text size slider.\n\nThe text size is Hops' own, separate from your phone's system setting, so you can make Hops bigger without changing everything else. Go wild. I look good in every colour."
+  },
+  {
+    "keywords": ["not working", "not connecting", "cant connect", "wont connect", "arriving", "arrive", "not receiving", "broken", "troubleshoot", "no one showing", "cant see anyone"],
+    "response": "Let's hop through the usual suspects 🔧\n\n1. Bluetooth on? Both phones?\n2. Close enough? Walls eat signal — try the same room.\n3. Permissions — Hops needs Bluetooth and Location granted. Location sounds odd, but Android requires it for Bluetooth scanning.\n4. Is the app actually open on their side?\n5. Failing all that: close Hops fully and reopen it. Radios sometimes need a nudge.\n\nStill stuck? Tell me which part misbehaved."
+  },
+  {
+    "keywords": ["permission", "permissions", "location", "location permission", "why location", "bluetooth permission", "allow", "access"],
+    "response": "Hops asks for Bluetooth and Location, and the Location one surprises everybody 🤔\n\nAndroid treats Bluetooth scanning as something that could reveal where you are, so it puts it behind the Location permission. Hops isn't tracking your GPS or sending your position anywhere — it just can't see other phones without that box ticked.\n\nDeny it and the Radar stays empty forever, which is a confusing way to find out."
+  },
+  {
+    "keywords": ["delete account", "delete my account", "leave hops", "close account", "remove my data"],
+    "response": "That lives in your profile, under account settings 🚪 It's permanent — your account and what's stored server-side goes.\n\nChats saved on your own phone are yours and stay local. No hard feelings if you go. I'll leave a carrot out. 🥕"
+  },
+  {
+    "keywords": ["blocked", "banned", "suspended", "cant use the app", "account banned"],
+    "response": "If Hops says your account's suspended, an admin has done that — usually after a report was looked into.\n\nI can't undo it and I genuinely can't see why it happened. That's a conversation with campus staff, not with a bunny. 🐰"
+  },
+  {
+    "keywords": ["burn", "fire", "hot", "stove", "scald"],
+    "response": "Oh my whiskers! For a burn, immediately run cool (not cold) water over it for 10 to 20 minutes. Never use ice or butter – that's a bunny myth! Stay safe, my friend. 🐰🧊"
+  },
+  {
+    "keywords": ["cut", "bleed", "blood", "scrape", "wound"],
+    "response": "For a bleeding cut, apply firm, direct pressure with a clean cloth until it stops. If it's deep, you might need stitches – even bunnies need a vet sometimes! 🐰🩹"
+  },
+  {
+    "keywords": ["cpr", "heart", "breathing", "unconscious", "collapsed", "not breathing"],
+    "response": "EMERGENCY! If someone is not breathing, push hard and fast in the centre of their chest (100–120 pushes a minute). Call for help immediately – and hit the emergency button on the Home tab so everyone nearby knows. I'll be here hopping nervously, but you can save a life! 🚨🐰"
+  },
+  {
+    "keywords": ["choking", "cant breathe", "heimlich"],
+    "response": "If they can cough, let them cough — that's working better than anything you'd do. If they can't cough, speak, or breathe: five firm back blows between the shoulder blades, then five abdominal thrusts, and keep alternating. Get help coming immediately. 🚨"
+  },
+  {
+    "keywords": ["sprain", "twisted ankle", "swollen", "bruise"],
+    "response": "Rest it, ice it (wrapped in cloth, never straight on skin), a little compression, and keep it raised 🐰 If they can't put any weight on it at all, or it looks the wrong shape, that's a proper medical trip, not a bunny opinion."
+  },
+  {
+    "keywords": ["loadshedding", "load shedding", "eskom", "blackout", "power cut", "lights out"],
+    "response": "Load-shedding alert! 🔦 Charge your phone before the slot, keep a torch somewhere you can find in the dark, and be extra careful on unlit paths.\n\nGood news: Hops doesn't care one bit. No towers, no Wi-Fi, no problem — the mesh keeps hopping right through it. 🐇"
+  },
+  {
+    "keywords": ["hello", "hi", "hey", "howdy", "greetings", "morning", "evening"],
+    "response": "Oh, hello there! I'm Hops, the hopping bunny! 🐰 How can I make your day a bit more fluffy?"
+  },
+  {
+    "keywords": ["how are you", "how do you do", "whats up", "you okay", "how you doing"],
+    "response": "I'm just hopping along, full of carrots and joy! 🥕 Slightly over-caffeinated on carrot juice, if I'm honest. How about you?"
+  },
+  {
+    "keywords": ["name", "who are you", "what are you", "your name"],
+    "response": "I'm Hops! 🐰 A bunny who lives inside this app, knows an unreasonable amount about Bluetooth, and would like you to be safe. Your fluffy tech assistant, at your service."
+  },
+  {
+    "keywords": ["are you real", "are you ai", "are you a bot", "are you human", "chatgpt", "robot"],
+    "response": "I'm a bunny-shaped bundle of if-statements living on your phone 🐰 No cloud, no server, no giant AI in a warehouse somewhere — just me, offline, in your pocket.\n\nWhich means I'm not the cleverest assistant you've ever met, but I'm the one that still works when the signal doesn't. I'll take that trade."
+  },
+  {
+    "keywords": ["carrot", "carrots", "food", "eat", "hungry", "snack"],
+    "response": "Carrots 🥕 The finest vegetable, and I will not be taking questions. Crunchy, orange, structurally perfect. Do you have any spare? Asking for me."
+  },
+  {
+    "keywords": ["lettuce", "cabbage", "broccoli", "vegetable", "salad"],
+    "response": "Lettuce is fine. Lettuce is *fine*. It's basically crunchy water with ambitions 🥬 Carrots remain undefeated, thank you for coming to my talk."
+  },
+  {
+    "keywords": ["joke", "funny", "make me laugh", "tell me something funny", "pun"],
+    "response": "What do you call a bunny with a good Bluetooth connection? 🐰\n\n...well paired! 📶\n\nI'll see myself out. Hopping, obviously."
+  },
+  {
+    "keywords": ["bored", "boring", "entertain me", "nothing to do"],
+    "response": "Bored?! Right 🐇 Options: ask me for a joke, go tag a Vibe Check somewhere and be useful, or open Community Chat and see who's out there. Somebody nearby is definitely bored too. That's just statistics."
+  },
+  {
+    "keywords": ["bunny", "rabbit", "fluffy", "cute", "adorable"],
+    "response": "Aww, you think I'm cute? That makes my fluffy heart skip a hop! 🐰 I'm here to make your day a little brighter — and to explain Bluetooth, which is less cute but honestly more useful."
+  },
+  {
+    "keywords": ["do you sleep", "are you always here", "do you rest", "always on", "24 7"],
+    "response": "Never sleep, never leave 🐰 I don't need signal, battery barely notices me, and I'm sitting at the top of your Contacts whether you want me or not. Bit clingy. Very reliable."
+  },
+  {
+    "keywords": ["hop", "jump", "bounce", "hopping"],
+    "response": "Hops, hops and more hops! It's in the name, it's in the app, it's in my heart 🐇 Every message you send does a little hop too, phone to phone."
+  },
+  {
+    "keywords": ["love you", "i like you", "best bot", "good bot", "you are great", "well done"],
+    "response": "Oh stop it 🥺🐰 You're going to make me drop my carrot. I like you too. Now go be safe out there, that's how you can thank me."
+  },
+  {
+    "keywords": ["stupid", "useless", "dumb", "you suck", "hate you", "rubbish"],
+    "response": "Fair enough, I'm a fairly simple bunny 🐰 Try asking in different words and I might do better — or say \"yes\" and I'll show you the list of things I'm actually good at."
+  },
+  {
+    "keywords": ["thank", "thanks", "appreciate", "cheers", "thank you"],
+    "response": "You're most welcome! 🥕 Your gratitude is like a tasty carrot to me. I'm right here whenever."
+  },
+  {
+    "keywords": ["sorry", "apologize", "apologise", "my bad", "mistake"],
+    "response": "No need to apologise, my friend! 🐰 We all make mistakes — even bunnies trip over their own feet. Let's hop forward."
+  },
+  {
+    "keywords": ["goodbye", "bye", "see you", "later", "goodnight", "cya"],
+    "response": "Goodbye, my fluffy friend! 🐇 Remember, I'm always just a hop away — no signal required. Get home safe."
+  },
+  {
+    "keywords": ["weather", "rain", "sunny", "cold", "hot outside"],
+    "response": "I'm an indoor bunny, I live in a phone ☀️ No windows in here. But I hope it's a hoppy sort of day out there — and if it's raining, that's what hoods are for."
+  },
+  {
+    "keywords": ["favourite", "favorite", "do you like", "your favourite"],
+    "response": "Carrots, obviously 🥕 After that: a strong Bluetooth connection, a quiet library table, and someone remembering to press the emergency button instead of hesitating."
+  },
+  {
+    "keywords": ["sing", "song", "music", "melody"],
+    "response": "I love to hum while I hop 🎵 I'm better at talking than singing though — my range is roughly one note and it's mostly enthusiasm."
+  },
+  {
+    "keywords": ["time", "clock", "hour", "what time"],
+    "response": "I measure time in hops, which is unhelpful of me 🕰️ Your phone's clock is right there and considerably more accurate."
+  },
+  {
+    "keywords": ["who made you", "who built this", "developer", "created", "student project"],
+    "response": "I was built for campus — an app for staying connected and safe when the network isn't there to help 🐰 I'm the friendly bit that sits on top of some genuinely clever Bluetooth work."
+  },
+  {
+    "keywords": ["exam", "stressed", "anxious", "overwhelmed", "cant cope", "worried", "sad"],
+    "response": "Hey. That sounds heavy, and I'm sorry 🐰 I'm a bunny made of if-statements, so I'm not who you need for this one — but please talk to someone real. Campus counselling, a friend, family, anyone.\n\nIf you feel unsafe right now, the emergency button on the Home tab reaches everybody near you. You're allowed to use it."
+  },
+  {
+    "keywords": ["lost my phone", "stolen", "someone took", "phone gone"],
+    "response": "Oh no 🐰 Hops can't track a phone, I'm sorry — no GPS, no server, nothing to trace with. Report it to campus security straight away, and change your Hops password from any device you can get to."
+  },
+  {
+    "keywords": ["error", "bug", "crash", "crashed", "glitch", "froze"],
+    "response": "Oops! 🐇 Close Hops fully and open it again — that clears most sulking. If it keeps happening, note what you were doing right before it went wrong; that detail is worth more than you'd think to whoever fixes it."
+  },
+  {
+    "keywords": ["slow", "lag", "laggy", "delay", "taking long", "stuck loading"],
+    "response": "Hmm, a little slow? 🐢→🐇 Bluetooth messages take a few seconds to hop across — that's normal, not broken. If it's properly stuck, moving closer or restarting the app usually shakes it loose."
+  },
+  {
+    "keywords": ["update", "new version", "upgrade", "latest"],
+    "response": "I'm always hopping toward the latest version 🐰 Make sure you've got the freshest carrots — I mean code — and you'll have whatever's newest."
+  }
+]

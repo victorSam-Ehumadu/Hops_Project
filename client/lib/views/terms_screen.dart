@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:client/widgets/hops_card.dart';
+import 'package:client/widgets/hops_background_pattern.dart';
 
 class TermsScreen extends StatelessWidget {
   const TermsScreen({super.key});
@@ -9,7 +11,7 @@ Hops – Terms and Conditions
 Welcome to Hops. By downloading, installing, accessing, or using Hops, you agree to these Terms and Conditions ("Terms"). If you do not agree with these Terms, please do not use the application.
 
 1. About Hops
-Hops is a Bluetooth Low Energy (BLE)-based application designed to enable nearby device discovery, offline communication, file sharing, study collaboration, and other proximity-based features without requiring an internet connection. To provide account synchronisation and backup, Hops stores limited account information (username, email, and a secure password hash) on remote servers operated by our authentication provider. No other personal data is uploaded unless you explicitly choose to share it.
+Hops is a Bluetooth Low Energy (BLE)-based application designed to enable nearby device discovery, offline communication, file sharing, study collaboration, campus safety features, and other proximity-based features without requiring an internet connection. To provide account synchronisation and backup, Hops stores limited account information (username, email, and a securely salted password hash) on remote servers operated by our authentication provider. No other personal data is uploaded unless you explicitly choose to share it.
 
 2. Eligibility
 To use Hops, you must:
@@ -29,7 +31,7 @@ You agree to use Hops responsibly and lawfully. You agree NOT to:
 • Use automated software to abuse the service.
 • Flood nearby users with repeated requests, spam, or unsolicited files.
 • Use Hops for any illegal activities.
-• Misuse the Emergency Flare feature (see Section 6).
+• Misuse the Emergency Flare or Silent SOS features (see Section 6).
 
 Violation of these rules may result in suspension or permanent removal from the service.
 
@@ -50,12 +52,13 @@ Certain features allow nearby users to discover your device. Information that ma
 • Availability status
 Hops does not intentionally broadcast your phone number, email address, or other sensitive personal information unless you choose to include it.
 
-6. Emergency Flare
-The Emergency Flare feature is intended for genuine emergency situations only. You agree:
-• Not to trigger false alarms or misuse the feature for pranks.
+6. Emergency Flare and Silent SOS
+The Emergency Flare feature is intended for genuine emergency situations only. Silent SOS (triggered via a Quick Settings tile or a held volume button) sends the exact same alert discreetly, without needing to open the app or interact with the screen. You agree:
+• Not to trigger false alarms or misuse either feature for pranks.
 • To provide accurate information when activating a flare.
 • That recipients should treat alerts as serious and seek official help if needed.
 • That Hops is not a replacement for official emergency services (police, fire, ambulance).
+• That alerts marked "Official" are cryptographically signed and verified against a directory of admin accounts; a flare that fails this check is shown as unverified or rejected rather than presented as official.
 
 7. Watch Me Buddy Safety
 The Watch Me feature provides signal-strength monitoring between you and a trusted friend. You acknowledge that:
@@ -93,8 +96,8 @@ Hops does not guarantee successful delivery of any message or file.
 
 11. User Content
 You retain ownership of any content you create or share through Hops. This includes:
-• Files, images, voice notes, messages, profiles, polls, study notes
-However, by sharing content with another user, you grant them permission to receive and store that content.
+• Files, images, voice notes, messages, profiles, study tags, Lost & Found posts, and custom profile banner images you upload from your own device gallery.
+However, by sharing content with another user, you grant them permission to receive and store that content. You are solely responsible for any image you upload as a custom banner or Character Avatar — both are shown to other users the same way an uploaded profile photo is, and the same Prohibited Content rules (Section 12) apply to them.
 
 12. Prohibited Content
 You must not use Hops to distribute:
@@ -103,8 +106,8 @@ Any detected abuse may result in account restrictions where applicable.
 
 13. Privacy
 Hops is designed to minimise the collection of personal information. Locally stored data includes:
-• Profile information, device identifiers, messages, files, session data, cached nearby devices.
-If internet services are used (e.g., authentication), we store only your email address and a secure password hash on remote servers. We do not sell or share your personal information with third parties.
+• Profile information, avatar and banner images, device identifiers, messages, files, session data, cached nearby devices, Task Tracker entries, and any Vibe Check, Study Bunny Finder, or Lost & Found posts you have made or received.
+If internet services are used (e.g., authentication), we store only your email address and a securely salted password hash on remote servers — never your password itself, and never a plaintext copy of the codes emailed to you for sign-up, password reset, or account changes. We do not sell or share your personal information with third parties.
 
 14. Data Storage
 Data may be stored:
@@ -120,38 +123,36 @@ While Hops uses reasonable security measures, no wireless communication system i
 • Keep their devices updated.
 • Use antivirus software where appropriate.
 
-16. Study Groups
-Study group features are intended for educational collaboration. Users should:
-• Remain respectful and stay on topic.
-• Avoid disruptive behaviour.
-Group administrators or lecturers may remove inappropriate content where supported.
+16. Study Bunny Finder
+Study Bunny Finder lets you broadcast what you're currently studying so nearby users studying the same thing can find you, and lets others let you know they're interested. Users should:
+• Remain respectful and use it for genuine study coordination.
+• Understand that tags are anonymous (see Section 17) and visible only to other Hops users within Bluetooth range for a limited time.
+Hops does not verify the accuracy of what anyone tags themselves as studying.
 
 17. Anonymous Features
-Some features may allow anonymous participation. Anonymous use does not permit:
-• Abuse, harassment, threats, illegal activity.
-Anonymous users remain responsible for their actions.
+Vibe Check, Study Bunny Finder, and Lost & Found posts do not attach your identity to what you post — nearby devices see the content, not who sent it. Anonymous use does not permit:
+• Abuse, harassment, threats, or illegal activity conducted through these features.
+Anonymous users remain responsible for their actions, and abusive anonymous content can still be reported (see Section 12).
 
-18. Polls and Campus Pulse
-Polls and sentiment features are for informational purposes only. Results:
-• May not represent the entire campus.
-• May be incomplete.
-• May be affected by nearby participation levels.
-Hops makes no guarantee regarding the accuracy of aggregated results.
+18. Lost & Found Board
+The Lost & Found board lets users post that they have lost or found an item, visible to nearby users and relayed one hop further over Bluetooth. You agree:
+• Not to post false, misleading, or malicious Lost & Found listings.
+• That Hops does not verify ownership of any item, mediate exchanges, or guarantee a lost item will be recovered.
+• That arranging to exchange a found item is done directly between users, at their own risk.
 
-19. Attendance Features
-Attendance and check-in features are provided for convenience. Hops does not guarantee:
-• Accurate attendance records.
-• Prevention of fraudulent check-ins.
-• Verification of user identity.
-Institutions should independently verify attendance where necessary.
+19. Hops Shop and Carrots
+Carrots are an in-app currency earned by playing Hops Hopper and Hops Wordle, spendable in the Hops Shop on cosmetic customisation (themes, avatar frames, radar icons, profile banners, and similar). You acknowledge that:
+• Carrots have no real-world monetary value and cannot be exchanged for cash.
+• Nothing in the Hops Shop is required to use any safety or communication feature.
+• Carrot balances and Shop purchases are stored locally on your device.
 
 20. Gaming Features
-Game-related features (e.g., Hops & Robbers) are intended solely for entertainment. Hops is not responsible for:
+Game features currently available in Hops (Hops Hopper, Hops Wordle, and any others enabled from time to time) are intended solely for entertainment. Hops is not responsible for:
 • Disputes between players, lost scores, cheating, interrupted gameplay, or physical injuries.
 
 21. Task Tracker
-The Task Tracker feature provides offline reminders and a calendar view. Hops is not responsible for:
-• Missed deadlines, forgotten tasks, or inaccurate scheduling.
+The Task Tracker feature provides offline reminders and a calendar view, including reminders counting down to a task's set time. Hops is not responsible for:
+• Missed deadlines, forgotten tasks, inaccurate scheduling, or a reminder notification arriving late or not at all.
 The feature is a convenience, not a guaranteed reminder system.
 
 22. Vibe Check / Crowd Density
@@ -159,49 +160,55 @@ Vibe Check provides approximate crowd-level information based on nearby device c
 • Accuracy is not guaranteed; actual crowd size may differ.
 • The information is provided as a convenience for personal use.
 
-23. Intellectual Property
+23. Built-In Assistant
+Hops includes a built-in assistant ("Hops Bot") that can answer basic first-aid and app-usage questions offline, entirely on your device. You acknowledge that:
+• The assistant is not a medical professional and its answers are not medical advice.
+• It is not a substitute for calling emergency services or consulting a qualified professional.
+• Hops is not responsible for actions taken based on the assistant's responses.
+
+24. Intellectual Property
 The Hops application, including:
 • Name, logo, design, user interface, source code, graphics, icons, documentation
 is protected by intellectual property laws. You may not copy, redistribute, modify, or sell any part of the application without permission.
 
-24. Third-Party Software
+25. Third-Party Software
 Hops may use third-party libraries. Those libraries remain subject to their own licenses.
 
-25. Availability
+26. Availability
 Hops is provided on an "as is" and "as available" basis. We do not guarantee:
 • Continuous availability, error-free operation, compatibility with all devices, uninterrupted Bluetooth functionality.
 
-26. Updates
+27. Updates
 We may:
 • Add or remove features, modify functionality, release security updates, change the user interface.
 Continued use after updates constitutes acceptance of the revised Terms.
 
-27. Limitation of Liability
+28. Limitation of Liability
 To the maximum extent permitted by law, Hops and its developers are not liable for:
-• Lost files, lost messages, device damage, data corruption, lost profits, academic losses, missed deadlines, personal disputes, unauthorised sharing by users, Bluetooth communication failures, injuries sustained during gaming, or misuse of safety features (Emergency Flare, Watch Me).
+• Lost files, lost messages, device damage, data corruption, lost profits, academic losses, missed deadlines, personal disputes, unauthorised sharing by users, Bluetooth communication failures, injuries sustained during gaming, or misuse of safety features (Emergency Flare, Silent SOS, Watch Me).
 Use of Hops is at your own risk.
 
-28. Indemnification
+29. Indemnification
 You agree to indemnify and hold harmless the developers of Hops from claims arising from:
 • Your misuse of the application, violation of these Terms, or violation of another person's rights.
 
-29. Termination
+30. Termination
 We reserve the right to suspend or terminate access if users:
 • Abuse the application, violate these Terms, attempt to compromise security, or engage in illegal conduct.
 Termination may be enforced by removing your account from our authentication server.
 
-30. Changes to the Terms
+31. Changes to the Terms
 These Terms may be updated from time to time. Changes will be made available on the official Hops website or repository. Continued use of Hops indicates acceptance of the updated Terms.
 
-31. Governing Law
+32. Governing Law
 These Terms shall be governed by the laws of the Republic of South Africa unless otherwise required by applicable local law.
 
-32. Contact
+33. Contact
 Questions regarding these Terms may be directed to:
 Email: Hops@hoppermail.com
 Developer: Group 18
 
-33. Acceptance
+34. Acceptance
 By using Hops, you acknowledge that you have:
 • Read these Terms.
 • Understood these Terms.
@@ -211,57 +218,9 @@ If you do not agree, you must discontinue use of the application immediately.
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final lines = termsText.split('\n');
-    final spans = <TextSpan>[];
-
-    // Default style applied to every span unless overridden
-    final defaultStyle = TextStyle(
-      fontSize: 14,
-      height: 1.5,
-      color: colors.primary,
-    );
-
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      if (line.trim().isEmpty) {
-        spans.add(const TextSpan(text: '\n'));
-        continue;
-      }
-
-      if (i == 0) {
-        // Main title – largest, centred
-        spans.add(TextSpan(
-          text: line.trim(),
-          style: defaultStyle.copyWith(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: colors.primary,
-          ),
-        ));
-        spans.add(const TextSpan(text: '\n\n'));
-        continue;
-      }
-
-      final headingPattern = RegExp(r'^\d+\.\s');
-      if (headingPattern.hasMatch(line.trim())) {
-        // Section heading
-        spans.add(TextSpan(
-          text: line.trim(),
-          style: defaultStyle.copyWith(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: colors.primary,
-          ),
-        ));
-        spans.add(const TextSpan(text: '\n\n'));
-        continue;
-      }
-
-      // Normal body text – uses the default style
-      spans.add(TextSpan(text: '${line.trim()} '));
-      spans.add(const TextSpan(text: '\n\n'));
-    }
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final parsed = _parseTerms(termsText);
 
     return Scaffold(
       appBar: AppBar(
@@ -273,15 +232,173 @@ If you do not agree, you must discontinue use of the application immediately.
         elevation: 0,
         foregroundColor: colors.primary,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: RichText(
-          text: TextSpan(
-            style: defaultStyle,   // fallback for any span that might miss a color
-            children: spans,
-          ),
+      body: HopsBackgroundPattern(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // Intro banner — separate from the numbered sections so the
+            // "here's what you're agreeing to" framing reads before the
+            // itemized detail rather than blending into section 1.
+            HopsCard(
+              radius: 20,
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.description_outlined, color: colors.primary, size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          parsed.mainTitle,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: colors.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    parsed.introText,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.5,
+                      color: colors.onSurface.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            for (final section in parsed.sections) ...[
+              HopsCard(
+                radius: 20,
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 26,
+                          height: 26,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: colors.primary.withValues(alpha: 0.12),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            '${section.number}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: colors.primary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Text(
+                              section.title,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: colors.primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    for (final line in section.lines)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(
+                          line,
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.5,
+                            color: colors.onSurface.withValues(alpha: 0.75),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ],
         ),
       ),
     );
   }
+}
+
+class _TermsSection {
+  final int number;
+  final String title;
+  final List<String> lines;
+  const _TermsSection({required this.number, required this.title, required this.lines});
+}
+
+class _ParsedTerms {
+  final String mainTitle;
+  final String introText;
+  final List<_TermsSection> sections;
+  const _ParsedTerms({required this.mainTitle, required this.introText, required this.sections});
+}
+
+// Splits the flat terms blob into a title, an intro paragraph, and one
+// entry per "N. Heading" section (each section's body lines kept separate,
+// so bullet points stay on their own line instead of being fused into one
+// run-on paragraph) — purely a presentation-layer parse, termsText itself
+// stays the single source of truth for the legal copy.
+_ParsedTerms _parseTerms(String text) {
+  final rawLines = text.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+  final headingPattern = RegExp(r'^(\d+)\.\s*(.*)$');
+
+  final mainTitle = rawLines.isNotEmpty ? rawLines.first : '';
+  final rest = rawLines.length > 1 ? rawLines.sublist(1) : <String>[];
+
+  final introLines = <String>[];
+  var i = 0;
+  while (i < rest.length && !headingPattern.hasMatch(rest[i])) {
+    introLines.add(rest[i]);
+    i++;
+  }
+
+  final sections = <_TermsSection>[];
+  int? currentNumber;
+  String currentTitle = '';
+  var currentLines = <String>[];
+
+  void flush() {
+    if (currentNumber != null) {
+      sections.add(_TermsSection(number: currentNumber, title: currentTitle, lines: currentLines));
+    }
+  }
+
+  for (; i < rest.length; i++) {
+    final line = rest[i];
+    final match = headingPattern.firstMatch(line);
+    if (match != null) {
+      flush();
+      currentNumber = int.tryParse(match.group(1) ?? '') ?? 0;
+      currentTitle = match.group(2) ?? line;
+      currentLines = [];
+    } else {
+      currentLines.add(line);
+    }
+  }
+  flush();
+
+  return _ParsedTerms(mainTitle: mainTitle, introText: introLines.join(' '), sections: sections);
 }

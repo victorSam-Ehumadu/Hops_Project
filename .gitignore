@@ -117,3 +117,8 @@ app.*.symbols
 !**/ios/**/default.perspectivev3
 !/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
 !/dev/ci/**/Gemfile.lock
+# Database backups — pg_dump output contains every row in the cloud
+# database (profiles, moderation records, the admin action log). Never
+# commit one. Deliberately scoped to this folder rather than a blanket
+# *.sql rule, which would also swallow supabase/migrations/.
+backups/

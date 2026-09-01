@@ -16,6 +16,7 @@ dependencies:
   ble_peripheral: ^2.4.0
   permission_handler: ^11.3.1
   sqflite: ^2.3.0
+  path: ^1.9.0
   path_provider: ^2.1.3
   uuid: ^4.3.3
   sqflite_common_ffi: ^2.3.3
@@ -35,9 +36,15 @@ dependencies:
   just_audio: ^0.9.38
   share_plus: ^10.1.4
   image_picker: ^1.0.0
-  mobile_scanner: ^7.4.0
-  qr_flutter: ^4.1.0
   google_fonts: ^6.1.0
+  quick_actions: ^1.0.7
+  flutter_tts: ^4.2.5
+  tflite_flutter: ^0.12.1
+  # Was already pulled in transitively (by share_plus); declared directly
+  # now that help_screen.dart intentionally uses it to open a mailto: link,
+  # rather than relying on an indirect dependency that could disappear on a
+  # future `flutter pub upgrade` if whatever pulled it in stops needing it.
+  url_launcher: ^6.3.0
 
 
 dev_dependencies:
@@ -50,4 +57,22 @@ flutter:
   uses-material-design: true
   assets:
     - .env
-    - assets/sounds/alert.wav
+    # Directory form — alert.wav (the Emergency Flare siren) plus the
+    # ping_*.wav notification tones (theme/ping_sound_packs.dart) all live
+    # here; a future addition needs no pubspec edit, same reasoning as
+    # assets/data/ below.
+    - assets/sounds/
+    # Directory form, not a single file: anything dropped into assets/data/
+    # later (extra knowledge packs, offline lookup tables) is bundled without
+    # another pubspec edit. Only files directly in the folder — subfolders
+    # each need their own line.
+    - assets/data/
+    # Optional TFLite models (see hops_engine.dart). Currently holds only a
+    # .gitkeep — the engine treats a missing model as a normal state and
+    # falls back to its heuristic, so the app runs fine with this empty.
+    - assets/models/
+    # hops_bunny.png — the splash sprite (hops_splash_screen.dart), a 145×160
+    # downscale of android/.../res/drawable/splash_bunny.png. The full-size
+    # original is 1390×1536 / 2.5MB and stays where it is for the native
+    # launch screen; bundling it again for a 50px sprite would be pure APK.
+    - assets/images/

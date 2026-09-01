@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Dark-mode counterpart to values/colors.xml. Selected automatically when
+    the system dark-mode setting is on; see that file for what these are for.
+-->
+<resources>
+    <!-- Standard Material dark surface rather than pure black: the Flutter
+         splash that follows paints the active Hops theme's surface colour,
+         and #121212 sits closer to those than #000000 does, so the handover
+         is less of a step. -->
+    <color name="splash_background">#FF121212</color>
+</resources>

@@ -1,10 +1,11 @@
+import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
 class DatabaseHelper {
   static const _databaseName = "MeshNetwork.db";
-  static const _databaseVersion = 7;
+  static const _databaseVersion = 10;
 
   static const table = 'messages';
   static const vibeTable = 'vibe_records';
@@ -45,6 +46,24 @@ class DatabaseHelper {
   static const cpColAvatarPath = 'avatar_path';
   static const cpColBio = 'bio';
   static const cpColUpdatedAt = 'updated_at';
+  // This contact's rotating-ID seed (base64), learned the same way as
+  // avatar/bio — direct exchange over the first chat session — and used to
+  // resolve their ever-changing "HPS:<token>" presence beacon back to a
+  // name. Stored separately from avatar/bio's upsert (see
+  // upsertContactRotatingSeed) so updating one never clobbers the other.
+  static const cpColRotatingSeed = 'rotating_seed';
+  // This contact's classic-Bluetooth MAC address, learned the first time
+  // an RFCOMM chat with them actually connects (see rfcomm_chat_service.dart
+  // /chat_terminal.dart) — lets a future chat with the same contact skip
+  // both classic-BT discovery and (on the hosting side) the intrusive
+  // "make this device discoverable" system dialog, connecting directly
+  // instead. Same separate-upsert reasoning as rotating_seed above.
+  static const cpColRfcommMac = 'rfcomm_mac';
+  // This contact's "thinking" status (see edit_identity_screen.dart) —
+  // learned the same way as bio, riding the same profile-exchange payload
+  // (hops_chat_service.dart's sendProfile, type 0x02), so it's kept in the
+  // same upsertContactProfile call as bio rather than a separate one.
+  static const cpColThinking = 'thinking';
 
   // Columns for Tasks
   static const taskColId = 'id';
@@ -77,9 +96,24 @@ class DatabaseHelper {
     await db?.close();
   }
 
-  _initDatabase() async {
+  // Single source of truth for where the db file actually lives —
+  // account_management_screen.dart's log-out/delete-account wipe used to
+  // independently reconstruct this path via sqflite's getDatabasesPath(),
+  // which is a *different* directory than the one _initDatabase() below
+  // actually opens (getApplicationDocumentsDirectory()). On Android those
+  // are two genuinely different folders, so the "delete the database on
+  // sign-out" step was silently deleting a file that never existed, while
+  // the real one — every message, task, and vibe record — survived
+  // untouched into whatever account signed in next on the same device.
+  // Anything that needs this path should call this instead of
+  // reconstructing it by hand.
+  static Future<String> resolveDatabasePath() async {
     final documentsDirectory = await getApplicationDocumentsDirectory();
-    final path = join(documentsDirectory.path, _databaseName);
+    return join(documentsDirectory.path, _databaseName);
+  }
+
+  _initDatabase() async {
+    final path = await resolveDatabasePath();
 
     return await openDatabase(
       path,
@@ -130,7 +164,10 @@ class DatabaseHelper {
         $cpColUsername TEXT PRIMARY KEY,
         $cpColAvatarPath TEXT,
         $cpColBio TEXT,
-        $cpColUpdatedAt INTEGER NOT NULL
+        $cpColUpdatedAt INTEGER NOT NULL,
+        $cpColRotatingSeed TEXT,
+        $cpColRfcommMac TEXT,
+        $cpColThinking TEXT
       )
     ''');
   }
@@ -177,6 +214,15 @@ class DatabaseHelper {
           $cpColUpdatedAt INTEGER NOT NULL
         )
       ''');
+    }
+    if (oldVersion < 8) {
+      await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColRotatingSeed TEXT');
+    }
+    if (oldVersion < 9) {
+      await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColRfcommMac TEXT');
+    }
+    if (oldVersion < 10) {
+      await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColThinking TEXT');
     }
   }
 
@@ -237,6 +283,27 @@ class DatabaseHelper {
     return await db.delete(tasksTable, where: '$taskColId = ?', whereArgs: [id]);
   }
 
+  // ---------- Full local export ----------
+  /// Every row this device has stored, across every table — backs Account
+  /// Management's "Export My Data". This app has no cloud copy of any of
+  /// this by design (see CLAUDE.md's offline-first architecture), so this
+  /// is the one way to get a copy that survives something happening to
+  /// THIS specific phone — a wipe, a factory reset, moving to a new
+  /// device — beyond whatever Android's own Auto Backup already covers.
+  /// Table names double as the JSON keys so the exported file is
+  /// self-describing without needing a separate schema doc next to it.
+  Future<Map<String, dynamic>> exportAllData() async {
+    final db = await database;
+    return {
+      'app': 'Hops',
+      'exported_at': DateTime.now().toIso8601String(),
+      table: await db.query(table),
+      vibeTable: await db.query(vibeTable),
+      tasksTable: await db.query(tasksTable),
+      contactProfilesTable: await db.query(contactProfilesTable),
+    };
+  }
+
   // ---------- Messages ----------
   Future<int> insertMessage(Map<String, dynamic> row) async {
     Database db = await instance.database;
@@ -260,6 +327,20 @@ class DatabaseHelper {
     Database db = await instance.database;
     return await db.update(table, {columnDelivered: 1},
         where: '$columnId = ?', whereArgs: [id]);
+  }
+
+  // "Delete my message" (chat_terminal.dart) — removes the row from THIS
+  // device's own copy of the thread. chat_terminal.dart's
+  // _confirmDeleteMessage also best-effort notifies the peer over RFCOMM
+  // (RfcommChatService.sendDeleteMessage) so their matching row gets
+  // deleted here too, on their device, when they call this same function
+  // in response — but only while a live connection to them exists at the
+  // moment of deleting. Over an often-disconnected P2P transport with no
+  // server relay, a delete requested while the peer is unreachable can't
+  // be queued or retried, so it stays local-only in that case.
+  Future<int> deleteMessage(String id) async {
+    Database db = await instance.database;
+    return await db.delete(table, where: '$columnId = ?', whereArgs: [id]);
   }
 
   // Messages I sent to this peer that never got confirmed as delivered —
@@ -298,22 +379,79 @@ class DatabaseHelper {
   }
 
   // ---------- Contact Profiles ----------
+  // Raw upsert (INSERT ... ON CONFLICT DO UPDATE) rather than
+  // ConflictAlgorithm.replace — replace deletes and re-inserts the whole
+  // row, which would silently null out rotating_seed (set by a completely
+  // separate call, upsertContactRotatingSeed below) every time the bio or
+  // avatar gets refreshed, and vice versa.
   Future<void> upsertContactProfile(
     String username, {
     String? avatarPath,
     String? bio,
+    String? thinking,
   }) async {
     Database db = await instance.database;
-    await db.insert(
+    await db.rawInsert('''
+      INSERT INTO $contactProfilesTable ($cpColUsername, $cpColAvatarPath, $cpColBio, $cpColThinking, $cpColUpdatedAt)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT($cpColUsername) DO UPDATE SET
+        $cpColAvatarPath = excluded.$cpColAvatarPath,
+        $cpColBio = excluded.$cpColBio,
+        $cpColThinking = excluded.$cpColThinking,
+        $cpColUpdatedAt = excluded.$cpColUpdatedAt
+    ''', [username, avatarPath, bio, thinking, DateTime.now().millisecondsSinceEpoch]);
+  }
+
+  // Learned the same way as avatar/bio — see hops_chat_service.dart's
+  // payload type 0x03 — and kept separate for the reason noted above.
+  Future<void> upsertContactRotatingSeed(String username, String seedBase64) async {
+    Database db = await instance.database;
+    await db.rawInsert('''
+      INSERT INTO $contactProfilesTable ($cpColUsername, $cpColRotatingSeed, $cpColUpdatedAt)
+      VALUES (?, ?, ?)
+      ON CONFLICT($cpColUsername) DO UPDATE SET
+        $cpColRotatingSeed = excluded.$cpColRotatingSeed,
+        $cpColUpdatedAt = excluded.$cpColUpdatedAt
+    ''', [username, seedBase64, DateTime.now().millisecondsSinceEpoch]);
+  }
+
+  // Learned the same way as rotating_seed — see RfcommChatService's
+  // onMacLearned. Kept separate from the other upserts for the same
+  // don't-clobber-unrelated-fields reason.
+  Future<void> upsertContactMacAddress(String username, String macAddress) async {
+    Database db = await instance.database;
+    await db.rawInsert('''
+      INSERT INTO $contactProfilesTable ($cpColUsername, $cpColRfcommMac, $cpColUpdatedAt)
+      VALUES (?, ?, ?)
+      ON CONFLICT($cpColUsername) DO UPDATE SET
+        $cpColRfcommMac = excluded.$cpColRfcommMac,
+        $cpColUpdatedAt = excluded.$cpColUpdatedAt
+    ''', [username, macAddress, DateTime.now().millisecondsSinceEpoch]);
+  }
+
+  // Every known contact's rotating-ID seed, decoded and ready to test
+  // against an observed beacon token — used by Radar to resolve
+  // "HPS:<token>" back to a name. Contacts with no cached seed yet (never
+  // chatted) are simply absent, same bounded limitation as avatar/bio.
+  Future<Map<String, List<int>>> getAllContactRotatingSeeds() async {
+    Database db = await instance.database;
+    final rows = await db.query(
       contactProfilesTable,
-      {
-        cpColUsername: username,
-        cpColAvatarPath: avatarPath,
-        cpColBio: bio,
-        cpColUpdatedAt: DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
+      columns: [cpColUsername, cpColRotatingSeed],
+      where: '$cpColRotatingSeed IS NOT NULL',
     );
+    final result = <String, List<int>>{};
+    for (final row in rows) {
+      final b64 = row[cpColRotatingSeed] as String?;
+      if (b64 == null) continue;
+      try {
+        result[row[cpColUsername] as String] = base64Decode(b64);
+      } catch (_) {
+        // Corrupt/legacy value — skip rather than crash resolution for
+        // every other contact.
+      }
+    }
+    return result;
   }
 
   Future<Map<String, dynamic>?> getContactProfile(String username) async {

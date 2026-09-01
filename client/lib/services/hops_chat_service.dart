@@ -35,6 +35,10 @@ class HopsChatService {
   final void Function(ChatConnectionState state)? onStateChanged;
   // bio, avatarBytes (null if the peer has no avatar set)
   final void Function(String bio, Uint8List? avatarBytes)? onProfileReceived;
+  // The peer's rotating-ID seed — lets this device recognize their
+  // "HPS:<token>" presence beacon on Radar from now on. See
+  // hops_constants.dart's computeRotatingToken for what this is for.
+  final void Function(Uint8List seed)? onRotatingSeedReceived;
 
   // Distinct from HopsSharePage's 'com.hops.share' so the two features
   // never mistake each other's sessions for one another.
@@ -46,11 +50,27 @@ class HopsChatService {
   // channel.
   static const int _payloadTypeChat = 0x01;
   static const int _payloadTypeProfile = 0x02;
+  static const int _payloadTypeRotatingSeed = 0x03;
 
   String? _endpointId;
   bool _connecting = false;
   bool _connected = false;
   bool _disposed = false;
+
+  // Campus testing surfaced a real gap: connect() used to make exactly one
+  // advertise+discover attempt and then just sit there — if a single BLE
+  // advertisement or the connection-request handshake got lost to RF noise
+  // (a busy campus is a much noisier radio environment than a quiet home,
+  // and BLE advertising/discovery packets have no delivery guarantee or
+  // retry of their own), the chat hung on "Connecting…" forever with
+  // nothing automatically trying again. This watchdog periodically cycles
+  // advertising/discovery for a bounded number of attempts before finally
+  // reporting failure, so a single lost packet doesn't need a human to
+  // notice and manually hit retry.
+  static const int _maxConnectAttempts = 5;
+  static const Duration _connectAttemptInterval = Duration(seconds: 10);
+  Timer? _connectWatchdog;
+  int _connectAttemptCount = 0;
 
   HopsChatService({
     required this.myUsername,
@@ -58,11 +78,13 @@ class HopsChatService {
     this.onMessageReceived,
     this.onStateChanged,
     this.onProfileReceived,
+    this.onRotatingSeedReceived,
   });
 
   bool get isConnected => _connected;
 
   Future<void> connect() async {
+    _connectAttemptCount = 0;
     _setState(ChatConnectionState.connecting);
 
     // Nearby Connections competes with BLE peripheral advertising for
@@ -70,10 +92,49 @@ class HopsChatService {
     // already uses for this exact reason.
     await BlePeripheral.stopAdvertising();
     await Nearby().stopAllEndpoints();
+    await _startAdvertisingAndDiscovery();
+    _armConnectWatchdog();
+  }
 
+  // See _maxConnectAttempts' doc comment above for why this exists. Ticks
+  // every _connectAttemptInterval while still unconnected: cycles
+  // advertising/discovery (often enough on its own to recover from a
+  // stalled BLE stack) and counts the attempt, until either a connection
+  // succeeds (the timer cancels itself, see _onConnectionResult) or the
+  // attempt budget runs out and this finally reports ChatConnectionState.failed.
+  void _armConnectWatchdog() {
+    _connectWatchdog?.cancel();
+    _connectWatchdog = Timer.periodic(_connectAttemptInterval, (timer) async {
+      if (_disposed || _connected) {
+        timer.cancel();
+        return;
+      }
+      _connectAttemptCount++;
+      if (_connectAttemptCount >= _maxConnectAttempts) {
+        timer.cancel();
+        _setState(ChatConnectionState.failed);
+        return;
+      }
+      await Nearby().stopAdvertising();
+      await Nearby().stopDiscovery();
+      await _startAdvertisingAndDiscovery();
+    });
+  }
+
+  // Factored out of connect() so pauseForPing()/resumeAfterPing() (below)
+  // can bring Nearby Connections back up the exact same way after
+  // stepping aside for a CHT: ping, without duplicating this whole block.
+  Future<void> _startAdvertisingAndDiscovery() async {
     await Nearby().startAdvertising(
       myUsername,
-      Strategy.P2P_POINT_TO_POINT,
+      // P2P_CLUSTER, not P2P_POINT_TO_POINT — the latter is documented by
+      // Nearby Connections to opportunistically upgrade the link to Wi-Fi
+      // Direct for extra bandwidth, which is what was silently flipping
+      // the device's Wi-Fi radio on every time a chat opened. That's the
+      // opposite of what an offline/BLE-mesh app should do, and text +
+      // small avatar payloads don't need Wi-Fi-grade bandwidth anyway.
+      // hops_share_page.dart already uses P2P_CLUSTER for the same reason.
+      Strategy.P2P_CLUSTER,
       serviceId: _serviceId,
       onConnectionInitiated: _onConnectionInitiated,
       onConnectionResult: _onConnectionResult,
@@ -82,7 +143,7 @@ class HopsChatService {
 
     await Nearby().startDiscovery(
       myUsername,
-      Strategy.P2P_POINT_TO_POINT,
+      Strategy.P2P_CLUSTER,
       serviceId: _serviceId,
       onEndpointFound: (id, name, foundServiceId) {
         if (_disposed || _connected || _connecting) return;
@@ -98,6 +159,30 @@ class HopsChatService {
       },
       onEndpointLost: (_) {},
     );
+  }
+
+  // Briefly steps out of Nearby Connections' own advertise/discover so a
+  // short BLE-peripheral CHT: ping (see hops_app.dart) can safely use the
+  // radio without the two fighting each other — the same contention
+  // connect() already guards against at startup, just re-applied
+  // mid-session. No-op once actually connected — nothing needs pinging
+  // by that point, and tearing down a live connection to send a ping
+  // would be a much worse trade.
+  Future<void> pauseForPing() async {
+    if (_connected) return;
+    _connectWatchdog?.cancel();
+    await Nearby().stopAdvertising();
+    await Nearby().stopDiscovery();
+  }
+
+  // Pairs with pauseForPing() — brings Nearby Connections back up after
+  // the ping's gone out. No-op if we've disposed or connected in the
+  // meantime (a connection completing while the ping was in flight means
+  // there's nothing left to resume).
+  Future<void> resumeAfterPing() async {
+    if (_disposed || _connected) return;
+    await _startAdvertisingAndDiscovery();
+    _armConnectWatchdog();
   }
 
   void _onConnectionInitiated(String id, ConnectionInfo info) {
@@ -119,13 +204,20 @@ class HopsChatService {
     if (status == Status.CONNECTED) {
       _endpointId = id;
       _connected = true;
+      _connectWatchdog?.cancel();
       // Radio housekeeping — advertising/discovery are no longer needed
       // once the one connection P2P_POINT_TO_POINT allows is up.
       Nearby().stopAdvertising();
       Nearby().stopDiscovery();
       _setState(ChatConnectionState.connected);
     } else {
-      _setState(ChatConnectionState.failed);
+      // Don't immediately report failure on a single rejected/dropped
+      // handshake — in a noisy RF environment a lone failed attempt is
+      // common and not necessarily the end of the story. Advertising and
+      // discovery are still running (nothing stopped them), so just leave
+      // the watchdog above to keep retrying and only surface
+      // ChatConnectionState.failed once its attempt budget is actually
+      // exhausted.
     }
   }
 
@@ -158,6 +250,11 @@ class HopsChatService {
             ? Uint8List.fromList(data.sublist(2 + bioLen))
             : null;
         onProfileReceived?.call(bio, avatarBytes);
+        break;
+      case _payloadTypeRotatingSeed:
+        final seed = data.sublist(1);
+        if (seed.isEmpty) return;
+        onRotatingSeedReceived?.call(Uint8List.fromList(seed));
         break;
       default:
         // Unknown/future payload type — ignore rather than misparse it.
@@ -203,8 +300,25 @@ class HopsChatService {
     }
   }
 
+  // Sent automatically once a chat connects, alongside sendProfile — see
+  // chat_terminal.dart. [seed] is this device's own rotating_id_seed (from
+  // secure storage), handed to the peer so their Radar can recognize this
+  // device's beacon from now on. Small fixed-size payload, no
+  // length-prefixing needed unlike the bio/avatar one.
+  Future<bool> sendRotatingSeed(Uint8List seed) async {
+    if (!_connected || _endpointId == null) return false;
+    final payload = Uint8List.fromList([_payloadTypeRotatingSeed, ...seed]);
+    try {
+      await Nearby().sendBytesPayload(_endpointId!, payload);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> dispose() async {
     _disposed = true;
+    _connectWatchdog?.cancel();
     final endpointId = _endpointId;
     _connected = false;
     _endpointId = null;

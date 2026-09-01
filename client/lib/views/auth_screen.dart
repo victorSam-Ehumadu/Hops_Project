@@ -1,4 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show AutofillHints, TextInput;
+import 'package:client/widgets/hops_background_pattern.dart';
+import 'package:client/widgets/hops_flip_card.dart';
+import 'package:client/widgets/password_strength_bar.dart';
+import 'package:client/utils/password_policy.dart';
+import 'package:client/views/forgot_password_screen.dart';
 
 class AuthScreen extends StatefulWidget {
   final Future<void> Function({
@@ -25,36 +31,103 @@ class AuthScreen extends StatefulWidget {
   State<AuthScreen> createState() => _AuthScreenState();
 }
 
-class _AuthScreenState extends State<AuthScreen> {
+class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateMixin {
   final PageController _pageController = PageController();
   int _currentStep = 0;
   bool isJoinMeshMode = true;
 
+  // Separate controllers per form — these used to be shared between Join
+  // Hops and Sign In (both used _emailController/_passwordController),
+  // which is why typing in one form's fields made the same text appear in
+  // the other's: they were, quite literally, the same TextEditingController.
   final _usernameController = TextEditingController();
-  final _emailController = TextEditingController();
+  final _signupEmailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _signinEmailController = TextEditingController();
+  final _signinPasswordController = TextEditingController();
+
+  // One FocusNode per field — drives two things while focused: the small
+  // requirement line that separates from the label ("Must be at least ...")
+  // and whether the bunny-themed hint text is visible at all (unfocused
+  // fields look completely empty, same as the password field always has).
+  final _usernameFocus = FocusNode();
+  final _signupEmailFocus = FocusNode();
+  final _passwordFocus = FocusNode();
+  final _confirmPasswordFocus = FocusNode();
+  final _signinEmailFocus = FocusNode();
+  final _signinPasswordFocus = FocusNode();
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
-  bool _isLoading = false;   // new
+  bool _isLoading = false;
+  String? _fieldError; // inline, non-technical validation message
+
+  // Plays once on first launch of this screen — an explicit controller
+  // rather than e.g. TweenAnimationBuilder specifically so it doesn't
+  // re-trigger every time the password fields' listeners below call
+  // setState() (which rebuilds this whole screen, including the
+  // onboarding page sitting inert underneath the form page in the
+  // PageView) — that would've made the logo visibly bounce on every
+  // keystroke.
+  late final AnimationController _logoController;
+  late final Animation<double> _logoScale;
 
   @override
   void initState() {
     super.initState();
-    _usernameController.addListener(() => setState(() {}));
-    _emailController.addListener(() => setState(() {}));
-    _passwordController.addListener(() => setState(() {}));
-    _confirmPasswordController.addListener(() => setState(() {}));
+    for (final c in [
+      _usernameController,
+      _signupEmailController,
+      _passwordController,
+      _confirmPasswordController,
+      _signinEmailController,
+      _signinPasswordController,
+    ]) {
+      c.addListener(() => setState(() {}));
+    }
+    for (final f in [
+      _usernameFocus,
+      _signupEmailFocus,
+      _passwordFocus,
+      _confirmPasswordFocus,
+      _signinEmailFocus,
+      _signinPasswordFocus,
+    ]) {
+      f.addListener(() => setState(() {}));
+    }
+    _logoController = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    _logoScale = CurvedAnimation(parent: _logoController, curve: Curves.elasticOut);
+    _logoController.forward();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
     _usernameController.dispose();
-    _emailController.dispose();
+    _signupEmailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _signinEmailController.dispose();
+    _signinPasswordController.dispose();
+    _usernameFocus.dispose();
+    _signupEmailFocus.dispose();
+    _passwordFocus.dispose();
+    _confirmPasswordFocus.dispose();
+    _signinEmailFocus.dispose();
+    _signinPasswordFocus.dispose();
+    _logoController.dispose();
+    // Tells the platform (Google Password Manager / iOS Keychain / etc.)
+    // this screen's autofill-eligible forms are done being interacted
+    // with, which is what actually triggers the "Save password?" prompt.
+    // AuthScreen only ever gets torn down by a successful sign-in/sign-up
+    // navigating away from it — on a failed attempt nothing navigates and
+    // this widget just stays mounted — so dispose() firing is a reliable
+    // enough "the credentials just typed in were good" signal, without
+    // needing to plumb an explicit success/failure result back from
+    // root_gatekeeper.dart's callbacks (which currently only communicate
+    // via the currentStatus string, not a return value).
+    TextInput.finishAutofillContext();
     super.dispose();
   }
 
@@ -65,14 +138,19 @@ class _AuthScreenState extends State<AuthScreen> {
 
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
+          // Theme-reactive rather than the two hardcoded teal hex codes
+          // this used to be — theme/font choices are saved to
+          // SharedPreferences and survive sign-out, so a returning user
+          // on a dark theme would otherwise land back on a jarring fixed
+          // light gradient before they've even logged in.
           gradient: RadialGradient(
-            center: Alignment(-0.6, -0.4),
+            center: const Alignment(-0.6, -0.4),
             radius: 1.2,
-            colors: [Color(0xFFd7fafa), Color(0xFFe2fffe)], // static safe fallback
+            colors: [colors.surface, theme.scaffoldBackgroundColor],
           ),
         ),
-        child: SafeArea(
+        child: HopsBackgroundPattern(child: SafeArea(
           child: Column(
             children: [
               Padding(
@@ -115,7 +193,7 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
             ],
           ),
-        ),
+        )),
       ),
     );
   }
@@ -128,6 +206,29 @@ class _AuthScreenState extends State<AuthScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          const SizedBox(height: 12),
+          // The app's actual brand identity, front and center at the
+          // exact moment someone forms their first impression — not just
+          // a small 24px icon next to the wordmark up top.
+          ScaleTransition(
+            scale: _logoScale,
+            child: Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: colors.primary,
+                boxShadow: [
+                  BoxShadow(
+                    color: colors.primary.withValues(alpha: 0.35),
+                    blurRadius: 24,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.cruelty_free, color: Colors.white, size: 56),
+            ),
+          ),
           const SizedBox(height: 20),
           FittedBox(
             fit: BoxFit.scaleDown,
@@ -135,10 +236,10 @@ class _AuthScreenState extends State<AuthScreen> {
                 style: theme.textTheme.displayLarge?.copyWith(fontSize: 32)),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             "The offline campus network that lets you chat, share, and stay safe — no Wi‑Fi or data needed.",
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.black54, fontSize: 14),
+            style: TextStyle(color: colors.onSurface.withValues(alpha: 0.6), fontSize: 14),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
@@ -158,6 +259,7 @@ class _AuthScreenState extends State<AuthScreen> {
               Expanded(
                 child: _buildSquareBentoCard(
                   title: "Private & Secure",
+                  detail: "Messages go device-to-device — nothing touches an internet server.",
                   icon: Icons.enhanced_encryption_outlined,
                   bgColor: colors.surface,
                   textColor: colors.onSurface,
@@ -167,9 +269,34 @@ class _AuthScreenState extends State<AuthScreen> {
               Expanded(
                 child: _buildSquareBentoCard(
                   title: "Built for Students",
+                  detail: "Offline chat and crowd checks, built for busy campus life.",
                   icon: Icons.group_outlined,
                   bgColor: colors.primaryContainer,
                   textColor: colors.onPrimaryContainer,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildSquareBentoCard(
+                  title: "Emergency Ready",
+                  detail: "One long-press alerts everyone nearby, even offline.",
+                  icon: Icons.warning_amber_rounded,
+                  bgColor: colors.surface,
+                  textColor: colors.onSurface,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildSquareBentoCard(
+                  title: "Nearby & Now",
+                  detail: "See who's nearby in real time on the Radar — no accounts needed.",
+                  icon: Icons.radar,
+                  bgColor: colors.tertiaryContainer,
+                  textColor: colors.onTertiary,
                 ),
               ),
             ],
@@ -223,14 +350,38 @@ class _AuthScreenState extends State<AuthScreen> {
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.7),
+              color: colors.surface.withValues(alpha: 0.7),
               borderRadius: BorderRadius.circular(24),
             ),
             child: Column(
               children: [
                 _buildFormSwitcherToggle(),
                 const SizedBox(height: 24),
-                isJoinMeshMode ? _buildJoinMeshForm() : _buildSignInForm(),
+                // Smooth crossfade+slide between the two forms instead of
+                // an abrupt swap — a Row toggle that just teleports its
+                // content used to feel like a glitch rather than a switch.
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 320),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) {
+                    final slide = Tween<Offset>(
+                      begin: Offset(child.key == const ValueKey('join') ? -0.08 : 0.08, 0),
+                      end: Offset.zero,
+                    ).animate(animation);
+                    return FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(position: slide, child: child),
+                    );
+                  },
+                  child: Column(
+                    key: ValueKey(isJoinMeshMode ? 'join' : 'signin'),
+                    children: [
+                      isJoinMeshMode ? _buildJoinMeshForm() : _buildSignInForm(),
+                      _buildStatusMessage(),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -239,33 +390,112 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
+  // widget.currentStatus was previously updated at every step of sign-up/
+  // sign-in (root_gatekeeper.dart's authEngineStatus) but never actually
+  // displayed anywhere in this screen — so a failure just silently
+  // reverted the button with zero visible explanation. This is what
+  // surfaces it, error or otherwise. Combined with _fieldError below for
+  // this screen's own inline validation failures.
+  Widget _buildStatusMessage() {
+    final status = widget.currentStatus;
+    final inline = _fieldError;
+    if ((status.isEmpty || status == "System Ready") && inline == null) {
+      return const SizedBox.shrink();
+    }
+    final colors = Theme.of(context).colorScheme;
+    final text = inline ?? (status.startsWith("Err:") ? status.substring(5) : status);
+    final isError = inline != null || status.startsWith("Err:");
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isError ? Colors.red.withValues(alpha: 0.1) : colors.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.info_outline,
+              size: 18,
+              color: isError ? Colors.redAccent : colors.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                text,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: isError ? Colors.redAccent : colors.primary,
+                  fontWeight: isError ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildJoinMeshForm() {
     final colors = Theme.of(context).colorScheme;
-    return Column(
+    // AutofillGroup ties these fields together as one logical form, so the
+    // platform's password manager (Google Password Manager, iOS Keychain,
+    // etc.) offers to save the username/email + password as a set once
+    // TextInput.finishAutofillContext() fires — see dispose() above — the
+    // same way a browser offers to save a just-submitted signup form.
+    return AutofillGroup(
+      child: Column(
+      key: const ValueKey('joinFields'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildCapsuleInput(label: "USERNAME", hint: "student_handle", icon: Icons.alternate_email, controller: _usernameController),
+        _buildCapsuleInput(
+          label: "USERNAME",
+          bunnyHint: "What's your bunny's name?",
+          requirement: "$kMinUsernameLength–$kMaxUsernameLength characters — letters, numbers, underscores",
+          icon: Icons.alternate_email,
+          controller: _usernameController,
+          focusNode: _usernameFocus,
+          autofillHints: const [AutofillHints.newUsername],
+        ),
         const SizedBox(height: 16),
-        _buildCapsuleInput(label: "EMAIL", hint: "your@email.edu", icon: Icons.mail_outline, controller: _emailController, type: TextInputType.emailAddress),
+        _buildCapsuleInput(
+          label: "EMAIL",
+          bunnyHint: "Your carrot mail?",
+          requirement: "You'll sign in with this — make sure it's real",
+          icon: Icons.mail_outline,
+          controller: _signupEmailController,
+          focusNode: _signupEmailFocus,
+          type: TextInputType.emailAddress,
+          autofillHints: const [AutofillHints.email],
+        ),
         const SizedBox(height: 16),
         _buildCapsuleInput(
           label: "PASSWORD",
-          hint: "",
+          bunnyHint: "Shh... your secret hop code",
+          requirement: "8+ characters with upper & lowercase, a number, and a symbol",
           icon: Icons.lock_outline,
           controller: _passwordController,
+          focusNode: _passwordFocus,
           obscure: _obscurePassword,
           isPasswordField: true,
           onPasswordToggle: () => setState(() => _obscurePassword = !_obscurePassword),
+          belowChild: PasswordStrengthBar(password: _passwordController.text),
+          autofillHints: const [AutofillHints.newPassword],
         ),
         const SizedBox(height: 16),
         _buildCapsuleInput(
           label: "CONFIRM PASSWORD",
-          hint: "",
+          bunnyHint: "One more hop to be sure",
+          requirement: "Must match the password above",
           icon: Icons.lock_outline,
           controller: _confirmPasswordController,
+          focusNode: _confirmPasswordFocus,
           obscure: _obscureConfirmPassword,
           isPasswordField: true,
           onPasswordToggle: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+          autofillHints: const [AutofillHints.newPassword],
         ),
         const SizedBox(height: 24),
         SizedBox(
@@ -277,51 +507,100 @@ class _AuthScreenState extends State<AuthScreen> {
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
             ),
-            onPressed: _isLoading ? null : () async {
-              if (_usernameController.text.isEmpty || _emailController.text.isEmpty || _passwordController.text.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fill in all registration fields!")));
-                return;
-              }
-              if (_passwordController.text == _confirmPasswordController.text) {
-                setState(() => _isLoading = true);
-                try {
-                  await widget.onSignUpTrigger(
-                    email: _emailController.text.trim(),
-                    password: _passwordController.text.trim(),
-                    username: _usernameController.text.trim(),
-                  );
-                } finally {
-                  setState(() => _isLoading = false);
-                }
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Passwords do not match!")));
-              }
-            },
+            onPressed: _isLoading ? null : _submitJoinMesh,
             child: _isLoading
                 ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : const Text("Join Mesh", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                : const Text("Join Hops", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           ),
         )
       ],
+      ),
     );
+  }
+
+  Future<void> _submitJoinMesh() async {
+    setState(() => _fieldError = null);
+
+    final usernameError = validateUsername(_usernameController.text);
+    if (usernameError != null) {
+      setState(() => _fieldError = usernameError);
+      return;
+    }
+    final emailError = validateEmail(_signupEmailController.text);
+    if (emailError != null) {
+      setState(() => _fieldError = emailError);
+      return;
+    }
+    final passwordError = validatePassword(_passwordController.text);
+    if (passwordError != null) {
+      setState(() => _fieldError = passwordError);
+      return;
+    }
+    if (_passwordController.text != _confirmPasswordController.text) {
+      setState(() => _fieldError = "Passwords don't match.");
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await widget.onSignUpTrigger(
+        email: _signupEmailController.text.trim(),
+        password: _passwordController.text.trim(),
+        username: _usernameController.text.trim(),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Widget _buildSignInForm() {
     final colors = Theme.of(context).colorScheme;
-    return Column(
+    return AutofillGroup(
+      child: Column(
+      key: const ValueKey('signinFields'),
       children: [
-        _buildCapsuleInput(label: "USERNAME", hint: "student_handle", icon: Icons.person_outline, controller: _emailController),
+        _buildCapsuleInput(
+          label: "EMAIL",
+          bunnyHint: "Your carrot mail?",
+          requirement: "The email you signed up with",
+          icon: Icons.mail_outline,
+          controller: _signinEmailController,
+          focusNode: _signinEmailFocus,
+          type: TextInputType.emailAddress,
+          autofillHints: const [AutofillHints.email],
+        ),
         const SizedBox(height: 16),
         _buildCapsuleInput(
           label: "PASSWORD",
-          hint: "",
+          bunnyHint: "Your secret hop code",
+          requirement: "The password you signed up with",
           icon: Icons.lock_outline,
-          controller: _passwordController,
+          controller: _signinPasswordController,
+          focusNode: _signinPasswordFocus,
           obscure: _obscurePassword,
           isPasswordField: true,
           onPasswordToggle: () => setState(() => _obscurePassword = !_obscurePassword),
+          autofillHints: const [AutofillHints.password],
         ),
-        const SizedBox(height: 24),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: _isLoading
+                ? null
+                : () async {
+                    final changed = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
+                    );
+                    if (changed == true && mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Password changed — sign in with your new password.")),
+                      );
+                    }
+                  },
+            child: Text("Forgot password?", style: TextStyle(color: colors.primary, fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        ),
+        const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
           height: 56,
@@ -332,21 +611,7 @@ class _AuthScreenState extends State<AuthScreen> {
             ),
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent, foregroundColor: Colors.white),
-              onPressed: _isLoading ? null : () async {
-                if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please supply authentication metrics!")));
-                  return;
-                }
-                setState(() => _isLoading = true);
-                try {
-                  await widget.onSignInTrigger(
-                    email: _emailController.text.trim(),
-                    password: _passwordController.text.trim(),
-                  );
-                } finally {
-                  setState(() => _isLoading = false);
-                }
-              },
+              onPressed: _isLoading ? null : _submitSignIn,
               child: _isLoading
                   ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : const Text("Sign In", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
@@ -354,21 +619,49 @@ class _AuthScreenState extends State<AuthScreen> {
           ),
         )
       ],
+      ),
     );
   }
 
-  // ... rest of the methods (_buildCapsuleInput, _buildBentoInfoCard, etc.) remain unchanged
+  Future<void> _submitSignIn() async {
+    setState(() => _fieldError = null);
+    if (_signinEmailController.text.trim().isEmpty || _signinPasswordController.text.isEmpty) {
+      setState(() => _fieldError = "Please enter your email and password.");
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      await widget.onSignInTrigger(
+        email: _signinEmailController.text.trim(),
+        password: _signinPasswordController.text.trim(),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // A label, an optional requirement line that only appears once the
+  // field is focused (separating itself from the label the moment you tap
+  // in, per the "Must be at least N characters" request), and a capsule
+  // TextField whose hint text is likewise only shown while focused — every
+  // field now looks as empty as the password field always has, until you
+  // actually tap into it.
   Widget _buildCapsuleInput({
     required String label,
-    required String hint,
+    required String bunnyHint,
+    required String? requirement,
     required IconData icon,
     required TextEditingController controller,
+    required FocusNode focusNode,
     bool obscure = false,
     bool isPasswordField = false,
     VoidCallback? onPasswordToggle,
     TextInputType type = TextInputType.text,
+    Widget? belowChild,
+    List<String>? autofillHints,
   }) {
     final colors = Theme.of(context).colorScheme;
+    final hasFocus = focusNode.hasFocus;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -381,17 +674,43 @@ class _AuthScreenState extends State<AuthScreen> {
             overflow: TextOverflow.ellipsis,
           ),
         ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          alignment: Alignment.topCenter,
+          child: (requirement != null && hasFocus)
+              ? Padding(
+                  padding: const EdgeInsets.only(left: 16.0, bottom: 6.0),
+                  child: Text(
+                    requirement,
+                    style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.55), fontStyle: FontStyle.italic),
+                  ),
+                )
+              : const SizedBox(width: double.infinity),
+        ),
         TextField(
           controller: controller,
+          focusNode: focusNode,
           obscureText: obscure,
           keyboardType: type,
+          autofillHints: autofillHints,
           style: TextStyle(fontSize: 14, color: colors.onSurface),
           decoration: InputDecoration(
-            hintText: hint,
-            prefixIcon: Icon(icon, color: colors.primary.withOpacity(0.6), size: 20),
+            // Only shown once focused — unfocused, every field now reads
+            // as genuinely empty (student_handle/your@email.edu used to
+            // sit there looking pre-filled, which is exactly what people
+            // mistook them for) instead of a placeholder they thought
+            // was real content.
+            hintText: hasFocus ? bunnyHint : null,
+            hintStyle: TextStyle(
+              color: colors.onSurface.withValues(alpha: 0.35),
+              fontStyle: FontStyle.italic,
+              fontSize: 13,
+            ),
+            prefixIcon: Icon(icon, color: colors.primary.withValues(alpha: 0.6), size: 20),
             suffixIcon: isPasswordField
                 ? IconButton(
-              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: colors.primary.withOpacity(0.6), size: 20),
+              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: colors.primary.withValues(alpha: 0.6), size: 20),
               onPressed: onPasswordToggle,
             )
                 : (controller.text.isNotEmpty
@@ -406,6 +725,7 @@ class _AuthScreenState extends State<AuthScreen> {
             contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           ),
         ),
+        if (belowChild != null) belowChild,
       ],
     );
   }
@@ -427,8 +747,11 @@ class _AuthScreenState extends State<AuthScreen> {
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: const TextStyle(fontSize: 12, color: Colors.black54, height: 1.4),
-                  maxLines: 2,
+                  style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6), height: 1.4),
+                  // Was maxLines: 2 — at this card width the sentence
+                  // reliably needed a 3rd line and was rendering as a
+                  // truncated "…" instead of the actual full sentence.
+                  maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
@@ -439,26 +762,67 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
-  Widget _buildSquareBentoCard({required String title, required IconData icon, required Color bgColor, required Color textColor}) {
+  Widget _buildSquareBentoCard({
+    required String title,
+    required String detail,
+    required IconData icon,
+    required Color bgColor,
+    required Color textColor,
+  }) {
     final colors = Theme.of(context).colorScheme;
     return AspectRatio(
       aspectRatio: 1.0,
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(16)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Icon(icon, color: colors.primary, size: 28),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: textColor, height: 1.2),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+      child: HopsFlipCard(
+        front: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(16)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Icon(icon, color: colors.primary, size: 28),
+                  Icon(Icons.flip, size: 13, color: textColor.withValues(alpha: 0.35)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                title,
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: textColor, height: 1.2),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+        back: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(16)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: colors.primary, size: 20),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: textColor, height: 1.2),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+              Flexible(
+                child: Text(
+                  detail,
+                  style: TextStyle(fontSize: 10.5, color: textColor.withValues(alpha: 0.8), height: 1.3),
+                  maxLines: 5,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -476,8 +840,12 @@ class _AuthScreenState extends State<AuthScreen> {
         children: [
           Expanded(
             child: GestureDetector(
-              onTap: () => setState(() => isJoinMeshMode = false),
-              child: Container(
+              onTap: () => setState(() {
+                isJoinMeshMode = false;
+                _fieldError = null;
+              }),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
                   color: !isJoinMeshMode ? colors.primary : Colors.transparent,
@@ -485,7 +853,7 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
                 child: Center(
                   child: Text(
-                    "Login",
+                    "Sign In",
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
@@ -499,8 +867,12 @@ class _AuthScreenState extends State<AuthScreen> {
           ),
           Expanded(
             child: GestureDetector(
-              onTap: () => setState(() => isJoinMeshMode = true),
-              child: Container(
+              onTap: () => setState(() {
+                isJoinMeshMode = true;
+                _fieldError = null;
+              }),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
                   color: isJoinMeshMode ? colors.tertiaryContainer : Colors.transparent,

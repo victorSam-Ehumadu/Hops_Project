@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Pre-API-21 fallback. Unreachable in practice — drawable-v21/ wins on
+    every device this app can install on — so change that file, not this
+    one. Kept in step with it anyway so the two don't silently diverge.
+
+    No theme-aware colour here: @color with a values-night/ variant works,
+    but the theme attributes the v21 version relies on elsewhere do not.
+-->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@android:color/white" />
 
     <item>
         <bitmap
             android:gravity="center"
-            android:src="@drawable/splash_bunny" />
+            android:src="@drawable/splash_logo" />
     </item>
 </layer-list>

@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/theme/app_theme.dart';
-import 'package:client/main.dart' show themeNotifier;   // import the notifier
+import 'package:client/main.dart' show themeNotifier, fontNotifier, fontScaleNotifier;
+import 'package:client/views/color_theme_page.dart';
+import 'package:client/views/font_picker_page.dart';
+import 'package:client/views/font_size_page.dart';
 
+// The "Customize Hops" hub — color theme and font used to be crammed onto
+// one long scrolling screen; split into their own dedicated pages (each
+// with room to breathe, and its own AppBar/back button) reached from here,
+// same shape as Profile → Account Management's own hub-and-spoke pattern.
 class ThemePickerScreen extends StatefulWidget {
   const ThemePickerScreen({super.key});
 
@@ -11,117 +17,81 @@ class ThemePickerScreen extends StatefulWidget {
 }
 
 class _ThemePickerScreenState extends State<ThemePickerScreen> {
-  int _selectedIndex = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedIndex = themeNotifier.value;
-  }
-
-  Future<void> _selectTheme(int index) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('selected_theme_index', index);
-    themeNotifier.value = index;
-
-    // No need to restart – the HopsRoot will rebuild automatically
-    if (mounted) {
-      Navigator.pop(context);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final currentThemeName = AppThemes.all[themeNotifier.value].name;
+    final currentFontName =
+        fontNotifier.value >= 0 ? AppFonts.all[fontNotifier.value].name : 'System default';
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          'Choose a Theme',
-          style: TextStyle(
-            color: colors.primary,          // always visible
-            fontWeight: FontWeight.bold,
-          ),
+          'Customize Hops',
+          style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold),
         ),
         backgroundColor: Colors.transparent,
         elevation: 0,
-        foregroundColor: colors.primary,         // back button visible
+        foregroundColor: colors.primary,
       ),
-      body: GridView.builder(
+      body: ListView(
         padding: const EdgeInsets.all(16),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.1,
-        ),
-        itemCount: AppThemes.all.length,
-        itemBuilder: (context, index) {
-          final theme = AppThemes.all[index];
-          final isSelected = index == _selectedIndex;
-          return GestureDetector(
-            onTap: () => _selectTheme(index),
-            child: Card(
-              color: theme.background,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: isSelected
-                    ? BorderSide(color: theme.primary, width: 3)
-                    : BorderSide.none,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    Icon(Icons.palette, color: theme.primary, size: 32),
-                    Text(
-                      theme.name,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: theme.primary,
-                        fontSize: 14,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _ColorCircle(color: theme.primary),
-                        const SizedBox(width: 4),
-                        _ColorCircle(color: theme.primaryContainer),
-                        const SizedBox(width: 4),
-                        _ColorCircle(color: theme.tertiaryContainer),
-                      ],
-                    ),
-                    if (isSelected)
-                      Icon(Icons.check_circle, color: theme.primary),
-                  ],
-                ),
-              ),
+        children: [
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            leading: Icon(Icons.palette_outlined, color: colors.primary),
+            title: Text(
+              'Color Theme',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: colors.primary),
             ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ColorCircle extends StatelessWidget {
-  final Color color;
-  const _ColorCircle({required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-  final theme = Theme.of(context);      // ← here
-  final colors = theme.colorScheme;     // ← here
-    return Container(
-      width: 16,
-      height: 16,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white),
+            subtitle: Text(
+              currentThemeName,
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
+            ),
+            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.4)),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ColorThemePage()),
+            ).then((_) => setState(() {})),
+          ),
+          const SizedBox(height: 8),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            leading: Icon(Icons.text_fields, color: colors.primary),
+            title: Text(
+              'Font',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: colors.primary),
+            ),
+            subtitle: Text(
+              currentFontName,
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
+            ),
+            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.4)),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const FontPickerPage()),
+            ).then((_) => setState(() {})),
+          ),
+          const SizedBox(height: 8),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            leading: Icon(Icons.format_size, color: colors.primary),
+            title: Text(
+              'Font Size',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: colors.primary),
+            ),
+            subtitle: Text(
+              "${(fontScaleNotifier.value * 100).round()}%",
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.7)),
+            ),
+            trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.4)),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const FontSizePage()),
+            ).then((_) => setState(() {})),
+          ),
+        ],
       ),
     );
   }

@@ -3,15 +3,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
+import 'package:client/views/vibe_history_page.dart';
+import 'package:client/widgets/hops_card.dart';
+import 'package:client/utils/report_content.dart';
+import 'package:client/services/unread_tracker.dart';
+import 'package:client/services/vibe_report_store.dart';
+import 'package:client/utils/profanity_filter.dart';
+
 
 class VibeCheckPage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
   final Future<void> Function(String location, int count) onAdvertiseVibeTag;
+  final Future<void> Function(String reportKey) onDeleteVibeReport;
 
   const VibeCheckPage({
     super.key,
     required this.radarStream,
     required this.onAdvertiseVibeTag,
+    required this.onDeleteVibeReport,
   });
 
   @override
@@ -19,75 +28,34 @@ class VibeCheckPage extends StatefulWidget {
 }
 
 class _VibeCheckPageState extends State<VibeCheckPage> {
-  StreamSubscription? _streamSub;
+  // Reports themselves live in VibeReportStore, not here — see that file
+  // for why (they used to be wiped every time this page was popped, and
+  // were only ever collected while it happened to be open). This page
+  // renders the store and adds its own entries; detection is in
+  // hops_app.dart's always-on scan handler.
+  final _store = VibeReportStore.instance;
+  Timer? _expiryTimer;
 
   int _selectedCrowdLevel = 0;
 
   final TextEditingController _locationController = TextEditingController();
   final FocusNode _focusNode = FocusNode();     // explicit focus for the text field
 
-  List<Map<String, dynamic>> _records = [];
-
-  final Map<String, _CommunityReport> _communityReports = {};
-
-  // Throttle helpers
-  DateTime _lastRebuild = DateTime(2000);
-  bool _pendingRebuild = false;
-
   @override
   void initState() {
     super.initState();
+    // Opening this page IS reading them — clear the badge on its card in
+    // My Features and on the nav bar.
+    UnreadTracker.instance.clear(UnreadSource.vibeCheck);
+    _store.load();
 
-    _streamSub = widget.radarStream.listen((results) {
-      bool updated = false;
-
-      for (final r in results) {
-        final advName = r.advertisementData.advName;
-        if (advName.startsWith("VBT:")) {
-          final parts = advName.substring(4).split(":");
-          if (parts.length == 2) {
-            final location = parts[0];
-            final levelStr = parts[1];
-            final level = int.tryParse(levelStr);
-            if (level != null && level >= 0 && level <= 3) {
-              _communityReports[advName] = _CommunityReport(
-                location: location,
-                count: _levelToApproxCount(level),
-                level: level,
-                timestamp: DateTime.now(),
-              );
-              updated = true;
-            }
-          }
-        }
-      }
-
-      // Remove reports older than 2 minutes
-      final now = DateTime.now();
-      _communityReports.removeWhere(
-              (key, report) => now.difference(report.timestamp).inMinutes > 2);
-
-      if (updated) {
-        // Throttle: only schedule a rebuild if at least 2 seconds have passed
-        if (now.difference(_lastRebuild).inSeconds >= 2) {
-          if (mounted) setState(() {});
-          _lastRebuild = now;
-          _pendingRebuild = false;
-        } else if (!_pendingRebuild) {
-          _pendingRebuild = true;
-          // Wait until 2 seconds have elapsed, then rebuild once
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && _pendingRebuild) {
-              setState(() {});
-              _lastRebuild = DateTime.now();
-              _pendingRebuild = false;
-            }
-          });
-        }
-      }
+    // Ticks the relative ages ("12m ago") as well as expiring anything
+    // past its lifetime — an hour-old reading that still reads "just now"
+    // would be worse than no timestamp at all.
+    _expiryTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _store.prune();
+      if (mounted) setState(() {});
     });
-
-    _loadRecords();
   }
 
   int _levelToApproxCount(int level) {
@@ -100,15 +68,8 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     }
   }
 
-  Future<void> _loadRecords() async {
-    final records = await DatabaseHelper.instance.getVibeRecords();
-    setState(() {
-      _records = records;
-    });
-  }
-
   Future<void> _saveLocation() async {
-    final location = _locationController.text.trim();
+    final location = censorProfanity(_locationController.text.trim());
     if (location.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Enter a location name")),
@@ -127,11 +88,18 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     };
     await DatabaseHelper.instance.insertVibeRecord(record);
 
+    // Also show it in the live list straight away. Our own advertisement
+    // is filtered out of our own scan results, so without this the report
+    // you just filed is the one report you can't see.
+    final key = "VBT:$location:$level";
+    _store.record(key: key, location: location, level: level);
+    _store.markMine(key);
+    if (mounted) setState(() {});
+
     await widget.onAdvertiseVibeTag(location, level);
 
     _locationController.clear();
     _focusNode.unfocus();   // dismiss the keyboard after saving
-    await _loadRecords();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Saved $location as ${_levelNames[level]}")),
@@ -139,9 +107,10 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     }
   }
 
-  Future<void> _deleteRecord(String id) async {
-    await DatabaseHelper.instance.deleteVibeRecord(id);
-    await _loadRecords();
+  Future<void> _deleteReport(String key) async {
+    _store.removeReport(key);
+    if (mounted) setState(() {});
+    await widget.onDeleteVibeReport(key);
   }
 
   static const List<String> _levelNames = [
@@ -167,18 +136,44 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
 
   @override
   void dispose() {
-    _streamSub?.cancel();
+    _expiryTimer?.cancel();
     _locationController.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  String _reportAge(DateTime timestamp) {
+    final minutes = DateTime.now().difference(timestamp).inMinutes;
+    if (minutes < 1) return "just now";
+    return "${minutes}m ago";
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final communityList = _communityReports.values.toList()
-      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+    // The whole reason a report ever showed up late (or only after leaving
+    // and reopening this page) was that nothing here was actually listening
+    // to VibeReportStore.reports — detection runs continuously in
+    // hops_app.dart's scan handler and writes straight into the store, but
+    // this screen only ever redrew on its own 1-minute age-tick timer or on
+    // a fresh initState from remounting. A report from another phone could
+    // sit in the store, fully received, for up to a minute (or until you
+    // backed out and back in) before this screen happened to rebuild and
+    // notice it. ValueListenableBuilder rebuilds the moment the store
+    // changes, which is what "arrives while I'm looking at the page" needs.
+    return ValueListenableBuilder<Map<String, VibeReport>>(
+      valueListenable: _store.reports,
+      builder: (context, _, __) => ValueListenableBuilder<Set<String>>(
+        valueListenable: _store.myReportKeys,
+        builder: (context, mine, __) => _buildScaffold(context, theme, colors, mine),
+      ),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context, ThemeData theme, ColorScheme colors, Set<String> mine) {
+    final communityList = _store.sortedReports();
 
     return Scaffold(
       appBar: AppBar(
@@ -195,6 +190,18 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,
+        actions: [
+          TextButton.icon(
+            icon: Icon(Icons.history, color: colors.primary, size: 20),
+            label: Text(
+              "History",
+              style: TextStyle(color: colors.primary, fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const VibeHistoryPage())),
+          ),
+          const SizedBox(width: 4),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
@@ -222,14 +229,21 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                       duration: const Duration(milliseconds: 200),
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                       decoration: BoxDecoration(
-                        color: isSelected
-                            ? _levelColors[i].withOpacity(0.2)
-                            : Colors.white.withOpacity(0.4),
+                        color: isSelected ? _levelColors[i].withValues(alpha: 0.2) : colors.surface,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: isSelected ? _levelColors[i] : Colors.grey.shade300,
+                          color: isSelected ? _levelColors[i] : colors.outline.withValues(alpha: 0.25),
                           width: 2,
                         ),
+                        boxShadow: isSelected
+                            ? null
+                            : [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.05),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
                       ),
                       child: Column(
                         children: [
@@ -241,7 +255,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                               _levelNames[i],
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
-                                color: isSelected ? _levelColors[i] : Colors.black54,
+                                color: isSelected ? _levelColors[i] : colors.onSurface.withValues(alpha: 0.6),
                               ),
                               maxLines: 1,
                             ),
@@ -260,12 +274,13 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                   child: TextField(
                     controller: _locationController,
                     focusNode: _focusNode,
+                    maxLength: 24,
                     style: TextStyle(color: colors.onSurface),  // typed text visible
                     decoration: InputDecoration(
                       hintText: "e.g., Library, Cafeteria",
-                      hintStyle: TextStyle(color: colors.onSurface.withOpacity(0.5)),
+                      hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
                       labelText: "Tag this location",
-                      labelStyle: TextStyle(color: colors.onSurface.withOpacity(0.7)),
+                      labelStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.7)),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide(color: colors.primary, width: 1.5),
@@ -298,122 +313,136 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
               ],
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               "Your report will be visible to nearby Hops users.",
-              style: TextStyle(fontSize: 11, color: Colors.grey),
+              style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 24),
-            Text(
-              "📡 Community Reports",
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: colors.primary,
-              ),
+            // Same header treatment as the Home tab's friend-request tray —
+            // icon + title + a count badge that only appears once there's
+            // something to count.
+            Row(
+              children: [
+                Icon(Icons.wifi_tethering, size: 16, color: colors.primary),
+                const SizedBox(width: 6),
+                Text(
+                  "Community Reports",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                    color: colors.primary,
+                  ),
+                ),
+                if (communityList.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: colors.primary,
+                      borderRadius: BorderRadius.circular(100),
+                    ),
+                    child: Text(
+                      "${communityList.length}",
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ],
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               "Reports from other students near you appear here.",
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.5)),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 12),
             if (communityList.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 child: Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Text(
-                      "No reports yet. Walk around to see what others have shared!",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.travel_explore, size: 28, color: colors.onSurface.withValues(alpha: 0.2)),
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: Text(
+                          "No reports yet. Walk around to see what others have shared!",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5), fontSize: 12),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               )
             else
               ...communityList.map((report) {
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: _levelColors[report.level],
-                      child: Icon(_levelIcons[report.level],
-                          color: Colors.white),
-                    ),
-                    title: Text(
-                      report.location,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      _levelNames[report.level],
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                );
-              }),
-            const SizedBox(height: 24),
-            Text(
-              "Your Saved History",
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: colors.primary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            if (_records.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(
-                  "No records yet.",
-                  style: TextStyle(color: Colors.grey),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              )
-            else
-              ..._records.map((record) {
-                final loc = record[DatabaseHelper.vibeColLocation];
-                final count = record[DatabaseHelper.vibeColDeviceCount];
-                final ts = record[DatabaseHelper.vibeColTimestamp];
-                final date = DateTime.fromMillisecondsSinceEpoch(ts as int);
-                final id = record[DatabaseHelper.vibeColId];
-                final level = count <= 2 ? 0 : count <= 5 ? 1 : count <= 10 ? 2 : 3;
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: _levelColors[level],
-                      child: Icon(_levelIcons[level], color: Colors.white),
-                    ),
-                    title: Text(
-                      loc.toString(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      _levelNames[level] +
-                          " · ${date.hour}:${date.minute.toString().padLeft(2, '0')}",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline,
-                          color: Colors.redAccent),
-                      onPressed: () => _deleteRecord(id as String),
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: HopsCard(
+                    radius: 16,
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: _levelColors[report.level],
+                          child: Icon(_levelIcons[report.level], color: Colors.white, size: 18),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                report.location,
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                // Age matters as much as the level here —
+                                // an hour-old reading and a fresh one look
+                                // identical otherwise, and they mean very
+                                // different things once a lesson has changed.
+                                "${_levelNames[report.level]} · ${_reportAge(report.timestamp)}",
+                                style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (mine.contains("VBT:${report.location}:${report.level}"))
+                          IconButton(
+                            icon: Icon(Icons.delete_outline, size: 18, color: colors.error.withValues(alpha: 0.7)),
+                            tooltip: "Delete",
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => _deleteReport("VBT:${report.location}:${report.level}"),
+                          )
+                        else
+                          // Vibe Check tags carry no sender at all (see
+                          // VBT: in hops_app.dart) — this can only ever
+                          // report the tag itself as spam/wrong, never a
+                          // specific person, unlike Community Alerts'
+                          // report action.
+                          IconButton(
+                            icon: Icon(Icons.flag_outlined, size: 18, color: colors.onSurface.withValues(alpha: 0.35)),
+                            tooltip: "Report",
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () => showReportContentSheet(
+                              context,
+                              contentType: 'vibe_check',
+                              snapshotText: "${report.location}: ${_levelNames[report.level]}",
+                              contentCreatedAt: report.timestamp,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 );
@@ -423,17 +452,4 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
       ),
     );
   }
-}
-
-class _CommunityReport {
-  final String location;
-  final int count;
-  final int level;
-  final DateTime timestamp;
-  _CommunityReport({
-    required this.location,
-    required this.count,
-    required this.level,
-    required this.timestamp,
-  });
 }
