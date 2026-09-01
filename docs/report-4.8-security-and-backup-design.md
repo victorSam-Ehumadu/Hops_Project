@@ -122,7 +122,7 @@ Stated explicitly, because a security section that claims no weaknesses is not c
 | The anonymous key ships inside the app | Must be assumed public | Neutralised by the deny-all design above — the key grants only `EXECUTE` on vetted functions |
 | Carrot balance is client-side only | A modified client can grant itself cosmetics | Accepted: carrots buy cosmetics only, with no real-money path into the app, so the worst case is free customisation, not fraud |
 | `debugUnlimitedCarrots` is currently `true` | The economy is bypassed | Demo and QA convenience; must be set to `false` before any public release |
-| The weak-password blocklist is unreachable | A capitalised variant of a blocked password is accepted | Identified by the unit test suite; the blocklist check needs to move above the character-class checks |
+| ~~The weak-password blocklist is unreachable~~ | ~~A capitalised variant of a blocked password is accepted~~ | **Resolved 2 September 2026.** Found by the unit test suite: every blocklist entry is lowercase letters and digits, so each failed the uppercase rule first and the blocklist branch could never run — and the message it returned instead ("add a capital letter") described the exact edit that produced an accepted password. Fixed by checking the blocklist first and comparing a folded form (case dropped, non-alphanumerics stripped, common character substitutions reversed) by substring, so `Password123!` and `P@ssw0rd1` are now caught |
 | Advertising can fail silently on central-only hardware | Such a device receives alerts but cannot send | Detected at startup and surfaced to the user rather than failing quietly |
 
 ## 4.8.4 Backup design

@@ -491,7 +491,7 @@ const String kDirectMessagePrefix = 'DM:';
 const int kDirectMessageTagChars = 3;
 // prefix(3) + recipientTag(3) + senderTag(3) + msgId(1) + chunkInfo(1)
 const int kDirectMessageOverhead = 11;
-const int kDirectMessageTextBudget = kCommunityNameBudget - kDirectMessageOverhead; // 16
+const int kDirectMessageTextBudget = kCommunityNameBudget - kDirectMessageOverhead; // 13
 const int kDirectMessageMaxChunks = 8;
 
 /// First kDirectMessageTagChars of a rotating presence token — the
@@ -564,9 +564,9 @@ DecodedDirectMessageChunk? decodeDirectMessageChunk(String advName) {
 /// kDirectMessageTextBudget base64 characters carry 3/4 that many bytes,
 /// of which kDirectMessageNonceBytes are spent on the nonce.
 int get kDirectMessageMaxPlaintextBytes {
-  const base64Chars = kDirectMessageMaxChunks * kDirectMessageTextBudget; // 128
-  const rawBytes = (base64Chars ~/ 4) * 3; // 96
-  return rawBytes - 6; // kDirectMessageNonceBytes — 90
+  const base64Chars = kDirectMessageMaxChunks * kDirectMessageTextBudget; // 104
+  const rawBytes = (base64Chars ~/ 4) * 3; // 78
+  return rawBytes - 6; // kDirectMessageNonceBytes — 72
 }
 
 // ── Rotating presence identifiers ───────────────────────────────────────

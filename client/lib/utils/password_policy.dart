@@ -68,14 +68,72 @@ const List<String> _weakPasswordBlocklist = [
   'changeme', 'letmein1', 'freedom1', 'whatever1', 'qazwsx123',
 ];
 
+/// Folds a password down to the form the blocklist is compared against.
+///
+/// A plain `toLowerCase()` comparison is trivially defeated: "Password1!"
+/// is not the string "password1", so the exact match misses it even though
+/// it is the same password with the two decorations people reach for
+/// first. This strips the decoration and undoes the common character
+/// substitutions before comparing:
+///
+///   - case is folded
+///   - everything that is not a letter or digit is removed, so a leading
+///     or trailing "!" cannot disguise anything
+///   - digits and symbols standing in for letters are mapped back
+///
+/// Blocklist entries go through exactly the same fold, so the numeric
+/// entries ("12345678") still match themselves after substitution.
+String _foldForBlocklist(String password) {
+  final stripped = password.toLowerCase().replaceAll(RegExp(r'[^a-z0-9@$!]'), '');
+  return stripped
+      .replaceAll('@', 'a')
+      .replaceAll(r'$', 's')
+      .replaceAll('!', 'i')
+      .replaceAll('0', 'o')
+      .replaceAll('1', 'i')
+      .replaceAll('3', 'e')
+      .replaceAll('4', 'a')
+      .replaceAll('5', 's')
+      .replaceAll('7', 't');
+}
+
+final List<String> _foldedBlocklist =
+    _weakPasswordBlocklist.map(_foldForBlocklist).toList(growable: false);
+
+/// True if [password] is, or merely contains, one of the blocklisted
+/// passwords once folded.
+///
+/// Substring rather than equality, deliberately. "MyPassword2024!" is not
+/// meaningfully stronger than "password" against the attack this list
+/// exists to stop — the guess list is seeded with exactly these strings
+/// and their common extensions. Over-blocking is possible in principle
+/// (a passphrase that happens to contain "iloveyou" is refused) but the
+/// list is thirty entries of the most-guessed passwords in existence, so
+/// the trade is worth making.
+bool _isBlocklisted(String password) {
+  final folded = _foldForBlocklist(password);
+  if (folded.isEmpty) return false;
+  return _foldedBlocklist.any(folded.contains);
+}
+
 /// Returns a user-facing reason the password is rejected, or null if it
-/// passes every rule. Checked cheapest-first.
+/// passes every rule.
+///
+/// The blocklist is checked BEFORE the character-class rules, and the
+/// order matters. Every entry on the list is lowercase letters and digits,
+/// so each one fails the uppercase rule first — which meant the blocklist
+/// branch could never execute, and the user was told to add a capital
+/// letter rather than that their password is one of the most guessed in
+/// existence. Doing what that message asks produced an accepted password.
 String? validatePassword(String password) {
   if (password.length < kMinPasswordLength) {
     return "Password must be at least $kMinPasswordLength characters.";
   }
   if (password.length > kMaxPasswordLength) {
     return "Password must be $kMaxPasswordLength characters or fewer.";
+  }
+  if (_isBlocklisted(password)) {
+    return "That password is far too common — please choose something less guessable.";
   }
   if (!RegExp(r'[A-Z]').hasMatch(password)) {
     return "Password must include at least one uppercase letter.";
@@ -89,9 +147,6 @@ String? validatePassword(String password) {
   if (!RegExp(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]~`;/\\]').hasMatch(password)) {
     return "Password must include at least one symbol (e.g. !@#\$%).";
   }
-  if (_weakPasswordBlocklist.contains(password.toLowerCase())) {
-    return "That password is far too common — please choose something less guessable.";
-  }
   return null;
 }
 
@@ -104,7 +159,7 @@ enum PasswordStrength { veryWeak, weak, fair, strong, veryStrong }
 /// not to replace the hard rules.
 PasswordStrength scorePasswordStrength(String password) {
   if (password.isEmpty) return PasswordStrength.veryWeak;
-  if (_weakPasswordBlocklist.contains(password.toLowerCase())) {
+  if (_isBlocklisted(password)) {
     return PasswordStrength.veryWeak;
   }
 

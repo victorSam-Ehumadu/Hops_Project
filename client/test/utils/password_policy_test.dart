@@ -125,20 +125,40 @@ void main() {
       }
     });
 
-    test('the blocklist is unreachable behind the character-class rules', () {
-      // KNOWN GAP, pinned deliberately rather than asserted as correct.
-      //
-      // Every blocklist entry is lowercase letters and digits only, so each
-      // one fails the uppercase rule first and returns *that* message. The
-      // blocklist branch below it can therefore never execute, and a
-      // capitalised variant of a blocked password sails through.
-      //
-      // If the blocklist check is moved above the character-class checks,
-      // this test should be updated to expect the "too common" message and
-      // the second expectation should start failing — which is the point.
-      expect(validatePassword('password123'), contains('uppercase'));
-      expect(validatePassword('Password123!'), isNull,
-          reason: 'a capitalised blocked password is currently accepted');
+    test('is reached before the character-class rules', () {
+      // Regression guard. These entries are lowercase letters and digits,
+      // so if the blocklist check ever moves back below the character-class
+      // checks the uppercase rule fires first and this message changes —
+      // which is exactly the bug this ordering fixed. Following the advice
+      // in that older message ("add a capital letter") produced an accepted
+      // password.
+      expect(validatePassword('password123'), contains('too common'));
+      expect(validatePassword('qwertyuiop'), contains('too common'));
+    });
+
+    test('is not defeated by capitalising and appending a symbol', () {
+      // The two decorations people reach for first when a complexity rule
+      // rejects their password. Neither produces a meaningfully different
+      // password, so neither may produce a different verdict.
+      expect(validatePassword('Password123!'), contains('too common'));
+      expect(validatePassword('Password1!'), contains('too common'));
+      expect(validatePassword('!Iloveyou1'), contains('too common'));
+    });
+
+    test('sees through common character substitutions', () {
+      // 0/o, 1/i, 3/e, @/a, $/s. 'passw0rd' is itself on the list; the
+      // point here is that the fold reaches it from several directions.
+      expect(validatePassword('P@ssw0rd1'), contains('too common'));
+      expect(validatePassword('Passw0rd!'), contains('too common'));
+    });
+
+    test('does not over-block an ordinary strong password', () {
+      // The substring match is deliberately aggressive, so these guard the
+      // other side of the trade — none of them contains a blocklist entry
+      // once folded.
+      expect(validatePassword('Str0ng!pass'), isNull);
+      expect(validatePassword('Correct horse battery staple 7!'), isNull);
+      expect(validatePassword('Ab1!defg'), isNull);
     });
   });
 

@@ -31,7 +31,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **104 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **107 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -42,10 +42,13 @@ What is and isn't covered, so you know what a green run actually proves:
   window-rollover tolerance, flare signature chunking reassembled at full RSA-2048 length. This is
   the highest-value file in the suite — it pins the tightest constraint in the codebase and is
   pure Dart with no plugins.
-- `test/utils/password_policy_test.dart` (24) — username/email/password rules and strength
-  scoring. One test **pins a known bug rather than asserting correctness**: the weak-password
-  blocklist is unreachable because every entry fails a character-class rule first, so
-  `Password123!` is currently accepted. Read that test's comment before "fixing" it.
+- `test/utils/password_policy_test.dart` (27) — username/email/password rules and strength
+  scoring. The blocklist tests guard two things that are easy to undo: the blocklist is checked
+  **before** the character-class rules (below them it is unreachable, since every entry is
+  lowercase letters and digits and fails the uppercase rule first), and it compares a *folded*
+  form — case dropped, non-alphanumerics stripped, `0/1/3/4/5/7/@/$/!` mapped back to letters —
+  by substring, so `Password123!` and `P@ssw0rd1` are caught. One test guards the other side of
+  that trade, checking ordinary strong passwords aren't over-blocked.
 - `test/services/carrot_wallet_test.dart` (13) — balance, purchases, and the
   `debugUnlimitedCarrots` flag. Reads the flag through a function call, not directly, so both
   branches stay live and the tests survive the flag being flipped for launch.
