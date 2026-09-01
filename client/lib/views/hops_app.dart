@@ -22,6 +22,7 @@ import 'package:client/main.dart'
         bleDirectMessageInbox,
         BleDirectMessage;
 import 'package:client/database/database_helper.dart';
+import 'package:client/services/bluetooth_name_guard.dart';
 import 'package:client/services/key_directory.dart';
 import 'package:client/utils/hop_id_formatter.dart';
 import 'package:client/views/radar_screen.dart';
@@ -93,8 +94,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         .where((c) => (c['username'] as String).toLowerCase().contains(q))
         .toList();
   }
-
-  static const _metaChannel = MethodChannel('com.example.client/rfcomm/meta');
 
   bool _isFlareActive = false;
   Timer? _flareCancelTimer;
@@ -200,8 +199,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   String _adUser(String username) =>
       username.length > 9 ? username.substring(0, 9) : username;
-
-  String? _originalBluetoothName;
 
   DateTime _lastRadarPush = DateTime(2000);   // force immediate first push
 
@@ -656,6 +653,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       _presencePausedForBackground = true;
       _rotatingIdRefreshTimer?.cancel();
       BlePeripheral.stopAdvertising();
+      // Stopping the advertisement does not undo the rename it caused.
+      // Without this the phone keeps announcing itself as a payload string
+      // for as long as the app stays backgrounded, which is most of the
+      // time.
+      BluetoothNameGuard.restore();
     }
   }
 
@@ -690,6 +692,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _bleScanResultsSubscription?.cancel();
     FlutterBluePlus.stopScan();
     BlePeripheral.stopAdvertising();
+    // Fire-and-forget: dispose() cannot await, but the platform call is
+    // already queued by the time this frame ends. Without it, tearing the
+    // app down mid-advertisement leaves the adapter named after whatever
+    // was last broadcast.
+    BluetoothNameGuard.restore();
     _cleanupPairingServer();
     _radarStreamController.close();
     _pendingWatchStreamController.close();
@@ -1056,15 +1063,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     });
   }
 
+  /// Learns the device's real Bluetooth name and immediately undoes any
+  /// payload string a previous run left on the adapter.
+  ///
+  /// The restore matters as much as the capture: if the app was killed
+  /// while advertising, the phone is still called "HPS:xk3f9a2b" when it
+  /// next launches, and nothing else in the lifecycle would ever put that
+  /// right. BluetoothNameGuard refuses to record a payload string as the
+  /// original, so the value it restores to is the user's own.
   Future<void> _captureOriginalBluetoothName() async {
-    try {
-      final name = await _metaChannel.invokeMethod<String>('getAdapterName');
-      if (mounted && name != null && name.isNotEmpty) {
-        _originalBluetoothName = name;
-      }
-    } catch (_) {
-      // If unavailable, we simply won't restore — no crash.
-    }
+    await BluetoothNameGuard.capture();
+    await BluetoothNameGuard.restore();
   }
 
   Future<void> _advertiseWithName(
@@ -1080,17 +1089,16 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       manufacturerData: manufacturerData,
       addManufacturerDataInScanResponse: manufacturerDataInScanResponse,
     );
-    if (_originalBluetoothName != null) {
-      Future.delayed(const Duration(milliseconds: 500), () async {
-        if (!mounted) return;
-        try {
-          await _metaChannel.invokeMethod(
-            'setAdapterName',
-            {'name': _originalBluetoothName!},
-          );
-        } catch (_) {}
-      });
-    }
+    // Put the device's own name back shortly after the advertisement is
+    // up. The payload is already baked into the running advertisement by
+    // then — setIncludeDeviceName() snapshots the name when advertising
+    // starts, so renaming afterwards does not disturb what peers receive.
+    // It only stops the phone from *continuing* to call itself
+    // "CHT:diya:Test2" in everyone else's Bluetooth settings.
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      BluetoothNameGuard.restore();
+    });
   }
 
   // Extends an Emergency Flare's (or its cancellation's) reach beyond the

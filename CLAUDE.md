@@ -31,7 +31,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **107 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **115 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -52,6 +52,9 @@ What is and isn't covered, so you know what a green run actually proves:
 - `test/services/carrot_wallet_test.dart` (13) — balance, purchases, and the
   `debugUnlimitedCarrots` flag. Reads the flag through a function call, not directly, so both
   branches stay live and the tests survive the flag being flipped for launch.
+- `test/services/bluetooth_name_guard_test.dart` (8) — the payload-name detector. Includes a test
+  asserting the prefix list covers every prefix `hops_app.dart` dispatches on; add to both when you
+  add a prefix, or the new one gets mistaken for a user's real Bluetooth name.
 - `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
 
 Not covered, and the obvious next target: `database_helper.dart`. It calls
@@ -127,6 +130,27 @@ both the advertise payload and the scan response, and the advertise payload also
 service UUID — so an over-long name fails the whole advertisement with
 `ADVERTISE_FAILED_DATA_TOO_LARGE`. Payloads are truncated (8-char sender tags, 14-char reasons) for
 this reason; check the `encode*`/length-clamping helpers before adding a prefix or widening a field.
+
+**The advertised name IS the device's system Bluetooth name.** `ble_peripheral` has no separate
+BLE local-name field: `BlePeripheralPlugin.kt` does `adapter?.name = it` and then
+`.setIncludeDeviceName(localName != null)`. So advertising `CHT:diya:Test2` literally renames the
+phone to that, and every nearby device shows it in Bluetooth settings — and caches it in the paired
+list if a bond exists. `services/bluetooth_name_guard.dart` owns the cleanup and must be the only
+thing that reads or writes the adapter name:
+
+- It **persists** the real name to `SharedPreferences`, because the case that breaks an in-memory
+  copy is the app being killed mid-advertisement.
+- It **refuses to record a payload string as the original** (`looksLikeHopsAdvertisementName`).
+  Without that check the startup capture reads `HPS:xk3f9a2b` off the adapter, saves it as the
+  "original", and every later restore faithfully writes a protocol string back — the cleanup
+  mechanism becomes what keeps it dirty.
+- `restore()` is called from `_advertiseWithName` (500ms later — the payload is already baked into
+  the running advertisement, so this doesn't disturb what peers receive), from
+  `_handleAppBackgrounded`, from `dispose()`, and at startup. `stopAdvertising()` does **not** undo
+  the rename; any new path that stops advertising must call `restore()` too.
+
+What this cannot fix: while an advertisement is on the air the name is the protocol, so it is
+visible then by construction. Removing that entirely means moving payloads off the name.
 
 **Advertising can fail silently, and does on some hardware.** `BlePeripheral.startAdvertising()`
 posts to an Android `Handler` and returns immediately — a successful Dart call proves nothing. The

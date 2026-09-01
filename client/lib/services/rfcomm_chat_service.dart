@@ -55,6 +55,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:flutter/services.dart';
+import 'package:client/services/bluetooth_name_guard.dart';
 
 enum ChatConnectionState { connecting, connected, disconnected, failed }
 
@@ -169,13 +170,12 @@ class RfcommChatService {
       await BlePeripheral.stopAdvertising();
     } catch (_) {}
 
-    try {
-      _originalAdapterName ??= await _metaChannel.invokeMethod<String>('getAdapterName');
-    } catch (_) {
-      // Best-effort — if we can't read/restore it later, worst case the
-      // adapter is left showing this device's Hops username, which isn't
-      // harmful, just not restored to whatever it said before.
-    }
+    // Via the guard rather than reading the adapter directly: BLE
+    // advertising renames the adapter to the payload it is broadcasting,
+    // so a raw read here can easily return "HPS:xk3f9a2b" and record that
+    // as the name to restore to afterwards. The guard refuses to treat a
+    // payload string as an original.
+    _originalAdapterName ??= await BluetoothNameGuard.capture();
 
     await _openSession();
     await _renameAdapterToUsername();
@@ -210,13 +210,7 @@ class RfcommChatService {
     }
   }
 
-  Future<void> _restoreAdapterName() async {
-    final original = _originalAdapterName;
-    if (original == null || original.isEmpty) return;
-    try {
-      await _metaChannel.invokeMethod('setAdapterName', {'name': original});
-    } catch (_) {}
-  }
+  Future<void> _restoreAdapterName() => BluetoothNameGuard.restore();
 
   // ── Host role ────────────────────────────────────────────────────────────
 
