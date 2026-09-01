@@ -13,7 +13,6 @@ import 'package:client/theme/avatar_frames.dart';
 import 'package:client/theme/username_flairs.dart';
 import 'package:client/theme/profile_banners.dart';
 import 'package:client/views/help_screen.dart';
-import 'package:client/views/sos_settings_page.dart';
 import 'package:client/services/avatar_path_notifier.dart';
 import 'package:client/widgets/thought_bubble.dart';
 
@@ -455,17 +454,80 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Silent SOS — not a toggle here, since it isn't a plain
-            // on/off (see feature_item.dart's header comment on Hops
-            // Shop for the same "not an addable feature" reasoning): it
-            // needs real setup (the Quick Settings tile), so this opens
-            // its own page rather than being a switch on this screen.
+            // Admin privilege is granted out-of-band now (a provisioned
+            // device, see 0008_admin_moderation.sql) rather than requested
+            // from inside the app — this badge is the only place the
+            // student app still surfaces role at all, so it's worth
+            // keeping visible rather than silent.
+            if (_myRole == 'admin') ...[
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(100),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.shield, size: 12, color: colors.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      _myAdminTitle?.isNotEmpty == true ? _myAdminTitle! : 'Admin',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: colors.primary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            Text(
+              bioText,
+              style: TextStyle(
+                  fontSize: 14,
+                  color: colors.onSurface.withValues(alpha: 0.6)),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 32),
+
+            // Edit Identity button
+            ListTile(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.edit, color: colors.primary),
+              title: Text(
+                'Edit Profile Details',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const EditIdentityScreen()),
+                );
+                if (result == true) {
+                  _loadIdentityData();
+                  setState(() {});
+                }
+              },
+            ),
+
+            // Character Avatar — build-your-own creature avatar (Shop-
+            // gated parts), separate from the plain photo upload above
+            // since it's a whole build-then-apply flow of its own.
             ListTile(
               contentPadding:
               const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              leading: Icon(Icons.emergency_outlined, color: colors.primary),
+              leading: Icon(Icons.face_retouching_natural, color: colors.primary),
               title: Text(
-                'Silent SOS',
+                'Character Avatar',
                 style: TextStyle(
                     fontWeight: FontWeight.w600,
                     fontSize: 14,
@@ -474,7 +536,44 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
               subtitle: Text(
-                'Trigger Emergency Flare without opening Hops first',
+                'Build a custom creature avatar with carrots',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CharacterCreatorPage()),
+                ).then((_) {
+                  _loadIdentityData();
+                  setState(() {});
+                });
+              },
+            ),
+
+            // Customize button — color theme + font, merged into one
+            // personalization hub rather than two separate, easy-to-miss
+            // entries.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.palette_outlined, color: colors.primary),
+              title: Text(
+                'Customize Hops',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Color theme, font & size',
                 style: TextStyle(
                     fontSize: 12,
                     color: colors.onSurface.withValues(alpha: 0.7)),
@@ -487,7 +586,503 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
                 Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => const SosSettingsPage()));
+                        builder: (_) => const ThemePickerScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.accessibility_new, color: colors.primary),
+              title: Text(
+                'Accessibility',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Text size, read-aloud messages, colorblind-friendly signals',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AccessibilitySettingsPage()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Hops Shop moved out of Settings — it's now a persistent
+            // button on the Features tab (hops_app.dart's
+            // _buildShopButton), which is a more natural home for it than
+            // being buried a level deep here, and one entry point is
+            // simpler to keep straight than two.
+
+            // Permissions — deliberately its own entry rather than buried
+            // in Customize. What Hops can access, and what breaks if you
+            // switch any of it off, is a different kind of decision from
+            // picking a colour theme, and people go looking for it by name.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.lock_outline, color: colors.primary),
+              title: Text(
+                'Permissions',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'What Hops can access, and what turning it off costs',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const PermissionsScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Admin privilege is granted out-of-band now (a provisioned
+            // device, see 0008_admin_moderation.sql) rather than requested
+            // from inside the app — this badge is the only place the
+            // student app still surfaces role at all, so it's worth
+            // keeping visible rather than silent.
+            if (_myRole == 'admin') ...[
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(100),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.shield, size: 12, color: colors.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      _myAdminTitle?.isNotEmpty == true ? _myAdminTitle! : 'Admin',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: colors.primary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            Text(
+              bioText,
+              style: TextStyle(
+                  fontSize: 14,
+                  color: colors.onSurface.withValues(alpha: 0.6)),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 32),
+
+            // Edit Identity button
+            ListTile(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.edit, color: colors.primary),
+              title: Text(
+                'Edit Profile Details',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const EditIdentityScreen()),
+                );
+                if (result == true) {
+                  _loadIdentityData();
+                  setState(() {});
+                }
+              },
+            ),
+
+            // Character Avatar — build-your-own creature avatar (Shop-
+            // gated parts), separate from the plain photo upload above
+            // since it's a whole build-then-apply flow of its own.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.face_retouching_natural, color: colors.primary),
+              title: Text(
+                'Character Avatar',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Build a custom creature avatar with carrots',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CharacterCreatorPage()),
+                ).then((_) {
+                  _loadIdentityData();
+                  setState(() {});
+                });
+              },
+            ),
+
+            // Customize button — color theme + font, merged into one
+            // personalization hub rather than two separate, easy-to-miss
+            // entries.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.palette_outlined, color: colors.primary),
+              title: Text(
+                'Customize Hops',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Color theme, font & size',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ThemePickerScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.accessibility_new, color: colors.primary),
+              title: Text(
+                'Accessibility',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Text size, read-aloud messages, colorblind-friendly signals',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AccessibilitySettingsPage()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Hops Shop moved out of Settings — it's now a persistent
+            // button on the Features tab (hops_app.dart's
+            // _buildShopButton), which is a more natural home for it than
+            // being buried a level deep here, and one entry point is
+            // simpler to keep straight than two.
+
+            // Permissions — deliberately its own entry rather than buried
+            // in Customize. What Hops can access, and what breaks if you
+            // switch any of it off, is a different kind of decision from
+            // picking a colour theme, and people go looking for it by name.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.lock_outline, color: colors.primary),
+              title: Text(
+                'Permissions',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'What Hops can access, and what turning it off costs',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const PermissionsScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Admin privilege is granted out-of-band now (a provisioned
+            // device, see 0008_admin_moderation.sql) rather than requested
+            // from inside the app — this badge is the only place the
+            // student app still surfaces role at all, so it's worth
+            // keeping visible rather than silent.
+            if (_myRole == 'admin') ...[
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(100),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.shield, size: 12, color: colors.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      _myAdminTitle?.isNotEmpty == true ? _myAdminTitle! : 'Admin',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: colors.primary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            Text(
+              bioText,
+              style: TextStyle(
+                  fontSize: 14,
+                  color: colors.onSurface.withValues(alpha: 0.6)),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 32),
+
+            // Edit Identity button
+            ListTile(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.edit, color: colors.primary),
+              title: Text(
+                'Edit Profile Details',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () async {
+                final result = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const EditIdentityScreen()),
+                );
+                if (result == true) {
+                  _loadIdentityData();
+                  setState(() {});
+                }
+              },
+            ),
+
+            // Character Avatar — build-your-own creature avatar (Shop-
+            // gated parts), separate from the plain photo upload above
+            // since it's a whole build-then-apply flow of its own.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.face_retouching_natural, color: colors.primary),
+              title: Text(
+                'Character Avatar',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Build a custom creature avatar with carrots',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CharacterCreatorPage()),
+                ).then((_) {
+                  _loadIdentityData();
+                  setState(() {});
+                });
+              },
+            ),
+
+            // Customize button — color theme + font, merged into one
+            // personalization hub rather than two separate, easy-to-miss
+            // entries.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.palette_outlined, color: colors.primary),
+              title: Text(
+                'Customize Hops',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Color theme, font & size',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ThemePickerScreen()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.accessibility_new, color: colors.primary),
+              title: Text(
+                'Accessibility',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'Text size, read-aloud messages, colorblind-friendly signals',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AccessibilitySettingsPage()));
+              },
+            ),
+            const SizedBox(height: 24),
+
+            // Hops Shop moved out of Settings — it's now a persistent
+            // button on the Features tab (hops_app.dart's
+            // _buildShopButton), which is a more natural home for it than
+            // being buried a level deep here, and one entry point is
+            // simpler to keep straight than two.
+
+            // Permissions — deliberately its own entry rather than buried
+            // in Customize. What Hops can access, and what breaks if you
+            // switch any of it off, is a different kind of decision from
+            // picking a colour theme, and people go looking for it by name.
+            ListTile(
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              leading: Icon(Icons.lock_outline, color: colors.primary),
+              title: Text(
+                'Permissions',
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: colors.primary),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                'What Hops can access, and what turning it off costs',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(Icons.chevron_right, size: 18,
+                  color: colors.onSurface),
+              onTap: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const PermissionsScreen()));
               },
             ),
             const SizedBox(height: 24),

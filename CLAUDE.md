@@ -217,6 +217,29 @@ there's no token validation at startup, only the periodic `_syncIdentityStatus` 
 `profiles.role`, the moderation tables, and the admin action log are the only other server-side
 state — feature data (messages, tasks, vibes) never leaves the device.
 
+### 4b. Runtime permissions — always version-gated
+
+**Never request `Permission.bluetoothScan` / `bluetoothAdvertise` / `bluetoothConnect`
+unconditionally.** Those exist only from Android 12 (API 31). Below that, `permission_handler`
+resolves them to *no manifest entry* (`PermissionUtils.java:283` gates on `SDK_INT >= S`) and
+`PermissionManager.java:369` records any permission with no manifest entry as **denied**. So on an
+Android 8/9 handset they come back denied with no dialog shown and nothing in system settings the
+user can switch on — an unclearable state.
+
+Every gate that required them was therefore permanently locked on pre-12 devices: sign-in failed
+with "Err: Permissions Denied", `HopsApp` bounced straight back to the gatekeeper on launch, Hops
+Share stuck on its prompt, and 1:1 chat reported "Bluetooth & location permission needed" without
+ever calling `connect()` — which read as a Bluetooth pairing problem and was not one.
+
+`services/bluetooth_permissions.dart` is the only correct way to ask. It reads the API level over
+the `getSdkInt` meta-channel call and requests location always, the Bluetooth trio only on 31+, and
+`nearbyWifiDevices` only on 33+ and only for Nearby Connections callers. An unknown version is
+treated as modern, since over-asking is recoverable by the user and under-asking is not.
+
+Callers: `root_gatekeeper.dart`, `hops_app.dart`, `chat_terminal.dart`, `hops_share_page.dart`. The
+admin app's screens still request the raw set — fine while admin devices are modern, wrong the
+moment one isn't.
+
 ### 5. Local persistence
 
 - `lib/database/database_helper.dart` — singleton `sqflite` wrapper, versioned schema
@@ -271,16 +294,19 @@ catalog feature; it's reached from persistent buttons on the Radar and Features 
 
 ### 8. Emergency Flare — triggers and known limits
 
-There is **no in-app flare button**. It is reached only from outside the UI, and all three paths
-open the same confirm-then-reason dialog — none of them skips confirmation:
+There is **no in-app flare button**. It is reached only from outside the UI, and both remaining
+paths open the same confirm-then-reason dialog — neither skips confirmation:
 
-- Hold Volume Down for `VOLUME_HOLD_SOS_MS` (5s) while Hops is foregrounded — `MainActivity.kt`'s
-  `dispatchKeyEvent`. Implemented with a delayed `Runnable`, *not* `KeyEvent.repeatCount`: hardware
-  volume keys don't auto-repeat `ACTION_DOWN`, which is why the original attempt never fired. Some
-  OEM skins intercept volume keys before an app sees them, so this needs on-device verification.
 - The Quick Settings tile (`HopsSosTileService.kt`), delivered cold-start via `consumePendingSos`
   or warm via `onNewIntent`.
 - The app-icon shortcut (`quick_actions`, `shortcutNotifier`).
+
+**The volume-down hold trigger was removed**, along with the Silent SOS settings page and its
+Profile entry. It worked on some handsets and silently did nothing on others, because OEM skins
+intercept volume keys before `dispatchKeyEvent` ever sees them — the worst possible property for a
+safety feature, since it teaches a gesture the user then trusts. Don't reintroduce it without a way
+to verify at runtime that the key is actually reaching the app. The tile is still added from
+Android's own Quick Settings edit panel; nothing in-app requests it any more.
 
 The dialog lives on `HopsApp` itself (`_showFlareConfirmDialog`), not on any tab, specifically so
 `Navigator.of(context)` resolves to the **root** navigator and the prompt renders over whatever

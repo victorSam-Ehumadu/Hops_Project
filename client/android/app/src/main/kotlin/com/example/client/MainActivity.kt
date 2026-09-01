@@ -15,9 +15,6 @@ import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.util.function.Consumer
@@ -32,7 +29,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         lateinit var context: Context
         private const val REQUEST_DISCOVERABLE = 4201
-        private const val VOLUME_HOLD_SOS_MS = 5000L
     }
 
     private val activeServices = mutableMapOf<String, RfcommChatService>()
@@ -78,29 +74,6 @@ class MainActivity : FlutterActivity() {
     private var sosChannel: MethodChannel? = null
     private var pendingSos: Boolean = false
 
-    // In-app fallback for when Hops is already open on screen (the Quick
-    // Settings tile above is the primary path — this one only ever fires
-    // while this Activity itself is receiving key events, i.e. Hops is
-    // foregrounded). Holding volume-down for 5 continuous seconds fires
-    // the same sosTriggered signal the tile does; a normal short press
-    // still adjusts system volume as always, since this never consumes
-    // the event.
-    //
-    // Originally implemented by watching KeyEvent.repeatCount on
-    // ACTION_DOWN, on the assumption a held key would keep re-delivering
-    // ACTION_DOWN with an incrementing repeat count the way a held
-    // character key does. That's why it didn't work: hardware buttons like
-    // volume keys don't auto-repeat that way on Android — a hold produces
-    // exactly one ACTION_DOWN and, on release, one ACTION_UP, with nothing
-    // in between. Fixed with an actual timer instead: ACTION_DOWN schedules
-    // a delayed callback VOLUME_HOLD_SOS_MS out; ACTION_UP (release before
-    // the hold completes) cancels it. Still not testable from this environment —
-    // some OEM Android skins intercept volume keys before an app's
-    // dispatchKeyEvent ever sees them, so this needs verifying on the
-    // actual target hardware.
-    private val volumeDownHandler = Handler(Looper.getMainLooper())
-    private var volumeDownSosRunnable: Runnable? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         MainActivity.context = applicationContext
@@ -122,31 +95,6 @@ class MainActivity : FlutterActivity() {
             unregisterReceiver(foundDeviceReceiver)
             receiverRegistered = false
         }
-    }
-
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> {
-                    // repeatCount == 0 guards against scheduling a second
-                    // timer on top of an existing one, in the (rare, but
-                    // possible on some OEM skins) case where ACTION_DOWN
-                    // does repeat for a held hardware key.
-                    if (event.repeatCount == 0 && volumeDownSosRunnable == null) {
-                        val runnable = Runnable { sosChannel?.invokeMethod("sosTriggered", null) }
-                        volumeDownSosRunnable = runnable
-                        volumeDownHandler.postDelayed(runnable, VOLUME_HOLD_SOS_MS)
-                    }
-                }
-                KeyEvent.ACTION_UP -> {
-                    // Released before the hold completed — cancel, don't fire.
-                    volumeDownSosRunnable?.let { volumeDownHandler.removeCallbacks(it) }
-                    volumeDownSosRunnable = null
-                }
-            }
-        }
-        // Never consumed — volume still adjusts normally either way.
-        return super.dispatchKeyEvent(event)
     }
 
     // Completes ensureDiscoverable's pending result. resultCode from
@@ -190,6 +138,15 @@ class MainActivity : FlutterActivity() {
 
         metaChannel.setMethodCallHandler { call, result ->
             when (call.method) {
+
+                // ── Android API level ─────────────────────────────────────────
+                // Needed because BLUETOOTH_SCAN/ADVERTISE/CONNECT only exist as
+                // runtime permissions from Android 12 (API 31). Below that,
+                // permission_handler maps them to no manifest entry at all and
+                // reports DENIED forever - a state the user cannot clear, since
+                // there is no dialog and nothing in system settings to switch
+                // on. Dart has to know the API level to ask for the right set.
+                "getSdkInt" -> result.success(Build.VERSION.SDK_INT)
 
                 // ── Adapter name read/write (for BLE name restoration) ────────
                 "getAdapterName" -> {

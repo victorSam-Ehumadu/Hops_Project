@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/views/auth_screen.dart';
 import 'package:client/views/hops_app.dart';
 import 'package:client/views/terms_screen.dart';
@@ -44,16 +45,19 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
   Future<bool> _requestMeshPermissionsGate() async {
     setState(() => authEngineStatus = "Awaiting System Permissions...");
 
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.location,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.bluetoothScan,
-      Permission.camera,
-    ].request();
+    // Version-aware — see services/bluetooth_permissions.dart. This gate
+    // used to require bluetoothScan to be granted, which is impossible
+    // below Android 12: the permission does not exist there, so
+    // permission_handler reports it denied with no dialog and no setting
+    // the user can change. That failed sign-up and sign-in outright on
+    // those handsets, with "Err: Permissions Denied" and no way forward.
+    final bluetoothGranted = await BluetoothPermissions.request();
 
-    if (statuses[Permission.location]!.isGranted &&
-        statuses[Permission.bluetoothScan]!.isGranted) {
+    // Camera is only for the QR pairing flow, not for sign-in, so it is
+    // requested alongside but never gates the result.
+    await Permission.camera.request();
+
+    if (bluetoothGranted) {
       return true;
     } else {
       setState(() => authEngineStatus = "Err: Permissions Denied");

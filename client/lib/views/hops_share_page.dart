@@ -8,7 +8,7 @@ import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:client/views/received_files_page.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/services/unread_tracker.dart';
@@ -125,17 +125,12 @@ class _HopsSharePageState extends State<HopsSharePage> {
   // Nearby Connections on Android 13+ requires NEARBY_WIFI_DEVICES in addition
   // to the Bluetooth permissions. Without it, discovery silently finds nothing.
   Future<void> _requestPermissionsAndStart() async {
-    final statuses = await [
-      Permission.location,
-      Permission.bluetoothScan,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.nearbyWifiDevices,   // ← the missing permission
-    ].request();
-
-    final granted = statuses.values.every(
-          (s) => s == PermissionStatus.granted || s == PermissionStatus.limited,
-    );
+    // Version-aware — see services/bluetooth_permissions.dart. It asks for
+    // NEARBY_WIFI_DEVICES only on Android 13+ and for the Bluetooth
+    // runtime trio only on Android 12+; on older devices those resolve to
+    // no manifest entry at all and come back permanently denied, which
+    // used to leave this screen stuck on its permissions prompt.
+    final granted = await BluetoothPermissions.request(includeNearbyWifi: true);
 
     setState(() {
       _hasPermissions = granted;

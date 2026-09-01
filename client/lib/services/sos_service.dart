@@ -13,8 +13,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// One-shot signal, same shape/convention as main.dart's shortcutNotifier —
-/// flips true when the Silent SOS tile (or the in-app volume-hold
-/// fallback, also implemented natively in MainActivity.kt) fires. Kept as
+/// flips true when the Silent SOS Quick Settings tile fires. (A held
+/// volume-down trigger also used to set this; it was removed because OEM
+/// skins intercept volume keys before an app sees them, so it worked on
+/// some handsets and silently did nothing on others — the worst possible
+/// property for a safety feature.) Kept as
 /// its own notifier rather than folded into shortcutNotifier since it
 /// arrives over a dedicated native channel that quick_actions knows
 /// nothing about.

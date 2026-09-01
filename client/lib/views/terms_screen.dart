@@ -53,7 +53,7 @@ Certain features allow nearby users to discover your device. Information that ma
 Hops does not intentionally broadcast your phone number, email address, or other sensitive personal information unless you choose to include it.
 
 6. Emergency Flare and Silent SOS
-The Emergency Flare feature is intended for genuine emergency situations only. Silent SOS (triggered via a Quick Settings tile or a held volume button) sends the exact same alert discreetly, without needing to open the app or interact with the screen. You agree:
+The Emergency Flare feature is intended for genuine emergency situations only. Silent SOS (triggered via a Quick Settings tile) sends the exact same alert discreetly, without needing to open the app or interact with the screen. You agree:
 • Not to trigger false alarms or misuse either feature for pranks.
 • To provide accurate information when activating a flare.
 • That recipients should treat alerts as serious and seek official help if needed.

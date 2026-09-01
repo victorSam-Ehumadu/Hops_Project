@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:uuid/uuid.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:crypton/crypton.dart';
@@ -21,6 +20,7 @@ import 'package:client/main.dart'
         bleDirectMessageOutbox,
         bleDirectMessageInbox,
         BleDirectMessage;
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/database/database_helper.dart';
 import 'package:client/services/bluetooth_name_guard.dart';
 import 'package:client/services/key_directory.dart';
@@ -52,7 +52,6 @@ import 'package:client/services/lost_found_store.dart';
 import 'package:client/services/sos_service.dart';
 import 'package:client/services/avatar_path_notifier.dart';
 import 'package:client/services/accessibility_prefs.dart';
-import 'package:client/views/sos_settings_page.dart';
 import 'package:client/services/hops_constants.dart';
 import 'package:flutter/services.dart';
 import 'package:client/views/community_alerts.dart';
@@ -282,7 +281,18 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // In-progress Lost & Found chunk reassembly, keyed by postId — mirrors
   // _pendingFlareSigChunks' shape for Emergency Flare signature chunks.
   final Map<String, _LnfBuffer> _pendingLnfChunks = {};
-  final Set<String> _handledChatPingNames = {}; // dedup for incoming CHT: pings
+  // Incoming CHT: pings, keyed by SENDER rather than by the full
+  // advertisement string, and held for minutes rather than seconds.
+  //
+  // The old form keyed on the whole "CHT:<tag>:<sender>" name with a 5s
+  // window, which covered only the 3s the sender spends re-advertising a
+  // single ping. It did nothing about the real source of the noise: the
+  // chat screen fires a ping for every message that can't be delivered,
+  // so typing five messages to an offline peer notified them five times
+  // with the same "Wants to chat" alert. The message is identical each
+  // time and says nothing new, so one is enough for a good while.
+  final Map<String, DateTime> _lastChatPingNotifiedAt = {};
+  static const Duration _kChatPingNotifyCooldown = Duration(minutes: 2);
 
   final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
@@ -422,54 +432,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     if (shortcutNotifier.value != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _onShortcutTriggered());
     }
-    // Silent SOS (Quick Settings tile / in-app volume-hold) — same
+    // Silent SOS (Quick Settings tile) — same
     // cold/warm split as shortcutNotifier just above, see
     // services/sos_service.dart's header comment for the native side.
     sosTriggeredNotifier.addListener(_onSosTriggered);
     if (sosTriggeredNotifier.value) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _onSosTriggered());
     }
-    _maybePromptSilentSosSetup();
-  }
-
-  // One-time nudge toward Profile → Silent SOS — a safety feature that
-  // needs an actual setup step (adding the Quick Settings tile) is worth
-  // more than sitting undiscovered in a settings list, but a modal dialog
-  // here would compete with the terms-acceptance/walkthrough flows for
-  // "first thing a new user sees," so this is a single dismissible
-  // SnackBar instead, shown once ever (same one-time-flag convention as
-  // 'terms_accepted'/'walkthrough_seen' — see CLAUDE.md).
-  static const _sosPromptShownKey = 'sos_prompt_shown_v1';
-  Future<void> _maybePromptSilentSosSetup() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(_sosPromptShownKey) ?? false) return;
-    await prefs.setBool(_sosPromptShownKey, true);
-    if (!mounted) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          // Explicit colors rather than theme defaults — the default
-          // SnackBarAction text color washed out against some of this
-          // app's 10 themes, making "SET UP" hard to actually see. A fixed
-          // dark background + bright amber action guarantees contrast
-          // regardless of which theme is active.
-          backgroundColor: const Color(0xFF212121),
-          content: const Text(
-            "New: Silent SOS can send an alert without opening Hops first.",
-            style: TextStyle(color: Colors.white),
-          ),
-          duration: const Duration(seconds: 8),
-          action: SnackBarAction(
-            label: "SET UP",
-            textColor: Colors.amberAccent,
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SosSettingsPage()),
-            ),
-          ),
-        ),
-      );
-    });
   }
 
   // ---------- Emergency Flare confirmation ----------
@@ -478,9 +447,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // the old red app-bar button used to own it. Two reasons:
   //
   //   1. There is no in-app flare button any more (see radar_screen.dart)
-  //      — every remaining trigger is external (volume-hold, Quick
-  //      Settings tile, app-icon shortcut), so none of them has a natural
-  //      home on one particular tab.
+  //      — every remaining trigger is external (Quick Settings tile,
+  //      app-icon shortcut), so neither has a natural home on one
+  //      particular tab.
   //   2. HopsApp is the MaterialApp's `home`, so `Navigator.of(context)`
   //      here resolves to the ROOT navigator. Pushing the dialog off this
   //      context puts it above every pushed route — Wordle, a chat, the
@@ -494,10 +463,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // these paths — see HopsSosTileService.kt's header comment.
 
   // Guards against stacking a second copy of the dialog on top of the
-  // first: a volume-hold that fires while the prompt is already up (an
-  // easy thing to do — you're panicking and holding the button again)
-  // would otherwise leave two dialogs to dismiss, with only the top one
-  // visible.
+  // first: a second trigger while the prompt is already up (an easy thing
+  // to do — you're panicking and tapping the tile again) would otherwise
+  // leave two dialogs to dismiss, with only the top one visible.
   bool _flareDialogOpen = false;
 
   void _showFlareConfirmDialog() {
@@ -1978,12 +1946,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // ---------- Permissions & BLE ----------
   Future<void> _checkPermissionsAndStartBLE() async {
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.location, Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect, Permission.bluetoothScan,
-    ].request();
-    bool granted = statuses[Permission.location]!.isGranted &&
-        statuses[Permission.bluetoothScan]!.isGranted;
+    // Version-aware — see services/bluetooth_permissions.dart. Requiring
+    // bluetoothScan here sent every pre-Android-12 device straight back to
+    // the gatekeeper on launch, since that permission cannot be granted on
+    // those versions.
+    final granted = await BluetoothPermissions.request();
     if (!granted) {
       if (mounted) {
         Navigator.of(context).pushAndRemoveUntil(
@@ -2589,11 +2556,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
                 myUsername.length > 8 ? myUsername.substring(0, 8) : myUsername;
             if (parts[0] == myTruncated) {
               final sender = parts[1];
-              if (!_handledChatPingNames.contains(name)) {
-                _handledChatPingNames.add(name);
-                Future.delayed(const Duration(seconds: 5), () {
-                  _handledChatPingNames.remove(name);
-                });
+              final now = DateTime.now();
+              final last = _lastChatPingNotifiedAt[sender];
+              if (last == null ||
+                  now.difference(last) >= _kChatPingNotifyCooldown) {
+                _lastChatPingNotifiedAt[sender] = now;
                 await NotificationService.showChatInviteNotification(sender: sender);
               }
             }

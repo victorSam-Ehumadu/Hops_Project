@@ -6,10 +6,10 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/services/rfcomm_chat_service.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/services/unread_tracker.dart';
@@ -81,6 +81,12 @@ class _IndividualChatTerminalViewState
   // couple of messages in a row while still not connected) don't step on
   // each other's pause/resume of the Nearby Connections session.
   bool _pingInFlight = false;
+
+  // Rate limit on top of _pingInFlight. That flag only prevents two pings
+  // overlapping; this stops a run of undelivered messages producing a run
+  // of notifications on the peer's phone.
+  DateTime? _lastPingAt;
+  static const Duration _kChatPingCooldown = Duration(minutes: 2);
 
   // ── BLE mesh fallback ──────────────────────────────────────────────────
   // RFCOMM (rfcomm_chat_service.dart) is the primary transport: a real
@@ -308,16 +314,12 @@ class _IndividualChatTerminalViewState
   // reason, before this transport swap — see rfcomm_chat_service.dart).
   // No Wi-Fi-adjacent permission needed at all now, unlike before.
   Future<void> _connectWithPermissions() async {
-    final statuses = await [
-      Permission.location,
-      Permission.bluetoothScan,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-    ].request();
-
-    final granted = statuses.values.every(
-      (s) => s == PermissionStatus.granted || s == PermissionStatus.limited,
-    );
+    // Version-aware — see services/bluetooth_permissions.dart. Asking for
+    // BLUETOOTH_SCAN/ADVERTISE/CONNECT unconditionally locked this screen
+    // permanently on anything below Android 12: those permissions do not
+    // exist there, permission_handler reports them denied with no dialog,
+    // and connect() was never reached.
+    final granted = await BluetoothPermissions.request();
 
     if (!mounted) return;
     if (!granted) {
@@ -426,6 +428,21 @@ class _IndividualChatTerminalViewState
   Future<void> _pingPeerToWakeUp() async {
     if (_pingInFlight) return;
     if (_connState == ChatConnectionState.connected) return; // already reachable — nothing to ping for
+
+    // This fires once per undelivered message, so a few lines typed at an
+    // offline peer used to raise a "Wants to chat" notification on their
+    // phone for each one. The ping carries no per-message information —
+    // it only says "something is waiting" — so repeating it adds nothing
+    // and reads as spam on the receiving end. The receiver enforces its
+    // own cooldown too (hops_app.dart); this one also saves the radio
+    // time, since each ping steps the RFCOMM attempt aside for 3s.
+    final last = _lastPingAt;
+    if (last != null &&
+        DateTime.now().difference(last) < _kChatPingCooldown) {
+      return;
+    }
+    _lastPingAt = DateTime.now();
+
     _pingInFlight = true;
     try {
       await _chatService?.pauseForPing();

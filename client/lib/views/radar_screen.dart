@@ -41,9 +41,9 @@ class RadarScreen extends StatefulWidget {
   // this screen any more. Official Alert composing moved to the separate
   // Admin app (lib/services/official_alert_service.dart); the personal
   // flare's old red app-bar button is gone too — it's now reached only by
-  // holding Volume Down (MainActivity.kt), the Quick Settings tile
-  // (HopsSosTileService.kt), or the app-icon shortcut, all three of which
-  // open the confirm dialog straight from hops_app.dart so it appears
+  // the Quick Settings tile (HopsSosTileService.kt) or the app-icon
+  // shortcut, both of which open the confirm dialog straight from
+  // hops_app.dart so it appears
   // over whatever screen you're on. Receiving either kind of alert is
   // unaffected — that's handled in hops_app.dart, not here.
   final VoidCallback? onRescan;
@@ -106,6 +106,31 @@ class _RadarScreenState extends State<RadarScreen>
 
   // Timers for cleanup
   Timer? _cleanupTimer;
+
+  // The "tap a dot to add them" hint below the radar. It teaches a gesture
+  // that isn't discoverable otherwise, so it has to appear — but it sits
+  // over the radar and only says one thing, so it has no reason to stay
+  // there for the whole session. Shown for _kRadarHintDuration from the
+  // moment the first dot appears, then faded out for good.
+  //
+  // Deliberately not shown again once it has gone: it is a first-run
+  // teaching aid, and a hint that keeps coming back reads as an error
+  // message rather than guidance.
+  static const Duration _kRadarHintDuration = Duration(seconds: 30);
+  static const Duration _kRadarHintFade = Duration(milliseconds: 600);
+  bool _showRadarHint = true;
+  Timer? _radarHintTimer;
+
+  /// Starts the hint's countdown the first time a dot actually appears.
+  /// Anchored to that rather than to initState because a user staring at
+  /// an empty radar has not had the chance to read it yet.
+  void _startRadarHintTimerIfNeeded() {
+    if (_radarHintTimer != null || !_showRadarHint) return;
+    _radarHintTimer = Timer(_kRadarHintDuration, () {
+      if (!mounted) return;
+      setState(() => _showRadarHint = false);
+    });
+  }
 
   String? _myAvatarPath;
 
@@ -228,6 +253,7 @@ class _RadarScreenState extends State<RadarScreen>
   void dispose() {
     _sub?.cancel();
     _cleanupTimer?.cancel();
+    _radarHintTimer?.cancel();
     _radarController.dispose();
     _pulseController.dispose();
     avatarPathRevision.removeListener(_loadAvatar);
@@ -332,6 +358,7 @@ class _RadarScreenState extends State<RadarScreen>
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final blips = _computeBlips();
+    if (blips.isNotEmpty) _startRadarHintTimerIfNeeded();
     final screenSize = MediaQuery.of(context).size;
     final radarSize = math.min(screenSize.width, screenSize.height * 0.55);
 
@@ -419,11 +446,9 @@ class _RadarScreenState extends State<RadarScreen>
           // situation it exists for — visibly unlocking your phone,
           // opening Hops, finding Home and press-holding a red button is
           // exactly what you can't do when you actually need a flare.
-          // Holding Volume Down for five seconds now raises the same
-          // confirm dialog from anywhere in the app (hops_app.dart's
-          // _showFlareConfirmDialog, MainActivity.kt's
-          // VOLUME_HOLD_SOS_MS); the Quick Settings tile and app-icon
-          // shortcut are unchanged and route to that same dialog.
+          // The Quick Settings tile and the app-icon shortcut raise the
+          // same confirm dialog from anywhere in the app (hops_app.dart's
+          // _showFlareConfirmDialog).
           //
           // The Hops Shop takes the freed slot, mirroring the entry point
           // already on the Features tab (hops_app.dart's _buildShopButton)
@@ -676,41 +701,54 @@ class _RadarScreenState extends State<RadarScreen>
                         // one sends a friend request. IgnorePointer for the same
                         // reason: this must never steal the tap-to-friend-request
                         // gesture from the GestureDetector underneath it.
+                        //
+                        // Fades out after _kRadarHintDuration. The countdown is
+                        // started here rather than in initState because it is
+                        // only worth running once there is something on screen
+                        // for the hint to be about — see
+                        // _startRadarHintTimerIfNeeded. Calling it from build is
+                        // safe: it is idempotent and schedules rather than
+                        // setting state synchronously.
                         Positioned(
                           bottom: 6,
                           left: 0,
                           right: 0,
                           child: IgnorePointer(
-                            child: Center(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 5),
-                                decoration: BoxDecoration(
-                                  color: colors.surface.withValues(alpha: 0.85),
-                                  borderRadius: BorderRadius.circular(100),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.touch_app_outlined,
-                                        size: 13,
-                                        color: colors.primary.withValues(alpha: 0.7)),
-                                    const SizedBox(width: 5),
-                                    Flexible(
-                                      child: Text(
-                                        "Ask a friend to reveal their username, then tap their dot to add them",
-                                        textAlign: TextAlign.center,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: colors.onSurface
-                                              .withValues(alpha: 0.55),
+                            child: AnimatedOpacity(
+                              opacity: _showRadarHint ? 1.0 : 0.0,
+                              duration: _kRadarHintFade,
+                              curve: Curves.easeOut,
+                                child: Center(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    color: colors.surface.withValues(alpha: 0.85),
+                                    borderRadius: BorderRadius.circular(100),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.touch_app_outlined,
+                                          size: 13,
+                                          color: colors.primary.withValues(alpha: 0.7)),
+                                      const SizedBox(width: 5),
+                                      Flexible(
+                                        child: Text(
+                                          "Ask a friend to reveal their username, then tap their dot to add them",
+                                          textAlign: TextAlign.center,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: colors.onSurface
+                                                .withValues(alpha: 0.55),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
