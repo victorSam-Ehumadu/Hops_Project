@@ -122,3 +122,8 @@ app.*.symbols
 # commit one. Deliberately scoped to this folder rather than a blanket
 # *.sql rule, which would also swallow supabase/migrations/.
 backups/
+
+# Word/Excel owner files. Created while a document is open and deleted on
+# close, so they are never worth committing - and one was sitting next to
+# the Phase 2 document when it was added.
+~$*
