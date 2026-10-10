@@ -6,6 +6,7 @@ import 'package:client/services/hops_constants.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/services/unread_tracker.dart';
 import 'package:client/services/accessibility_prefs.dart';
+import 'package:client/services/hops_engine.dart';
 
 class WatchMePage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
@@ -53,6 +54,17 @@ class _BuddySignal {
   DateTime monitoringStartTime = DateTime.now();
   bool alertActive = false;
   bool alertCooldown = false;
+
+  /// True once we've announced that this buddy has gone away (not found,
+  /// or disappeared). Drives the "they're back" announcement — without it
+  /// there is no recovery edge to fire on, since a sighting only clears
+  /// [alertCooldown] and says nothing. Hearing "Thabo is out of range" and
+  /// then never hearing anything again is worse than not being told at all.
+  ///
+  /// Deliberately not set by the weak-signal alert: a weak signal means
+  /// they are still visible, so there is no clean moment at which they are
+  /// "back" to announce.
+  bool awayAnnounced = false;
 }
 
 class _WatchMePageState extends State<WatchMePage> {
@@ -127,7 +139,16 @@ class _WatchMePageState extends State<WatchMePage> {
           final seed = widget.contactSeeds[entry.key];
           if (seed == null) continue; // can't recognize their beacon without it — see _buildSignalBar
           if (matchesRotatingToken(seed, token)) {
-            entry.value
+            final sig = entry.value;
+            // Seeing them again closes an "away" alert. Announce it before
+            // clearing the flag, so someone who heard them go out of range
+            // also hears them come back — the reassurance is the whole
+            // reason to be watching.
+            if (sig.awayAnnounced) {
+              sig.awayAnnounced = false;
+              _announce('${entry.key} is back in range.');
+            }
+            sig
               ..lastRssi = r.rssi
               ..lastSeen = DateTime.now()
               ..alertCooldown = false;
@@ -147,16 +168,22 @@ class _WatchMePageState extends State<WatchMePage> {
             now.difference(sig.monitoringStartTime).inSeconds >= 15 &&
             !sig.alertCooldown &&
             !sig.alertActive) {
-          _triggerAlert(buddy, sig, "$buddy not found – may be out of range or Bluetooth off");
+          _triggerAlert(buddy, sig,
+              "$buddy not found – may be out of range or Bluetooth off",
+              spoken: "$buddy isn't showing up. They may be out of range, "
+                  "or their Bluetooth may be off.",
+              isAway: true);
           continue;
         }
         if (sig.lastSeen != null && now.difference(sig.lastSeen!).inSeconds >= 10) {
           if (!sig.alertCooldown && !sig.alertActive) {
-            _triggerAlert(buddy, sig, "$buddy disappeared!");
+            _triggerAlert(buddy, sig, "$buddy disappeared!",
+                spoken: "$buddy has gone out of range.", isAway: true);
           }
         } else if (sig.lastRssi < -80 && !sig.alertActive && !sig.alertCooldown && sig.lastSeen != null) {
           _triggerAlert(buddy, sig,
-              "$buddy's signal is weak — they may be far away, blocked by walls, or on a different floor.");
+              "$buddy's signal is weak — they may be far away, blocked by walls, or on a different floor.",
+              spoken: "$buddy's signal is getting weak.");
         }
       }
     });
@@ -173,11 +200,39 @@ class _WatchMePageState extends State<WatchMePage> {
     widget.onStopWatching(buddy);
   }
 
-  void _triggerAlert(String buddy, _BuddySignal sig, String message) {
+  /// Speaks [text], if the user asked for that and it is safe to do so.
+  ///
+  /// Two guards, both deliberate:
+  ///
+  ///  * Never over an emergency alarm. A flare siren is engineered to be
+  ///    impossible to ignore; talking across it degrades the one sound in
+  ///    this app that must cut through, and a Watch Me update is never the
+  ///    more urgent of the two.
+  ///  * Fire-and-forget. Speech must not sit in front of the haptic, the
+  ///    notification or the dialog — those are the alert; this is a
+  ///    convenience on top of it.
+  ///
+  /// Reuses HopsEngine's already-initialised engine rather than opening a
+  /// second one, the same way chat_terminal.dart does.
+  void _announce(String text) {
+    if (!AccessibilityPrefs.instance.speakWatchMeAlerts.value) return;
+    if (NotificationService.isAlarmRinging.value) return;
+    unawaited(HopsEngine.instance.bunnyTalk(text));
+  }
+
+  /// [spoken] is a separate, shorter phrasing for text-to-speech. The
+  /// on-screen [message] is written to be read — it uses an en-dash, a
+  /// trailing exclamation mark and a long qualifying clause, all of which
+  /// are clumsy or silent when spoken. [isAway] marks the alerts that have
+  /// a meaningful "they came back" counterpart; see _BuddySignal.
+  void _triggerAlert(String buddy, _BuddySignal sig, String message,
+      {String? spoken, bool isAway = false}) {
     if (sig.alertActive) return;
     sig.alertActive = true;
     sig.alertCooldown = true;
+    if (isAway) sig.awayAnnounced = true;
     HapticFeedback.heavyImpact();
+    _announce(spoken ?? message);
     // Fires regardless of whether this screen is even mounted right now —
     // the in-app dialog below only ever helped if Watch Me happened to be
     // the screen on top, which defeats the point of a *safety* alert. This
