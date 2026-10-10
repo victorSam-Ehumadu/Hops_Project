@@ -89,8 +89,12 @@ img {
 }
 
 .site-nav .brand img {
-  width: 36px;
+  /* The mark is square (see assets/hops_logo.png) — fixing both width and
+   * height to different values stretched it. Keep it square and let
+   * object-fit guard against a future asset with another aspect ratio. */
+  width: 40px;
   height: 40px;
+  object-fit: contain;
 }
 
 .site-nav .brand .logo-word {
@@ -172,7 +176,8 @@ img {
 }
 
 .hero img.mascot {
-  width: 120px;
+  width: 132px;
+  height: auto;
   margin: 0 auto 20px;
 }
 
@@ -407,4 +412,195 @@ img {
   font-weight: 800;
   color: var(--primary-container);
   font-size: 14px;
+}
+
+/* ── Accessibility & motion ──────────────────────────────────────────
+ *
+ * Added in the Oct 2026 review. Three gaps the original stylesheet had:
+ * no visible keyboard focus anywhere, `scroll-behavior: smooth` applied
+ * unconditionally (which is exactly what prefers-reduced-motion exists to
+ * suppress), and no small-screen tightening on a site whose audience is
+ * students on phones.
+ */
+
+:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* The disabled-looking buttons are anchors, and `pointer-events: none`
+ * only stops the mouse — they stayed keyboard-reachable and activatable.
+ * Pair this with tabindex="-1" in the markup. */
+.btn[aria-disabled="true"] {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn:hover { transform: none; }
+}
+
+@media (max-width: 640px) {
+  .site-nav { padding: 14px 16px; }
+  .site-nav .links { gap: 14px; width: 100%; }
+  .site-nav .links a { font-size: 13px; }
+  .container { padding: 0 16px; }
+  .hero { padding: 44px 0 36px; }
+  .section { padding: 40px 0; }
+  .btn { padding: 13px 22px; width: 100%; text-align: center; }
+  .hero .actions { flex-direction: column; align-items: stretch; }
+}
+
+/* ── Donation flow (shop.html) ───────────────────────────────────────
+ *
+ * DEMO MODE. The banner below is deliberately loud and deliberately not
+ * dismissible: this flow simulates a payment and moves no money, and a
+ * visitor must never be able to mistake it for a real checkout. When a
+ * real payment provider is connected, the whole `.demo-banner` and the
+ * simulated step go away together — see README.
+ */
+
+.demo-banner {
+  background: #7a2d12;
+  color: #ffe9e1;
+  text-align: center;
+  padding: 12px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.demo-banner strong { color: #ffffff; }
+
+.donate-card {
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 30px;
+  max-width: 540px;
+  margin: 0 auto;
+}
+
+.donate-step { display: none; }
+.donate-step.active { display: block; }
+
+.donate-card h3 {
+  font-size: 19px;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.donate-card .step-hint {
+  font-size: 13px;
+  color: var(--text-soft);
+  margin-bottom: 20px;
+}
+
+.amount-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.amount-opt {
+  padding: 16px 8px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--surface);
+  background: var(--bg);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--primary);
+  cursor: pointer;
+}
+
+.amount-opt[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--surface);
+}
+
+.donate-card label {
+  display: block;
+  font-weight: 700;
+  font-size: 13px;
+  margin: 14px 0 6px;
+  color: var(--primary);
+}
+
+.donate-card input[type="text"],
+.donate-card input[type="email"],
+.donate-card input[type="number"] {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--surface);
+  font-family: inherit;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.donate-card input:focus { outline: none; border-color: var(--primary); }
+
+.field-error {
+  color: #a3301a;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 6px 0 0;
+  min-height: 1em;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--surface);
+  font-size: 14px;
+}
+
+.summary-row:last-of-type { border-bottom: none; }
+.summary-row .k { color: var(--text-soft); }
+.summary-row .v { font-weight: 700; }
+
+.donate-actions { display: flex; gap: 10px; margin-top: 22px; }
+.donate-actions .btn { flex: 1; }
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  margin: 10px auto 16px;
+  border: 4px solid var(--surface);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; border-top-color: var(--surface); }
+}
+
+.receipt-tick {
+  font-size: 46px;
+  text-align: center;
+  margin-bottom: 6px;
+}
+
+.receipt-ref {
+  font-family: ui-monospace, Consolas, monospace;
+  background: var(--surface);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 13px;
 }

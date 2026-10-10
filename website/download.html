@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Download — Hops</title>
   <meta name="description" content="Download Hops for Android, Windows, or Linux.">
+  <link rel="icon" type="image/png" href="assets/hops_logo.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Hops">
+  <meta property="og:title" content="Download — Hops">
+  <meta property="og:description" content="Get Hops for Android. Free, and it works with no signal.">
+  <meta property="og:image" content="assets/hops_logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="theme-color" content="#165c6f">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
@@ -13,7 +21,7 @@
 
   <nav class="site-nav">
     <a class="brand" href="index.html">
-      <img src="assets/hops_bunny.png" alt="Hops mascot">
+      <img src="assets/hops_logo.png" alt="Hops mascot">
       <p class="logo-word">Hops</p>
     </a>
     <ul class="links">
@@ -26,9 +34,9 @@
 
   <header class="hero" style="padding-bottom: 32px;">
     <div class="container">
-      <img class="mascot" src="assets/hops_bunny.png" alt="Hops mascot bunny">
+      <img class="mascot" src="assets/hops_logo.png" alt="Hops mascot bunny">
       <h1>Get Hops</h1>
-      <p class="tagline">Free to download. No account needed to try Radar and Emergency Flare.</p>
+      <p class="tagline">Free to download. You’ll create an account on first launch — that’s the one step that needs a connection.</p>
     </div>
   </header>
 
@@ -37,42 +45,50 @@
       <div class="card-grid">
 
         <div class="card" style="text-align:center;">
-          <div class="icon">🤖</div>
+          <div class="icon">&#129302;</div>
           <h3>Android</h3>
-          <p>Requires Android 7.0 (API 24) or newer.</p>
+          <p><strong>The full app.</strong> Every feature works here &mdash; Radar, Emergency Flare,
+             chat, Hops Share, Community Alerts and the rest.</p>
+          <p style="font-size:13px; color: var(--text-soft);">Requires Android 7.0 (Nougat) or newer.</p>
           <!-- TODO: replace with the real APK / Play Store link before launch -->
           <p style="margin-top:16px;">
-            <a class="btn btn-primary" href="#" aria-disabled="true">Download APK</a>
+            <a class="btn btn-primary" href="#" aria-disabled="true" tabindex="-1">Download APK</a>
           </p>
-          <p style="font-size:12px; color: var(--text-soft);">Link not live yet — placeholder</p>
+          <p style="font-size:12px; color: var(--text-soft);">Link not live yet &mdash; placeholder</p>
         </div>
 
         <div class="card" style="text-align:center;">
-          <div class="icon">🪟</div>
+          <div class="icon">&#129503;</div>
           <h3>Windows</h3>
-          <p>Desktop build for Windows 10/11.</p>
-          <!-- TODO: replace with the real Windows build download link -->
+          <p><strong>Developer build, limited.</strong> Runs the interface and the offline features
+             &mdash; Task Tracker, the games, your saved data.</p>
+          <p style="font-size:13px; color: var(--text-soft);">
+             The Bluetooth features do <strong>not</strong> work on desktop: Radar, Emergency Flare,
+             1:1 chat and Hops Share are Android-only. Use this for a look around, not for safety.</p>
           <p style="margin-top:16px;">
-            <a class="btn btn-primary" href="#" aria-disabled="true">Download for Windows</a>
+            <span class="btn btn-secondary" aria-disabled="true">Built on request</span>
           </p>
-          <p style="font-size:12px; color: var(--text-soft);">Link not live yet — placeholder</p>
-        </div>
-
-        <div class="card" style="text-align:center;">
-          <div class="icon">🐧</div>
-          <h3>Linux</h3>
-          <p>Desktop build for common Linux distros.</p>
-          <!-- TODO: replace with the real Linux build download link -->
-          <p style="margin-top:16px;">
-            <a class="btn btn-primary" href="#" aria-disabled="true">Download for Linux</a>
-          </p>
-          <p style="font-size:12px; color: var(--text-soft);">Link not live yet — placeholder</p>
+          <p style="font-size:12px; color: var(--text-soft);">No published build yet</p>
         </div>
 
         <div class="card" style="text-align:center; opacity: 0.7;">
-          <div class="icon">🍎</div>
+          <div class="icon">&#128039;</div>
+          <h3>Linux</h3>
+          <p>Not available.</p>
+          <p style="font-size:13px; color: var(--text-soft);">
+             The project targets Linux in principle, but no Linux build has been produced or tested.</p>
+          <p style="margin-top:16px;">
+            <span class="btn btn-secondary" aria-disabled="true">Not available</span>
+          </p>
+        </div>
+
+        <div class="card" style="text-align:center; opacity: 0.7;">
+          <div class="icon">&#127822;</div>
           <h3>iOS</h3>
           <p>Not available yet.</p>
+          <p style="font-size:13px; color: var(--text-soft);">
+             iOS restricts the background Bluetooth broadcasting Hops depends on, so an iPhone build
+             is a larger piece of work than a straight port.</p>
           <p style="margin-top:16px;">
             <span class="btn btn-secondary" aria-disabled="true">Coming later</span>
           </p>
@@ -81,9 +97,14 @@
       </div>
 
       <div class="note-box" style="margin-top: 40px; text-align: center;">
-        Bluetooth features (Radar, Emergency Flare, chat, Community Alerts) need Bluetooth and
-        nearby-device permissions granted on first launch — Hops will walk you through this
-        the first time you open it.
+        <strong>On first launch</strong> Hops asks for Bluetooth and location permissions &mdash;
+        Android requires the location permission before any app is allowed to scan for Bluetooth
+        devices at all, and Hops never reads your GPS position. You&rsquo;ll also create an account,
+        which is the one step that needs an internet connection.
+        <br><br>
+        Some older and budget handsets can receive Bluetooth broadcasts but not send them. On those,
+        Hops will tell you at startup that it can&rsquo;t transmit a flare, rather than letting you
+        believe one was sent.
       </div>
     </div>
   </section>

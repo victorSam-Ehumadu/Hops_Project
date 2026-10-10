@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>About, FAQ &amp; Contact — Hops</title>
   <meta name="description" content="Learn how Hops works, get answers to common questions, and get in touch.">
+  <link rel="icon" type="image/png" href="assets/hops_logo.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Hops">
+  <meta property="og:title" content="About, FAQ &amp; Contact — Hops">
+  <meta property="og:description" content="How Hops works, answers to common questions, and how to get in touch.">
+  <meta property="og:image" content="assets/hops_logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="theme-color" content="#165c6f">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
@@ -13,7 +21,7 @@
 
   <nav class="site-nav">
     <a class="brand" href="index.html">
-      <img src="assets/hops_bunny.png" alt="Hops mascot">
+      <img src="assets/hops_logo.png" alt="Hops mascot">
       <p class="logo-word">Hops</p>
     </a>
     <ul class="links">
@@ -67,9 +75,14 @@
       <details class="faq-item">
         <summary>Does Hops need an internet connection?</summary>
         <p class="answer">
-          No — Radar, chat, Emergency Flare, Watch Me, Community Alerts, and both mini-games
-          all work over Bluetooth alone. The only things that need a connection at all are
-          signing in/up and password recovery, since those talk to the account system.
+          Only once, to create your account. After that, Radar, chat, Emergency Flare, Watch Me,
+          Community Alerts, Lost &amp; Found, Task Tracker and both mini-games all work over
+          Bluetooth alone, with no signal and no data.
+        </p>
+        <p class="answer">
+          The things that do need a connection are signing up, signing in on a new device, and
+          password recovery &mdash; those talk to the account system. Everything else is
+          device-to-device.
         </p>
       </details>
 
@@ -85,18 +98,34 @@
       <details class="faq-item">
         <summary>Who can see my messages?</summary>
         <p class="answer">
-          Only the person you're chatting with. 1:1 chats go directly between your two
-          devices and are never stored on a server. Community Alerts is the one exception —
-          it's an intentionally public broadcast from campus admins to everyone nearby.
+          1:1 chats travel directly between your two phones over Bluetooth and are never sent to
+          or stored on a server &mdash; there is no copy of your conversation anywhere but the two
+          devices. Community Alerts is the deliberate exception: it&rsquo;s a public broadcast to
+          everyone nearby.
+        </p>
+        <p class="answer">
+          To be straight with you about the limits: we don&rsquo;t describe Hops as an
+          end-to-end-encrypted messenger, because it isn&rsquo;t one. A direct chat runs over a
+          point-to-point Bluetooth connection, and the short-range fallback used when that
+          connection isn&rsquo;t available is scrambled but is not built to withstand a determined
+          attacker. If you need guaranteed-private messaging, use a dedicated secure messenger
+          &mdash; Hops is built for reach when there&rsquo;s no signal, not for secrecy.
         </p>
       </details>
 
       <details class="faq-item">
-        <summary>What's the Emergency Flare?</summary>
+        <summary>What&rsquo;s the Emergency Flare?</summary>
         <p class="answer">
-          A one-tap alert that broadcasts to every Hops user in Bluetooth range — and relays
-          through their phones to reach further than your signal alone would. Campus admins
-          can also send a signed, verified Official Alert to everyone at once.
+          An alert that broadcasts to every Hops user in Bluetooth range &mdash; and relays through
+          their phones, so it reaches further than your own phone could. You set it off from your
+          phone&rsquo;s quick-settings panel or by holding the app icon, so you don&rsquo;t have to
+          unlock and navigate the app first. It asks you to confirm and pick a reason before it
+          sends, so it can&rsquo;t fire by accident in your pocket.
+        </p>
+        <p class="answer">
+          Flares are digitally signed, so a receiving phone can check the alert really came from
+          the account it claims &mdash; and it can check that with no internet connection. Campus
+          admins can also send a signed Official Alert to everyone at once.
         </p>
       </details>
 
@@ -104,7 +133,9 @@
         <summary>How do carrots and the Hops Shop work?</summary>
         <p class="answer">
           Carrots are earned by playing Hops Hopper and Hops Wordle inside the app, and spent
-          in the in-app Hops Shop on exclusive color themes. Supporting Hops here on the
+          in the in-app Hops Shop on cosmetics &mdash; colour themes, avatar frames, chat bubble
+          skins, radar icons, profile banners and the like. Nothing in the shop affects gameplay
+          or any safety feature. Supporting Hops here on the
           website funds development directly — it's a separate thing from in-app carrots,
           not a way to buy them. See the Support Hops page for details.
         </p>
@@ -121,8 +152,10 @@
       <details class="faq-item">
         <summary>What devices does Hops support?</summary>
         <p class="answer">
-          Android phones today, with Windows and Linux desktop builds also available. See the
-          Download page for current links.
+          Android phones &mdash; that&rsquo;s where the full app runs, and it needs Android 7.0 or
+          newer. There is a Windows desktop build for development, but the Bluetooth features
+          don&rsquo;t work there, so it isn&rsquo;t useful as a safety app. iOS isn&rsquo;t available
+          yet. See the Download page for the details.
         </p>
       </details>
     </div>
