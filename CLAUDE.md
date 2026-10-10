@@ -50,7 +50,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **118 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **125 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -77,6 +77,11 @@ What is and isn't covered, so you know what a green run actually proves:
   prefix is *removed*, drop it from the guard, this test's expected list, and any literal payload
   assertion that used it — removing Hops & Robbers needed all three.
 - `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
+- `test/services/accessibility_prefs_test.dart` (7) — the behaviour toggles. Pins that every
+  one defaults **off** (`speakWatchMeAlerts` says a contact's name aloud, so a default flip
+  would be a privacy regression nothing else would catch) and that the two speech toggles
+  are independent — asking for chat messages read aloud must not also start announcing
+  Watch Me.
 - `test/views/flare_radio_invariant_test.dart` (3) — a *source-level* guard, not a
   behavioural test: it reads `hops_app.dart` as text and fails if any revert-to-beacon path
   bypasses `_releaseRadioToPresenceBeacon()`, or if a guard checks `_isFlareActive` without
@@ -301,9 +306,20 @@ timestamped file and delete the old one.
   optional TFLite model and falls back to a heuristic; **a missing model file is an expected
   state, not an error.**
 
-Optional text-to-speech (`flutter_tts`) reads replies aloud, gated by
-`accessibility_prefs.dart`'s `readMessagesAloud` — that file is for toggles that change
-*behaviour*, as distinct from `cosmetic_prefs.dart`, which is appearance only.
+Optional text-to-speech (`flutter_tts`) lives here and is the app's **only** TTS engine —
+anything that needs to speak calls `bunnyTalk()` rather than opening a second `flutter_tts`
+instance. Three callers, each behind its own opt-in toggle in `accessibility_prefs.dart`
+(that file is for toggles that change *behaviour*, as distinct from `cosmetic_prefs.dart`,
+which is appearance only):
+
+- the assistant's own replies, in `chat_terminal.dart`;
+- incoming 1:1 chat messages, gated by `readMessagesAloud`;
+- Watch Me status changes, gated by `speakWatchMeAlerts` — see `watch_me_page.dart`'s
+  `_announce()`, which also refuses to speak while `NotificationService.isAlarmRinging` is
+  true. A flare siren is engineered to be impossible to ignore; talking across it degrades
+  the one sound in this app that has to cut through, and a Watch Me update is never the more
+  urgent of the two. **Any new speech call site should go through a helper with that same
+  guard, not straight to `bunnyTalk()`.**
 
 **There is no LLM path and there must not be one added casually.** The header comment records a
 removed attempt to load `gemma-2b-it.bin` via `Interpreter.fromAsset`: tflite_flutter reads
