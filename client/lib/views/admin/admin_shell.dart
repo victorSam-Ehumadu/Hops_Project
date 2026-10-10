@@ -9,7 +9,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/views/admin/admin_sign_in_screen.dart';
@@ -18,6 +17,7 @@ import 'package:client/views/admin/admin_moderation_tab.dart';
 import 'package:client/views/admin/admin_users_tab.dart';
 import 'package:client/views/admin/admin_action_log_tab.dart';
 import 'package:client/views/admin/admin_community_alerts_tab.dart';
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/main.dart' show navBarPillHeightNotifier;
 
@@ -92,14 +92,15 @@ class _AdminShellState extends State<AdminShell> {
   // without this the Listening Post and Official Alert/Community Alerts
   // broadcasting could all silently do nothing on such a session.
   // Re-requesting an already-granted permission is a no-op.
+  //
+  // Goes through BluetoothPermissions rather than naming the Android 12
+  // trio directly: below API 31 those three resolve to no manifest entry
+  // and are recorded as DENIED with no dialog shown and nothing in system
+  // settings to switch on, which locks an admin out of the BLE hub
+  // permanently. See that file's header comment.
   Future<void> _ensurePermissionsThenStartBle() async {
     try {
-      await [
-        Permission.location,
-        Permission.bluetoothAdvertise,
-        Permission.bluetoothConnect,
-        Permission.bluetoothScan,
-      ].request();
+      await BluetoothPermissions.request();
     } catch (_) {
       // Fall through and try to start anyway — the failure surfaces at the
       // point of use (see broadcastAdminChatMessage's return value).

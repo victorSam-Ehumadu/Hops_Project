@@ -48,14 +48,6 @@ final List<FeatureItem> allFeatures = [
     "out a spot to study before you walk all the way over.",
     icon: Icons.people_outline,
   ),
-  // FeatureItem(
-  //   id: 8,
-  //   name: "Hops & Robbers",
-  //   shortDesc: "Infection tag game – run from the Robbers!",
-  //   longDesc:
-  //   "One player starts as a Robber. Tag nearby Runners to turn them into Robbers. Last Runner standing wins!",
-  //   icon: Icons.sports_kabaddi,
-  // ),
   const FeatureItem(
     id: 9,
     name: "Task Tracker",

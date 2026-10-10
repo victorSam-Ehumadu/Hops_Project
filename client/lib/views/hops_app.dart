@@ -140,10 +140,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // if it's been banned. See _syncIdentityStatus.
   Timer? _identitySyncTimer;
 
-  // Hops & Robbers runner tag — see _advertisePresenceBeacon/_setGameRunnerTag.
-  bool _isGameRunnerTagActive = false;
-  String? _gameRunnerUsername;
-
   // True while nearbyConnectionsSessionCount (see main.dart) is above zero —
   // see _pauseBackgroundBleForNearbyConnections/_resumeBackgroundBle... below.
   bool _bleBackgroundPausedForNearbyConnections = false;
@@ -294,8 +290,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   final Map<String, DateTime> _lastChatPingNotifiedAt = {};
   static const Duration _kChatPingNotifyCooldown = Duration(minutes: 2);
 
-  final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
 
   // Watch request stream
   late final StreamController<List<String>> _pendingWatchStreamController;
@@ -669,7 +663,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _radarStreamController.close();
     _pendingWatchStreamController.close();
     _watchingBuddiesStreamController.close();
-    _gameEventStreamController.close();
     _diagTimer?.cancel();
     _scanRestartTimer?.cancel();
     _bleCountTimer?.cancel();
@@ -716,15 +709,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // ---------- Discoverable mode ----------
   //
-  // Mirrors _setGameRunnerTag's shape — toggled from Radar's discoverable
-  // button. Re-advertises immediately so turning it on/off is reflected
-  // within seconds rather than waiting for the next incidental beacon
-  // refresh.
+  // Toggled from Radar's discoverable button. Re-advertises immediately so
+  // turning it on or off is reflected within seconds rather than waiting
+  // for the next incidental beacon refresh.
   Future<void> _setDiscoverable(bool value) async {
     _discoverableAutoOffTimer?.cancel();
     _discoverableAutoOffTimer = null;
     setState(() => _isDiscoverable = value);
-    if (_activePairingCode == null && !_isFlareActive) {
+    if (_activePairingCode == null && !_isFlareActive && !_ownFlareHoldsRadio) {
       _advertisePresenceBeacon();
     }
 
@@ -796,7 +788,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // rotating-ID scheme too. Without this, the beacon would silently stay
     // off for up to a minute until _startRotatingIdRefreshTimer's next
     // tick happened to fire.
-    if (_activePairingCode == null && !_isFlareActive) {
+    if (_activePairingCode == null && !_isFlareActive && !_ownFlareHoldsRadio) {
       _advertisePresenceBeacon();
     }
     _startRotatingIdRefreshTimer();
@@ -845,7 +837,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // after this same delay via resumeAfterPing().
     if (nearbyConnectionsSessionCount.value == 0 &&
         _activePairingCode == null &&
-        !_isFlareActive) {
+        !_isFlareActive &&
+        !_ownFlareHoldsRadio) {
       await _advertisePresenceBeacon();
     }
   }
@@ -948,8 +941,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         } else if (cycle + 1 < totalCycles) {
           step(0, cycle + 1);
         } else {
-          BlePeripheral.stopAdvertising();
-          _advertisePresenceBeacon();
+          _releaseRadioToPresenceBeacon();
         }
       });
     }
@@ -1160,13 +1152,40 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     } finally {
       _emgRelayRunning = false;
     }
-    // Hand the slot back only once the queue is genuinely drained, and only
-    // if nothing more important claimed it meanwhile — the old code
-    // reverted unconditionally, which is how a relay that overlapped the
-    // start of our own flare could kill it outright.
-    if (!mounted || _isFlareActive || _ownFlareHoldsRadio) return;
+    // Hand the slot back only once the queue is genuinely drained. The
+    // "and only if nothing more important claimed it meanwhile" half is
+    // the helper's job now — the old code reverted unconditionally here,
+    // which is how a relay that overlapped the start of our own flare
+    // could kill it outright.
+    await _releaseRadioToPresenceBeacon();
+  }
+
+  /// Hands the radio back to the idle presence beacon. This is the ONLY
+  /// correct way to revert from a transient advertisement.
+  ///
+  /// Every short-lived advertisement — friend/watch request, vibe or study
+  /// tag, Lost & Found, a DM chunk cycle — schedules a timer to revert once
+  /// its window closes. Reverting *unconditionally* is a safety bug: if that
+  /// timer fires while our own Emergency Flare is on the air, it takes the
+  /// flare off the radio. Nothing puts it back once the signature cycle has
+  /// finished, so the UI keeps showing an active flare with its countdown
+  /// running while the device is transmitting nothing at all.
+  ///
+  /// [_ownFlareHoldsRadio] is deliberately wider than [_isFlareActive]: it
+  /// stays true across the 5s `EMG_OFF:` stand-down window too, so a revert
+  /// can't replace the stand-down broadcast either and strand nearby phones
+  /// still ringing on our behalf.
+  ///
+  /// Scanning is deliberately NOT handled here — a scan doesn't compete with
+  /// an advertisement, so callers that restart one should keep doing so
+  /// unconditionally, whatever this returns.
+  ///
+  /// Returns true if the radio was actually handed back.
+  Future<bool> _releaseRadioToPresenceBeacon() async {
+    if (!mounted || _isFlareActive || _ownFlareHoldsRadio) return false;
     await BlePeripheral.stopAdvertising();
     await _advertisePresenceBeacon();
+    return true;
   }
 
   void _cancelEmergencyFlare({bool silent = false}) {
@@ -1190,8 +1209,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     Future.delayed(const Duration(seconds: 5), () {
       _ownFlareHoldsRadio = false;
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
 
     setState(() => _isFlareActive = false);
@@ -1524,8 +1542,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 10), () {
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
@@ -1535,8 +1552,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 30), () {
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1554,8 +1570,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1581,8 +1596,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     Future.delayed(kStudyTagAdvertiseDuration, () {
       if (!mounted) return;
       if (_myActiveStudyTagId == id) _myActiveStudyTagId = null;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1598,8 +1612,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1616,8 +1629,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1633,8 +1645,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1716,8 +1727,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         }
       }
       if (!mounted) return;
-      await BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      await _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     } finally {
       _lnfCycleActive = false;
@@ -1749,8 +1759,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1764,8 +1773,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       await _refreshContactsTrayList();
     }
     Future.delayed(const Duration(seconds: 5), () {
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
@@ -1822,8 +1830,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _cycleWatchSeedChunks(advName, const Duration(seconds: 5));
     Future.delayed(const Duration(seconds: 5), () {
       _watchSeedCycleTimer?.cancel();
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
@@ -1930,8 +1937,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _cycleWatchSeedChunks(advName, const Duration(seconds: 10));
     Future.delayed(const Duration(seconds: 10), () {
       _watchSeedCycleTimer?.cancel();
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
@@ -2172,27 +2178,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // Every "go back to just being present" call site funnels through here
   // instead of calling _advertiseWithName(_presenceBeaconName(), [])
-  // directly, so the Hops & Robbers runner tag (see hops_constants.dart)
-  // rides along automatically wherever the presence beacon would
-  // otherwise be re-advertised — without every one of those ~10 call
-  // sites needing to individually know or care whether a game is active.
+  // directly, so anything that must ride alongside the presence beacon is
+  // attached in one place rather than at every one of those ~10 call
+  // sites.
   Future<void> _advertisePresenceBeacon() {
-    final runnerUsername = _gameRunnerUsername;
-    if (_isGameRunnerTagActive && runnerUsername != null) {
-      return _advertiseWithName(
-        _presenceBeaconName(),
-        [],
-        manufacturerData: ManufacturerData(
-          manufacturerId: kCommunityManufacturerId,
-          data: encodeGameRunnerTag(runnerUsername),
-        ),
-        manufacturerDataInScanResponse: true,
-      );
-    }
-    // Discoverable mode rides the same single manufacturer-data slot the
-    // game tag uses — the two are mutually exclusive in practice (an
-    // active Hops & Robbers runner tag wins if somehow both are on at
-    // once), so this only ever kicks in outside a game.
+    // Discoverable mode is the only current user of the single
+    // manufacturer-data slot on the idle beacon. If a second one is ever
+    // added the two must be made mutually exclusive here — there is one
+    // slot per advertisement, not one per feature.
     if (_isDiscoverable) {
       return _advertiseWithName(
         _presenceBeaconName(),
@@ -2207,26 +2200,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     return _advertiseWithName(_presenceBeaconName(), []);
   }
 
-  // Called by HopsAndRobbersPage when this device becomes (or stops being)
-  // a runner in an active game — see hops_and_robbers.dart's onSetGameRunnerTag.
-  // Kept, not deleted: this is the *sending* half of the Hops & Robbers
-  // runner tag, and the receiving half is still live further down (the
-  // "TAG:"/"GAME_" branches in the scan handler). The game itself is
-  // currently commented out of models/feature_item.dart's catalog, so
-  // nothing calls this — dormant rather than dead. Deleting it would leave
-  // a protocol with a parser and no writer.
-  // ignore: unused_element
-  void _setGameRunnerTag(bool active) {
-    _isGameRunnerTagActive = active;
-    _gameRunnerUsername = active ? myUsername : null;
-    // Re-advertise immediately rather than waiting for the next periodic
-    // refresh — a robber's proximity scan should pick up a fresh runner
-    // (or stop seeing a caught one) without a up-to-1-minute lag.
-    if (_activePairingCode == null && !_isFlareActive) {
-      _advertisePresenceBeacon();
-    }
-  }
-
   // Keeps the beacon's rotating token current while the app just sits idle
   // — nothing else in this file re-advertises on its own once a window
   // rolls over, since every other advertisement flow only reverts to the
@@ -2239,7 +2212,12 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       // all run their own short-lived advertisement windows that this
       // shouldn't clobber (see _lnfCycleActive's comment for what went
       // wrong before this check existed).
-      if (_activePairingCode != null || _isFlareActive || _lnfCycleActive) return;
+      if (_activePairingCode != null ||
+          _isFlareActive ||
+          _ownFlareHoldsRadio ||
+          _lnfCycleActive) {
+        return;
+      }
       _advertisePresenceBeacon();
     });
   }
@@ -2606,44 +2584,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           }
         }
 
-        // Tag game
-        if (name.startsWith("TAG:")) {
-          final parts = name.substring(4).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
-            final tagger = parts[1];
-            // `continue`, not `return`: this sits inside the loop over scan
-            // results, and bailing out entirely would drop every remaining
-            // advertisement in the batch.
-            if (!mounted) continue;
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (ctx) => AlertDialog(
-                title: const Text("You've been tagged!"),
-                content: Text("$tagger tagged you!"),
-                actions: [
-                  ElevatedButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text("OK"),
-                  ),
-                ],
-              ),
-            );
-          }
-        }
-        // Hops & Robbers game actions
-        if (name.startsWith("GAME_")) {
-          final parts = name.substring(5).split(":");
-          if (parts.length == 2) {
-            final action = parts[0];
-            final data = <String, String>{};
-            for (final pair in parts[1].split(';')) {
-              final kv = pair.split('=');
-              if (kv.length == 2) data[kv[0]] = kv[1];
-            }
-            _gameEventStreamController.add({'action': action, 'data': data});
-          }
-        }
         // Emergency Flare (with reason parsing)
         if (name.startsWith("EMG:")) {
           // Ignore own flares (we're the sender) — must be an exact match

@@ -45,7 +45,6 @@ const List<String> kHopsAdvertisementPrefixes = <String>[
   'WR:', 'WA:', // watch-buddy request / accept
   'ACK:', 'HOP:', // manual pairing handshake
   'CHT:', // chat ping
-  'TAG:', 'GAME_', // Hops & Robbers
   'VBT:', 'VBX:', // Vibe Check
   'LNR:', 'LNF:', // Lost & Found
   'SBF:', 'SBI:', 'SBC:', 'SBX:', // Study Bunny

@@ -30,8 +30,8 @@ const double kFloatingNavClearance = 92;
 //
 // Community Chat used to ride this channel too (the v2 wire format,
 // removed — see the v3 block below for why). What still uses it: Emergency
-// Flare / Official Alert signature chunks, Watch Me seed exchange, the
-// discoverable-name tag, and the Hops & Robbers runner tag. Those are all
+// Flare / Official Alert signature chunks, Watch Me seed exchange, and
+// the discoverable-name tag. Those are all
 // *supplementary* — every one of them enriches something whose primary
 // signal already rides the advertisement name, so if this channel silently
 // drops on a given handset the feature degrades (an alert shows as
@@ -769,35 +769,6 @@ Uint8List encodeDiscoverableName(String username) {
 
 String? decodeDiscoverableName(List<int> bytes) {
   if (bytes.isEmpty || bytes[0] != kDiscoverableProtocolMarker) return null;
-  return utf8.decode(bytes.sublist(1), allowMalformed: true);
-}
-
-// ── Hops & Robbers runner tag ───────────────────────────────────────────
-//
-// Fixes a regression from the rotating-ID presence beacon: the tag
-// scanner used to read a runner's username straight off "HPS:<username>",
-// which stopped working the moment that beacon started carrying an opaque
-// rotating token instead. Rather than trying to resolve tokens back to
-// names mid-game (game lobby participants are frequently strangers with
-// no exchanged rotating-ID seed at all — unlike Watch Me, which only ever
-// targets existing contacts), a runner broadcasts a small, explicit,
-// consensual tag alongside their normal beacon for exactly as long as
-// they're actively a runner in an active game — never at any other time.
-// Reuses the same manufacturer-data channel as Community Chat/flare
-// signatures, distinguished by its own marker byte.
-const int kGameRunnerTagProtocolMarker = 0x52; // ascii 'R'
-const int kGameRunnerTagMaxUsernameBytes = 20;
-
-Uint8List encodeGameRunnerTag(String username) {
-  var bytes = utf8.encode(username);
-  if (bytes.length > kGameRunnerTagMaxUsernameBytes) {
-    bytes = bytes.sublist(0, kGameRunnerTagMaxUsernameBytes);
-  }
-  return Uint8List.fromList([kGameRunnerTagProtocolMarker, ...bytes]);
-}
-
-String? decodeGameRunnerTag(List<int> bytes) {
-  if (bytes.isEmpty || bytes[0] != kGameRunnerTagProtocolMarker) return null;
   return utf8.decode(bytes.sublist(1), allowMalformed: true);
 }
 

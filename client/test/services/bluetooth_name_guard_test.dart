@@ -26,7 +26,8 @@ void main() {
       expect(looksLikeHopsAdvertisementName('HPS:xk3f9a2b'), isTrue);
       expect(looksLikeHopsAdvertisementName('EMG:victor:unsafe'), isTrue);
       expect(looksLikeHopsAdvertisementName('EMG_OFF:victor'), isTrue);
-      expect(looksLikeHopsAdvertisementName('GAME_START'), isTrue);
+      expect(looksLikeHopsAdvertisementName('CM:victor__aBhello'), isTrue);
+      expect(looksLikeHopsAdvertisementName('VBT:Library:3'), isTrue);
     });
 
     test('leaves ordinary device names alone', () {
@@ -77,7 +78,7 @@ void main() {
       const dispatched = <String>[
         'HPS:', 'EMG:', 'EMG_OFF:', 'ADM:', 'ADM_OFF:',
         'FR:', 'FA:', 'WR:', 'WA:', 'ACK:', 'HOP:', 'CHT:',
-        'TAG:', 'GAME_', 'VBT:', 'VBX:', 'LNR:',
+        'VBT:', 'VBX:', 'LNR:',
         'SBF:', 'SBI:', 'SBC:', 'SBX:',
         'CM:', 'CA:', 'CX:', 'DM:', 'LNF:',
       ];

@@ -13,6 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/main.dart' show themeNotifier, fontScaleNotifier;
 import 'package:client/theme/app_theme.dart';
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/views/admin/admin_shell.dart' show signOutOfAdminApp;
@@ -178,12 +179,11 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
   Future<void> _restartBleListener() async {
     setState(() => _restartingBle = true);
     try {
-      final statuses = await [
-        Permission.location,
-        Permission.bluetoothScan,
-        Permission.bluetoothAdvertise,
-        Permission.bluetoothConnect,
-      ].request();
+      // Version-gated, and returns the raw statuses so the permanent-denial
+      // branch below still works. Asking for the Android 12 trio by name on
+      // an older device marks all three denied with no dialog shown, which
+      // would send the admin to a settings page with nothing on it to fix.
+      final statuses = await BluetoothPermissions.requestStatuses();
 
       // Android stops showing the dialog once something is permanently
       // denied, so request() returns instantly and the tap looks like it
