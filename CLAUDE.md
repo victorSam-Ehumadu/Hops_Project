@@ -12,9 +12,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   app.
 - `scripts/` — PowerShell operational scripts (currently database backup/restore; see "Database
   backups" below). Not part of any build.
-- `docs/` — academic project documentation: the module guidelines PDF and report sections written
-  against them (`report-4.8-security-and-backup-design.md`). Report prose, not developer docs —
-  this file remains the developer guide.
+- `docs/` — academic project documentation and presentation material, written against the module
+  guidelines PDF that also lives there. Report prose and speaker material, not developer docs —
+  this file remains the developer guide. Current contents:
+  - `Group 18 Phase 2.docx` (Planning) and `IT PROJECT PHASE 3 DRAFT.docx` (Analysis) — submitted.
+  - `Group 18 Phase 4.docx` (System Design, 33 pp, 9 figures) and `Group 18 Phase 5.docx`
+    (Implementation, 183 pp — 22 of report plus a 161-page source-code appendix of 26 files).
+  - `report-4.8-security-and-backup-design.md` and `report-5.2-languages-and-tools.md` — the
+    sources of record for §4.8 and §5.2, rendered into those documents at build time. Edit the
+    markdown, not the Word copy, or the two drift.
+  - `Group 18 Presentation.pptx` — the 33-slide deck, 14 segments across 7 presenters, with the
+    full speaker script in each slide's notes pane.
+  - `Group 18 Presentation Practice Pack.docx` — the companion: running order, per-member pages,
+    question bank, pre-flight checklist, demo-failure wording, and the table of figures anyone is
+    allowed to quote on stage.
+  - `Hops User Testing Part 1.csv` — 13 respondents, 54 rated items, collected 11 Aug 2026 on an
+    earlier build. Feeds Phase 5 §5.4 as the acceptance-testing evaluation.
+  - `backup-demo-runbook.md` — running the restore verification as a live demonstration.
+
+  Both presentation files are generated, not hand-edited: the build scripts live outside the repo,
+  so an edit made directly in PowerPoint or Word is the source of truth from then on. Every figure
+  in them is counted from this repository — if a count here changes, section 7 of the practice pack
+  and the numbers slide in the deck both go stale.
 - `backups/` — gitignored `pg_dump` output. Never commit anything from here.
 
 ## Commands
@@ -31,7 +50,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **115 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **118 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -54,8 +73,15 @@ What is and isn't covered, so you know what a green run actually proves:
   branches stay live and the tests survive the flag being flipped for launch.
 - `test/services/bluetooth_name_guard_test.dart` (8) — the payload-name detector. Includes a test
   asserting the prefix list covers every prefix `hops_app.dart` dispatches on; add to both when you
-  add a prefix, or the new one gets mistaken for a user's real Bluetooth name.
+  add a prefix, or the new one gets mistaken for a user's real Bluetooth name. Conversely, when a
+  prefix is *removed*, drop it from the guard, this test's expected list, and any literal payload
+  assertion that used it — removing Hops & Robbers needed all three.
 - `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
+- `test/views/flare_radio_invariant_test.dart` (3) — a *source-level* guard, not a
+  behavioural test: it reads `hops_app.dart` as text and fails if any revert-to-beacon path
+  bypasses `_releaseRadioToPresenceBeacon()`, or if a guard checks `_isFlareActive` without
+  also checking `_ownFlareHoldsRadio`. Added because this bug class had already recurred and
+  is otherwise only reachable with two physical devices — see "Concurrent alerts" below.
 
 Not covered, and the obvious next target: `database_helper.dart`. It calls
 `getApplicationDocumentsDirectory()`, so testing it needs path_provider channel mocking plus
@@ -100,9 +126,9 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
 - Advertising: `ble_peripheral`, via the `_advertiseWithName(name, services)` helper — always
   includes the fixed Hops service UUID (`services/hops_constants.dart::HOPS_SERVICE_UUID`) so the
   hardware scan filter picks it up. Each advertisement is transient (a few seconds, then reverts to
-  the `HPS:` beacon via `_advertisePresenceBeacon()`); route every "go back to just being present"
-  call through that helper rather than re-advertising the beacon directly, or the Hops & Robbers
-  runner tag and Discoverable mode get silently dropped.
+  the `HPS:` beacon via `_advertisePresenceBeacon()`). Route every "go back to just being present"
+  call through `_releaseRadioToPresenceBeacon()` — it owns both the Discoverable-mode attachment
+  and the flare guard; see "Concurrent alerts".
 - Scanning: `flutter_blue_plus`, filtered to that same service UUID in `_startContinuousScan()`,
   feeding a single `_bleScanResultsSubscription` that fans out to the radar stream (raw scan
   results for `RadarScreen`) and a big prefix-dispatch `if` chain.
@@ -112,14 +138,14 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
   request/accept), `WR:`/`WA:` (watch-buddy request/accept), `ACK:`/`HOP:` (manual pairing-code
   handshake), `CHT:` (chat ping — addressed to a peer by *truncated plaintext username*, not a
   rotating token, since you can't know a contact's token before a chat has ever connected),
-  `TAG:`/`GAME_` (Hops & Robbers), `VBT:`/`VBX:` (Vibe
-  Check tag/expiry), `LNR:` (Lost & Found resolution), `SBF:`/`SBI:`/`SBC:`/`SBX:` (Study Bunny).
+  `VBT:`/`VBX:` (Vibe Check tag/expiry), `LNR:` (Lost & Found resolution),
+  `SBF:`/`SBI:`/`SBC:`/`SBX:` (Study Bunny).
   Chunked multi-part payloads have their own prefix constants in `hops_constants.dart`:
   `kCommunityChatPrefix` (`CM:`), `kAdminCommunityChatPrefix` (`CA:`), `kCommunityDeletePrefix`
   (`CX:`), `kDirectMessagePrefix` (`DM:`), `kLostFoundPrefix` (`LNF:`).
 - Manufacturer data (`kCommunityManufacturerId`, `0xFFFF`) is a *second*, parallel channel riding
   the same advertisement, used where the name is already full: signature chunks for flares/alerts
-  (`encodeFlareSigChunk`), watch-buddy seeds, Discoverable name, and the game runner tag. There is
+  (`encodeFlareSigChunk`), watch-buddy seeds, and the Discoverable name. There is
   only **one** manufacturer-data slot per advertisement, so these are mutually exclusive by
   construction — check `_advertisePresenceBeacon` before adding another user of it.
 - Nearby BLE device count (app-bar chip) is a *separate*, unfiltered 3-second scan
@@ -236,9 +262,12 @@ the `getSdkInt` meta-channel call and requests location always, the Bluetooth tr
 `nearbyWifiDevices` only on 33+ and only for Nearby Connections callers. An unknown version is
 treated as modern, since over-asking is recoverable by the user and under-asking is not.
 
-Callers: `root_gatekeeper.dart`, `hops_app.dart`, `chat_terminal.dart`, `hops_share_page.dart`. The
-admin app's screens still request the raw set — fine while admin devices are modern, wrong the
-moment one isn't.
+Callers: `root_gatekeeper.dart`, `hops_app.dart`, `chat_terminal.dart`, `hops_share_page.dart`, and
+all three admin screens (`admin_shell.dart`, `admin_sign_in_screen.dart`,
+`admin_settings_screen.dart`). The admin screens used to request the raw Android-12 set directly,
+which locked a pre-12 admin device out of the BLE hub permanently; they were migrated 10 Oct 2026.
+`requestStatuses()` is the variant for callers that must tell a permanent denial from an ordinary
+one — `admin_settings_screen.dart` needs it to decide whether to offer `openAppSettings()`.
 
 ### 5. Local persistence
 
@@ -257,6 +286,30 @@ moment one isn't.
 unchanged path, so overwriting in place shows the *first* image forever. Both
 `edit_identity_screen.dart` (own avatar) and `chat_terminal.dart` (peer avatar) write a new
 timestamped file and delete the old one.
+
+### 5b. The offline assistant (`services/hops_engine.dart`)
+
+`HopsEngine` is a singleton holding two unrelated subsystems that share a load-once lifecycle:
+
+- **`askBunny(query)`** — keyword lookup over `assets/data/hops_knowledge.json` (62
+  `{keywords, response}` entries). This is what backs the built-in contact named `Hops`
+  (`kHopsBotUsername`), which every user has from first launch; `chat_terminal.dart` routes
+  messages to that peer here instead of over the radio. Bot history lives in the same local
+  `messages` table keyed by peer username, which is why sign-up reserves the bot usernames —
+  a real account holding one would interleave with the bot's own messages.
+- **`getSmartRouteScore(rssi, battery)`** — ranks candidate relay neighbours. Consults an
+  optional TFLite model and falls back to a heuristic; **a missing model file is an expected
+  state, not an error.**
+
+Optional text-to-speech (`flutter_tts`) reads replies aloud, gated by
+`accessibility_prefs.dart`'s `readMessagesAloud` — that file is for toggles that change
+*behaviour*, as distinct from `cosmetic_prefs.dart`, which is appearance only.
+
+**There is no LLM path and there must not be one added casually.** The header comment records a
+removed attempt to load `gemma-2b-it.bin` via `Interpreter.fromAsset`: tflite_flutter reads
+`.tflite` FlatBuffers (a Gemma `.bin` is MediaPipe/GGUF), `Interpreter.run()` takes numeric
+tensors rather than prompt strings, and a ~2GB asset blows the 200MB base-module limit. It was
+removed rather than stubbed so nothing pretends to be an LLM — keep it that way.
 
 ### 6. Feature system, carrots & cosmetics
 
@@ -285,9 +338,13 @@ catalog feature; it's reached from persistent buttons on the Radar and Features 
   nav pill, leaving the nav bar and the screen disagreeing until the user touches something. Any
   programmatic tab change must call `_pageController.jumpToPage`/`animateToPage`. This bug has
   recurred several times; check for it first when "the nav bar says X but I'm still on Y".
-- `flutter_foreground_task` + `flutter_local_notifications` keep a foreground service alive
-  (`services/foreground_service.dart`, `notification_service.dart`) so BLE scanning keeps running
-  in the background for emergency-flare alerts.
+- `flutter_foreground_task` + `flutter_local_notifications` keep a foreground service alive so BLE
+  scanning keeps running in the background for emergency-flare alerts. The service is configured
+  and started **inline in `main.dart` / `main_admin.dart`**; `notification_service.dart` owns the
+  alert registry. Note `services/foreground_service.dart` is **dead code** — nothing imports it,
+  and its `MyTaskHandler` is never registered. The only thing matching `foreground_service`
+  elsewhere is the notification *channel id* string, which is unrelated. Same for
+  `views/half_wheel.dart`. Delete both or wire them up; don't assume they run.
 - Theming is data-driven: `theme/app_theme.dart` defines an `AppTheme` model and `AppThemes.all`
   catalog; the active theme index lives in a global `themeNotifier` (`main.dart`) persisted to
   `SharedPreferences`. Both entry points read it.
@@ -324,9 +381,15 @@ notification layer are built for it now. The invariants worth preserving:
   presence beacon and cuts the second short.
 - **Our own flare outranks relaying anyone else's** (`_ownFlareHoldsRadio`, deliberately wider than
   `_isFlareActive` — it stays true across the 5s `EMG_OFF:` stand-down window too). Nobody else can
-  send our flare; theirs is already being relayed by every other device that heard it. Any new
-  "revert to the presence beacon" path must check this flag, or it will silently take our own
-  emergency off the air.
+  send our flare; theirs is already being relayed by every other device that heard it.
+  **Never hand the advertisement slot back by hand.** `_releaseRadioToPresenceBeacon()` owns the
+  `_isFlareActive || _ownFlareHoldsRadio` check and is the only correct way to revert from a
+  transient advertisement; a hand-rolled `stopAdvertising()` + `_advertisePresenceBeacon()` pair
+  silently takes our own emergency off the air when its timer happens to fire mid-flare, and the UI
+  goes on showing an active flare with a running countdown. `test/views/flare_radio_invariant_test.dart`
+  fails the build if a new one appears. Guards that re-advertise the beacon must check **both**
+  flags: `_isFlareActive` alone goes false the moment the flare is cancelled, while the stand-down
+  is still broadcasting.
 - **Alerts are keyed by their full advertisement string** (`EMG:<sender>:<reason>`), which is
   already unique per sender+reason and already what the receive-side dedup sets key on. Each gets
   its own notification id from `NotificationService`'s registry, so concurrent alerts stack instead
