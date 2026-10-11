@@ -21,8 +21,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `report-4.8-security-and-backup-design.md` and `report-5.2-languages-and-tools.md` — the
     sources of record for §4.8 and §5.2, rendered into those documents at build time. Edit the
     markdown, not the Word copy, or the two drift.
-  - `Group 18 Presentation.pptx` — the 33-slide deck, 14 segments across 7 presenters, with the
-    full speaker script in each slide's notes pane.
+  - `Group 18 Presentation.pptx` — the 38-slide deck, 14 segments across 7 presenters, with the
+    full speaker script in each slide's notes pane. Dark ground throughout: the palette is the
+    app's own Hops Default theme *inverted* (`#002020` becomes the background, `#e2fffe` the
+    text), because a near-white slide in a darkened room is painful and wrecks night vision for
+    the live demo. Eight images — seven diagrams plus the logo — are generated, not drawn by
+    hand; keep them transparent-background and light-ink or they will sit in a pale box.
   - `Group 18 Presentation Practice Pack.docx` — the companion: running order, per-member pages,
     question bank, pre-flight checklist, demo-failure wording, and the table of figures anyone is
     allowed to quote on stage.
