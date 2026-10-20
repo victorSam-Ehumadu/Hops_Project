@@ -67,8 +67,14 @@ class _IndividualChatTerminalViewState
   bool _bleFallbackActive = false;
   Timer? _bleFallbackTimer;
   StreamSubscription<BleDirectMessage>? _bleInboxSub;
-  // Set slightly longer than a single full RFCOMM discovery + connect cycle
-  // (~38s) so fallback doesn't activate mid-handshake on attempt #1.
+  // Deliberately SHORTER than a full RFCOMM cycle, which is up to ~56s in
+  // the worst case (see rfcomm_chat_service.dart's _connectAttemptInterval).
+  // Offering the mesh early is the right trade because the fallback is
+  // purely additive: RFCOMM keeps retrying underneath it, and the moment it
+  // connects this clears itself and the status flips back to "Connected"
+  // (see onStateChanged). So the cost of being early is that one message
+  // may go the slower way; the cost of being late is a user who cannot send
+  // anything at all while a handshake grinds on. The second is worse.
   static const Duration _bleFallbackAfter = Duration(seconds: 45);
 
   bool _botThinking = false;

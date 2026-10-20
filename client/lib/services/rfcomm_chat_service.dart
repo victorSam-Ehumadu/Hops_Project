@@ -40,10 +40,25 @@ class RfcommChatService {
 
   static const int _maxConnectAttempts = 5;
   static const Duration _discoveryTimeout = Duration(seconds: 20);
-  // Sized so a full client cycle (known-MAC attempt + 20s discovery scan +
-  // 12s RFCOMM socket connect) can complete without the periodic watchdog
-  // tearing down an in-progress handshake.
-  static const Duration _connectAttemptInterval = Duration(seconds: 38);
+  // Must exceed the worst-case client cycle, or the watchdog tears down a
+  // handshake that was about to succeed. That cycle is, in order:
+  //
+  //   _socketConnectTimeout   12s   stale cached MAC that no longer answers
+  //   _socketConnectTimeout   12s   a bonded device matching the peer's name
+  //   _discoveryTimeout       20s   full inquiry scan
+  //   settle                 0.5s   radio leaving inquiry mode
+  //   _socketConnectTimeout   12s   connecting to the discovered address
+  //                          ────
+  //                          56.5s
+  //
+  // This was 38s, which is less than the cycle even with no bonded match
+  // (44.5s). The case that exposed it is the one that matters: a cached MAC
+  // gone stale because the peer reinstalled or changed phone. The first 12s
+  // went to an address that no longer answers, discovery then ran, and the
+  // watchdog killed the socket connect seconds before it would have landed
+  // — then restarted and did the same thing again, burning all five
+  // attempts without once completing a cycle.
+  static const Duration _connectAttemptInterval = Duration(seconds: 60);
   static const Duration _discoverableWindow = Duration(seconds: 300);
   static const Duration _adapterNameSettleDelay = Duration(seconds: 3);
   static const Duration _socketConnectTimeout = Duration(seconds: 12);
