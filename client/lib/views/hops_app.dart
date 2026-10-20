@@ -3181,6 +3181,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     String title, {
     bool showMeta = true,
     Widget Function(ColorScheme colors)? metaReplacement,
+    // The icon beside the title. Defaults to the Bluetooth mark, which is
+    // right for a tab about the radio and wrong for one about people —
+    // pass something that matches what the tab actually shows.
+    IconData icon = Icons.bluetooth_audio,
   }) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -3190,7 +3194,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       backgroundColor: theme.scaffoldBackgroundColor.withValues(alpha: 0.8),
       title: Row(
         children: [
-          Icon(Icons.bluetooth_audio, color: colors.primary),
+          Icon(icon, color: colors.primary),
           const SizedBox(width: 8),
           Flexible(
             child: Text(
@@ -3750,7 +3754,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return Scaffold(
-      appBar: _buildSharedCustomAppBar("Contacts", showMeta: false),
+      appBar: _buildSharedCustomAppBar("Contacts",
+          showMeta: false, icon: Icons.people_alt_rounded),
       body: Container(
         decoration: BoxDecoration(
           gradient: RadialGradient(
