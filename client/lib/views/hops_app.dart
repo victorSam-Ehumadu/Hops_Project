@@ -117,9 +117,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // protocol. Reuses _FlareSigBuffer's shape (just chunks + totalChunks)
   // for reassembly; keyed by the exact "WR:.../WA:..." advertisement
   // string, same correlation-key trick the flare signature buffer uses.
-  Timer? _watchSeedCycleTimer;
-  final Map<String, _FlareSigBuffer> _pendingWatchSeedChunks = {};
-  final Set<String> _watchSeedHandledNames = {};
+  Timer? _seedCycleTimer;
+  final Map<String, _FlareSigBuffer> _pendingSeedChunks = {};
+  final Set<String> _seedHandledNames = {};
 
   // Global task-due reminder — moved here from task_tracker_page.dart,
   // which only ever checked while that exact screen was open and only
@@ -668,7 +668,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _bleCountTimer?.cancel();
     _rotatingIdRefreshTimer?.cancel();
     _keyDirectorySyncTimer?.cancel();
-    _watchSeedCycleTimer?.cancel();
+    _seedCycleTimer?.cancel();
     _taskReminderTimer?.cancel();
     _identitySyncTimer?.cancel();
     for (final timer in _recentWatchTimers.values) {
@@ -1541,7 +1541,15 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final advName = "FR:$targetToken:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
+    // Cycle our own seed alongside the request, exactly as a Watch
+    // request does. This is what lets the recipient's Radar put our name
+    // on our dot once they accept — without it they hold our username in
+    // their contact list but have no way to tie it to a rotating beacon
+    // token, so we stay an anonymous dot until the two of us happen to
+    // open a 1:1 chat. See _cycleOwnSeedChunks.
+    _cycleOwnSeedChunks(advName, const Duration(seconds: 10));
     Future.delayed(const Duration(seconds: 10), () {
+      _seedCycleTimer?.cancel();
       _releaseRadioToPresenceBeacon();
     });
   }
@@ -1768,11 +1776,16 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final advName = "FA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
+    // Other direction of the same exchange — teaches the original
+    // requester our seed, so each side can name the other's dot. A
+    // friendship is mutual; recognizing each other has to be too.
+    _cycleOwnSeedChunks(advName, const Duration(seconds: 5));
     if (!_addedFriends.contains(sender)) {
       _addedFriends.add(sender);
       await _refreshContactsTrayList();
     }
     Future.delayed(const Duration(seconds: 5), () {
+      _seedCycleTimer?.cancel();
       _releaseRadioToPresenceBeacon();
     });
   }
@@ -1827,9 +1840,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // how to recognize our beacon too — Watch Me relationships work in
     // both directions, and neither side should need a separate chat for
     // this to actually function.
-    _cycleWatchSeedChunks(advName, const Duration(seconds: 5));
+    _cycleOwnSeedChunks(advName, const Duration(seconds: 5));
     Future.delayed(const Duration(seconds: 5), () {
-      _watchSeedCycleTimer?.cancel();
+      _seedCycleTimer?.cancel();
       _releaseRadioToPresenceBeacon();
     });
   }
@@ -1838,11 +1851,16 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // chunks alongside [advName] for [duration] — same cadence/shape as
   // _startSignatureCycle, minus the signing step (the seed is static, so
   // there's nothing to compute per call, just chunk and repeat). Lets a
-  // Watch request/accept teach the other device how to recognize this
+  // request/accept handshake teach the other device how to recognize this
   // device's beacon without either side ever needing to have chatted —
-  // see hops_constants.dart's watch-seed chunk protocol.
-  void _cycleWatchSeedChunks(String advName, Duration duration) {
-    _watchSeedCycleTimer?.cancel();
+  // see hops_constants.dart's seed chunk protocol.
+  //
+  // Used by BOTH handshakes that create a lasting relationship: friend
+  // (FR:/FA:) and watch-buddy (WR:/WA:). The wire constants are still
+  // named kWatchSeed* for the handshake they were written for; the byte
+  // on the air must not change, so they kept their names.
+  void _cycleOwnSeedChunks(String advName, Duration duration) {
+    _seedCycleTimer?.cancel();
     final seed = _myRotatingSeed;
     if (seed == null) return; // pre-rotating-ID account — nothing to share
 
@@ -1873,44 +1891,45 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         ),
         manufacturerDataInScanResponse: true,
       );
-      _watchSeedCycleTimer = Timer(perChunkDuration, () => step((index + 1) % chunks.length));
+      _seedCycleTimer = Timer(perChunkDuration, () => step((index + 1) % chunks.length));
     }
 
     step(0);
   }
 
-  // Reassembles watch-seed chunks riding alongside a WR:/WA: advertisement
-  // (see _cycleWatchSeedChunks above / hops_constants.dart's watch-seed
-  // chunk protocol) and, once complete, saves it as [peer]'s rotating-ID
-  // seed — the exact same persistence call chat_terminal.dart's first-chat
-  // handshake uses, so Radar and Watch Me can't tell the difference
-  // afterwards between a contact learned via chat vs. via a watch request.
-  Future<void> _handleIncomingWatchSeedChunk({
+  // Reassembles seed chunks riding alongside an FR:/FA: or WR:/WA:
+  // advertisement (see _cycleOwnSeedChunks above / hops_constants.dart's
+  // seed chunk protocol) and, once complete, saves it as [peer]'s
+  // rotating-ID seed — the exact same persistence call
+  // chat_terminal.dart's first-chat handshake uses, so Radar and Watch Me
+  // can't tell the difference afterwards between a contact learned via
+  // chat, via a friend request, or via a watch request.
+  Future<void> _handleIncomingSeedChunk({
     required String name,
     required String peer,
     required ScanResult r,
   }) async {
     final mfgBytes = r.advertisementData.manufacturerData[kCommunityManufacturerId];
-    if (mfgBytes == null || _watchSeedHandledNames.contains(name)) return;
+    if (mfgBytes == null || _seedHandledNames.contains(name)) return;
     final decoded = decodeWatchSeedChunk(mfgBytes);
     if (decoded == null) return;
 
-    final buffer = _pendingWatchSeedChunks.putIfAbsent(
+    final buffer = _pendingSeedChunks.putIfAbsent(
         name, () => _FlareSigBuffer(decoded.totalChunks));
     buffer.chunks[decoded.chunkIndex] = decoded.bytes;
     buffer.lastSeen = DateTime.now();
 
     if (buffer.isComplete) {
-      _pendingWatchSeedChunks.remove(name);
-      _watchSeedHandledNames.add(name);
-      Future.delayed(const Duration(seconds: 40), () => _watchSeedHandledNames.remove(name));
+      _pendingSeedChunks.remove(name);
+      _seedHandledNames.add(name);
+      Future.delayed(const Duration(seconds: 40), () => _seedHandledNames.remove(name));
       await DatabaseHelper.instance
           .upsertContactRotatingSeed(peer, base64Encode(buffer.reassembled));
       await _refreshContactsTrayList(); // reloads _contactSeeds too
     }
 
     final staleCutoff = DateTime.now().subtract(const Duration(seconds: 20));
-    _pendingWatchSeedChunks.removeWhere((_, buf) => buf.lastSeen.isBefore(staleCutoff));
+    _pendingSeedChunks.removeWhere((_, buf) => buf.lastSeen.isBefore(staleCutoff));
   }
 
   void _onWatchRequestAccepted(String buddy) {
@@ -1934,9 +1953,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // Cycle our own seed alongside the request — once they accept, they
     // already have what's needed to recognize our beacon and start
     // watching us for real, with no chat ever required.
-    _cycleWatchSeedChunks(advName, const Duration(seconds: 10));
+    _cycleOwnSeedChunks(advName, const Duration(seconds: 10));
     Future.delayed(const Duration(seconds: 10), () {
-      _watchSeedCycleTimer?.cancel();
+      _seedCycleTimer?.cancel();
       _releaseRadioToPresenceBeacon();
     });
   }
@@ -2509,17 +2528,28 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               setState(() => pendingRequests.add(sender));
               await NotificationService.showFriendRequestNotification(sender: sender);
             }
+            // The sender's rotating-ID seed rides alongside the FR: name
+            // for its whole cycling window — reassemble regardless of
+            // whether we've already recorded this exact request, so a
+            // lingering rebroadcast still finishes teaching us their
+            // seed. This is what puts their name on their Radar dot once
+            // we accept, with no 1:1 chat needed first.
+            await _handleIncomingSeedChunk(name: name, peer: sender, r: r);
           }
         }
         // Friend ACK
         if (name.startsWith("FA:")) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
-            if (!_addedFriends.contains(parts[1])) {
-              _addedFriends.add(parts[1]);
+            final sender = parts[1];
+            if (!_addedFriends.contains(sender)) {
+              _addedFriends.add(sender);
               await _refreshContactsTrayList();
-              await NotificationService.showFriendAcceptedNotification(username: parts[1]);
+              await NotificationService.showFriendAcceptedNotification(username: sender);
             }
+            // Same seed exchange as FR: above, other direction — lets the
+            // original requester name the accepter's dot too.
+            await _handleIncomingSeedChunk(name: name, peer: sender, r: r);
           }
         }
 
@@ -2565,7 +2595,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             // lingering rebroadcast still finishes teaching us their seed.
             // This is what lets Watch Me work on a friend you've never
             // actually chatted with.
-            await _handleIncomingWatchSeedChunk(name: name, peer: sender, r: r);
+            await _handleIncomingSeedChunk(name: name, peer: sender, r: r);
           }
         }
 
@@ -2580,7 +2610,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             }
             // Same seed exchange as WR: above, other direction — lets the
             // original requester recognize the accepter's beacon too.
-            await _handleIncomingWatchSeedChunk(name: name, peer: sender, r: r);
+            await _handleIncomingSeedChunk(name: name, peer: sender, r: r);
           }
         }
 

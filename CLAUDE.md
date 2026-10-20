@@ -61,7 +61,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **125 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **134 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -98,6 +98,12 @@ What is and isn't covered, so you know what a green run actually proves:
   bypasses `_releaseRadioToPresenceBeacon()`, or if a guard checks `_isFlareActive` without
   also checking `_ownFlareHoldsRadio`. Added because this bug class had already recurred and
   is otherwise only reachable with two physical devices — see "Concurrent alerts" below.
+- `test/views/contact_seed_exchange_test.dart` (9) — the same source-level technique, for
+  the rotating-seed handshake. Asserts all four relationship-forming advertisements
+  (`FR:`/`FA:`/`WR:`/`WA:`) cycle our own seed and cancel the cycle before reverting the
+  radio, and that both friend receive-branches reassemble the peer's. Added because the
+  friend half was missing and failed *silently* — the contact was added normally, so the
+  only symptom was their Radar dot never showing a name. See "Naming a Radar dot" below.
 
 Not covered, and the obvious next target: `database_helper.dart`. It calls
 `getApplicationDocumentsDirectory()`, so testing it needs path_provider channel mocking plus
@@ -161,7 +167,8 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
   (`CX:`), `kDirectMessagePrefix` (`DM:`), `kLostFoundPrefix` (`LNF:`).
 - Manufacturer data (`kCommunityManufacturerId`, `0xFFFF`) is a *second*, parallel channel riding
   the same advertisement, used where the name is already full: signature chunks for flares/alerts
-  (`encodeFlareSigChunk`), watch-buddy seeds, and the Discoverable name. There is
+  (`encodeFlareSigChunk`), rotating-ID seeds (friend *and* watch handshakes — see
+  "Naming a Radar dot"), and the Discoverable name. There is
   only **one** manufacturer-data slot per advertisement, so these are mutually exclusive by
   construction — check `_advertisePresenceBeacon` before adding another user of it.
 - Nearby BLE device count (app-bar chip) is a *separate*, unfiltered 3-second scan
@@ -203,6 +210,41 @@ older handsets) don't have: such a device receives everything and transmits noth
 checks `BlePeripheral.isSupported()` at startup, warns once, and refuses to attempt a flare it
 can't send. **Never treat a Dart-side `startAdvertising` success as proof anything left the radio.**
 
+### 1c. Naming a Radar dot (the rotating-seed handshake)
+
+The idle beacon broadcasts `HPS:<rotating token>`, not a username — deliberate anti-tracking,
+but it means Radar **cannot** name a dot by string comparison. `RadarScreen._resolveToken`
+names one by trying each contact's stored *rotating seed* against the observed token (one HMAC
+per contact per token). That only works if the seed is on file locally, and a seed only ever
+gets there by being transmitted.
+
+So **every handshake that forms a lasting relationship must carry the seed, in both
+directions.** Three routes write `contact_profiles.rotating_seed`:
+
+- the RFCOMM profile exchange on first chat (`chat_terminal.dart`);
+- the watch-buddy handshake, `WR:`/`WA:`;
+- the friend handshake, `FR:`/`FA:`.
+
+All three land in the same `upsertContactRotatingSeed`, so nothing downstream can tell which
+route taught it. Sending is `_cycleOwnSeedChunks` (manufacturer-data chunks cycled alongside
+the handshake name); receiving is `_handleIncomingSeedChunk`. Reassembly runs **outside** the
+request-dedup guard, so a lingering rebroadcast still finishes teaching us a seed.
+
+The friend half was missing until 20 Oct 2026, which is why "contacts you've added show up
+named on the radar" stopped working when the beacon moved from a plaintext `HPS:<username>` to
+a rotating token (commit `6a7e79e`). **The failure was silent** — the contact was added
+normally, and the dot was merely anonymous, indistinguishable from a stranger's. It appeared
+to fix itself if the pair ever opened a 1:1 chat, via a completely unrelated code path.
+`test/views/contact_seed_exchange_test.dart` now fails the build if any of the four halves is
+dropped. Two caveats worth knowing:
+
+- **Contacts added before that fix have no seed on file** and can't be backfilled remotely —
+  nothing retransmits a seed on its own. One 1:1 chat or one watch request with that person
+  fixes it permanently.
+- The wire constants are still named `kWatchSeed*`/`kWatchSeedProtocolMarker` (`0x53`) for the
+  handshake they were written for. The marker byte must not change or it stops interoperating
+  with installed builds, so they kept their names; only the Dart-side helpers were generalised.
+
 ### 2. Real 1:1 chat: RFCOMM over classic Bluetooth (native channel)
 
 Actual chat sessions (not just presence blips) use classic Bluetooth RFCOMM sockets implemented
@@ -217,6 +259,16 @@ natively in Kotlin, bridged to Dart per-peer:
   `connectToDevice`, `sendMessage`, `disconnect`), plus the profile exchange (`sendProfile` /
   `onProfileReceived`) that syncs a contact's avatar and bio. That exchange is the **only** way
   cosmetics cross devices — see `services/cosmetic_prefs.dart`'s header.
+- **The first connection to a given contact needs Wi-Fi switched on at both ends.** Android
+  leans on it during classic-BT discovery, and without it the two phones routinely never find
+  each other. It only bites *once*: after one successful connection each side has the other's
+  MAC (`contact_profiles.rfcomm_mac`, written by `onMacLearned`) and connects straight to it,
+  skipping discovery. `chat_terminal.dart` shows a hint above the thread while
+  `_firstEverConnection` (i.e. no MAC on file) and not yet connected, and it self-dismisses the
+  moment a connection lands. The wording states that the radio only needs to be **on**, not
+  joined to a network, and that no data is used — otherwise it reads as a contradiction of the
+  app's whole offline claim, which is the kind of doubt that's much more expensive than the
+  hint itself.
 - Sockets are deliberately **insecure** RFCOMM on both ends. The secure variant silently kicks off
   OS-level bonding, which surfaced as an unsolicited "Pair with X?" dialog on every connection.
   Nothing here relies on bonding, so don't "fix" this back.

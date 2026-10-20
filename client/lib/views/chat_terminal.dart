@@ -57,6 +57,15 @@ class _IndividualChatTerminalViewState
   RfcommChatService? _chatService;
   ChatConnectionState _connState = ChatConnectionState.connecting;
   bool _missingPermissions = false;
+
+  // True until this device has successfully RFCOMM-connected to this
+  // contact at least once — i.e. there is no MAC address on file for them
+  // (see DatabaseHelper's contact_profiles.rfcomm_mac, written by
+  // onMacLearned). Drives the first-connection hint below: the Wi-Fi
+  // requirement only bites on the very first connection, because after
+  // that the two devices connect straight to a known address instead of
+  // going through discovery.
+  bool _firstEverConnection = true;
   String? _peerAvatarPath;
 
   bool _pingInFlight = false;
@@ -197,6 +206,7 @@ class _IndividualChatTerminalViewState
     await DatabaseHelper.instance.getContactProfile(widget.peerName);
     _peerAvatarPath = cachedProfile?[DatabaseHelper.cpColAvatarPath] as String?;
     final knownMac = cachedProfile?[DatabaseHelper.cpColRfcommMac] as String?;
+    _firstEverConnection = knownMac == null;
     if (mounted) setState(() {});
 
     await _loadPeerMessageLogs();
@@ -205,8 +215,13 @@ class _IndividualChatTerminalViewState
       myUsername: myPersonalUsernameLabel,
       peerUsername: widget.peerName,
       knownMacAddress: knownMac,
-      onMacLearned: (mac) =>
-          DatabaseHelper.instance.upsertContactMacAddress(widget.peerName, mac),
+      onMacLearned: (mac) {
+        DatabaseHelper.instance.upsertContactMacAddress(widget.peerName, mac);
+        // The hint has served its purpose the instant a connection lands.
+        if (mounted && _firstEverConnection) {
+          setState(() => _firstEverConnection = false);
+        }
+      },
       onMessageReceived: (id, text) => _handleIncomingMessage(text, id: id),
       onMessageDeleted: _handleIncomingDelete,
       onProfileReceived: _handlePeerProfileReceived,
@@ -511,6 +526,59 @@ class _IndividualChatTerminalViewState
     return sent;
   }
 
+  /// A one-line hint shown only while connecting to a contact for the
+  /// very first time.
+  ///
+  /// Both phones need Wi-Fi switched on for that first connection —
+  /// Android leans on it while discovering nearby devices, and without it
+  /// the two phones often never find each other. Once they have connected
+  /// once, each has the other's address on file and goes straight to it,
+  /// so the requirement disappears along with this hint.
+  ///
+  /// The wording is careful about one thing: this app's whole claim is
+  /// that it works with no internet, and "turn on Wi-Fi" reads like a
+  /// contradiction of that. It is not — the radio being ON is what
+  /// matters, not being joined to a network, and no data is used either
+  /// way. Saying so here is cheaper than letting someone conclude the
+  /// offline promise was untrue.
+  Widget _buildFirstConnectionHint(ColorScheme colors) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      color: colors.primary.withValues(alpha: 0.08),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.wifi_rounded, size: 16, color: colors.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.45,
+                  color: colors.onSurface.withValues(alpha: 0.75),
+                ),
+                children: [
+                  TextSpan(
+                    text: 'First time connecting. ',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700, color: colors.primary),
+                  ),
+                  const TextSpan(
+                    text: 'Switch Wi-Fi on on both phones — it helps them '
+                        'find each other. It does not need to be connected '
+                        'to a network, and no data is used.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   String get _statusLabel {
     if (widget.isBot) return "Always available · works offline";
     if (_missingPermissions) return "Bluetooth & location permission needed";
@@ -656,6 +724,13 @@ class _IndividualChatTerminalViewState
       ),
       body: Column(
         children: [
+          // Only while it actually applies: a real contact, never yet
+          // connected, and not connected right now. Self-dismisses the
+          // moment a connection lands (see onMacLearned).
+          if (!widget.isBot &&
+              _firstEverConnection &&
+              _connState != ChatConnectionState.connected)
+            _buildFirstConnectionHint(colors),
           Expanded(
             child: messageThreadsList.isEmpty
                 ? Center(
