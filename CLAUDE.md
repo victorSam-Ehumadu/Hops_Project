@@ -34,10 +34,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     earlier build. Feeds Phase 5 §5.4 as the acceptance-testing evaluation.
   - `backup-demo-runbook.md` — running the restore verification as a live demonstration.
 
-  Both presentation files are generated, not hand-edited: the build scripts live outside the repo,
-  so an edit made directly in PowerPoint or Word is the source of truth from then on. Every figure
-  in them is counted from this repository — if a count here changes, section 7 of the practice pack
-  and the numbers slide in the deck both go stale.
+  Both presentation files are **generated** — see `docs/generators/` and its README.
+  `python docs/generators/build_deck.py` and `build_pack.py` rebuild them; content lives as data
+  in `deck_content.py` / `pack_content.py`, layout in the build scripts, figures in `assets/`.
+  An edit made directly in PowerPoint or Word exists only in that file, so pull it back with
+  `extract_from_pptx.py` / `extract_from_docx.py` **before** the next build or it is discarded.
+  Every figure in them is counted from this repository — if a count here changes, section 7 of
+  the practice pack and the numbers slide in the deck both go stale.
+
+  These generators previously lived outside the repo and were lost when that directory was
+  cleared, leaving no way to rebuild the deck. They were reconstructed by reading the committed
+  files back out. Keep them in the repo.
 - `backups/` — gitignored `pg_dump` output. Never commit anything from here.
 
 ## Commands
