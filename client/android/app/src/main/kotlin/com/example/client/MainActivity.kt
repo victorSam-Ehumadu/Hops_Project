@@ -7,6 +7,7 @@ import android.app.StatusBarManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -39,38 +40,50 @@ class MainActivity : FlutterActivity() {
     // onActivityResult actually fires, not returned inline.
     private var discoverableResult: MethodChannel.Result? = null
 
-    // ── Discovery (from YT tutorial approach) ────────────────────────────────
+    // ── Discovery ────────────────────────────────────────────────────────────
     // EventChannel streams found devices to Flutter as they are discovered.
+    // Listens to BOTH ACTION_FOUND and ACTION_NAME_CHANGED and prefers
+    // EXTRA_NAME from the broadcast intent so freshly-renamed Hops adapters
+    // are recognized even when Android's BluetoothDevice cache still holds an
+    // older BLE advertisement payload name (e.g. "HPS:...").
     private var discoveryEventSink: EventChannel.EventSink? = null
 
-    private val foundDeviceReceiver = FoundDeviceReceiver { device ->
-        val name = if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT))
-            device.name ?: "Unknown"
-        else
-            "Unknown"
-        val map = mapOf("name" to name, "address" to device.address)
-        // Post to main thread — EventSink must be called on main thread
-        runOnUiThread {
-            discoveryEventSink?.success(map)
+    private val foundDeviceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            if (action != BluetoothDevice.ACTION_FOUND &&
+                action != BluetoothDevice.ACTION_NAME_CHANGED
+            ) return
+
+            val device: BluetoothDevice? =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(
+                        BluetoothDevice.EXTRA_DEVICE,
+                        BluetoothDevice::class.java
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                }
+            if (device == null) return
+
+            val extraName = intent.getStringExtra(BluetoothDevice.EXTRA_NAME)
+            val name = if (hasBtPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                extraName ?: device.name ?: "Unknown"
+            } else {
+                extraName ?: "Unknown"
+            }
+
+            val map = mapOf("name" to name, "address" to device.address)
+            runOnUiThread {
+                discoveryEventSink?.success(map)
+            }
         }
     }
 
     private var receiverRegistered = false
 
     // ── Silent SOS Quick Settings tile ────────────────────────────────────
-    // See HopsSosTileService.kt for why a tile tap doesn't fire the flare
-    // directly. Two delivery paths to Dart, matching the two ways this
-    // Activity can receive the tile's launch intent:
-    //   - Cold start (Hops wasn't running): the intent that CREATED this
-    //     Activity carries the action, caught in onCreate below and held
-    //     here until Dart calls consumePendingSos once it's ready to
-    //     receive it — the same "engine wasn't alive yet to catch a
-    //     listener" problem shortcutNotifier's cold-start handling solves
-    //     for the existing app-icon shortcut (see main.dart/hops_app.dart).
-    //   - Warm start (Hops already running): MainActivity's launchMode is
-    //     singleTop, so a second launch intent arrives via onNewIntent
-    //     instead of a new onCreate — delivered straight to Dart through
-    //     sosChannel since the engine's already up.
     private var sosChannel: MethodChannel? = null
     private var pendingSos: Boolean = false
 
@@ -92,9 +105,13 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (receiverRegistered) {
-            unregisterReceiver(foundDeviceReceiver)
+            try {
+                unregisterReceiver(foundDeviceReceiver)
+            } catch (_: Exception) {}
             receiverRegistered = false
         }
+        activeServices.values.forEach { it.disconnect() }
+        activeServices.clear()
     }
 
     // Completes ensureDiscoverable's pending result. resultCode from
@@ -117,7 +134,6 @@ class MainActivity : FlutterActivity() {
         val bluetoothAdapter: BluetoothAdapter = bluetoothManager.adapter
 
         // ── EventChannel: streams discovered devices to Dart ─────────────────
-        // Dart side listens to this stream during a scan.
         EventChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.example.client/bluetooth/discovery"
@@ -140,12 +156,6 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
 
                 // ── Android API level ─────────────────────────────────────────
-                // Needed because BLUETOOTH_SCAN/ADVERTISE/CONNECT only exist as
-                // runtime permissions from Android 12 (API 31). Below that,
-                // permission_handler maps them to no manifest entry at all and
-                // reports DENIED forever - a state the user cannot clear, since
-                // there is no dialog and nothing in system settings to switch
-                // on. Dart has to know the API level to ask for the right set.
                 "getSdkInt" -> result.success(Build.VERSION.SDK_INT)
 
                 // ── Adapter name read/write (for BLE name restoration) ────────
@@ -179,9 +189,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // ── Bonded devices (YT tutorial: updatePairedDevices) ─────────
+                // ── Bonded devices ────────────────────────────────────────────
                 "getBondedDevices" -> {
-                    if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                    if (!hasBtPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
                         result.error("NO_PERM", "BLUETOOTH_CONNECT permission required", null)
                         return@setMethodCallHandler
                     }
@@ -195,20 +205,24 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // ── Start classic BT discovery (YT tutorial: startDiscovery) ──
-                // Discovered devices are streamed via the EventChannel above.
+                // ── Start classic BT discovery ────────────────────────────────
                 "startDiscovery" -> {
-                    if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
+                    if (!hasBtPermission(Manifest.permission.BLUETOOTH_SCAN)) {
                         result.error("NO_PERM", "BLUETOOTH_SCAN permission required", null)
                         return@setMethodCallHandler
                     }
                     try {
                         if (!receiverRegistered) {
-                            val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+                            val filter = IntentFilter().apply {
+                                addAction(BluetoothDevice.ACTION_FOUND)
+                                addAction(BluetoothDevice.ACTION_NAME_CHANGED)
+                            }
                             registerReceiver(foundDeviceReceiver, filter)
                             receiverRegistered = true
                         }
-                        bluetoothAdapter.cancelDiscovery() // cancel any existing scan first
+                        if (bluetoothAdapter.isDiscovering) {
+                            bluetoothAdapter.cancelDiscovery()
+                        }
                         bluetoothAdapter.startDiscovery()
                         result.success(null)
                     } catch (e: Exception) {
@@ -216,16 +230,20 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // ── Stop classic BT discovery (YT tutorial: stopDiscovery) ────
+                // ── Stop classic BT discovery ─────────────────────────────────
                 "stopDiscovery" -> {
-                    if (!hasPermission(Manifest.permission.BLUETOOTH_SCAN)) {
+                    if (!hasBtPermission(Manifest.permission.BLUETOOTH_SCAN)) {
                         result.error("NO_PERM", "BLUETOOTH_SCAN permission required", null)
                         return@setMethodCallHandler
                     }
                     try {
-                        bluetoothAdapter.cancelDiscovery()
+                        if (bluetoothAdapter.isDiscovering) {
+                            bluetoothAdapter.cancelDiscovery()
+                        }
                         if (receiverRegistered) {
-                            unregisterReceiver(foundDeviceReceiver)
+                            try {
+                                unregisterReceiver(foundDeviceReceiver)
+                            } catch (_: Exception) {}
                             receiverRegistered = false
                         }
                         result.success(null)
@@ -234,20 +252,12 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // ── Classic BT discoverability ──────────────────────────────────
-                // RFCOMM chat (see rfcomm_chat_service.dart) needs the OTHER
-                // device to see this one during classic Bluetooth discovery —
-                // for two devices that have never bonded before, that requires
-                // this device to be actively "discoverable," which (unlike BLE
-                // scanning/advertising permissions) Android requires an explicit
-                // user-facing system dialog for; it can't be silently granted.
-                // [seconds] argument controls how long discoverability lasts
-                // (Android caps this at 300s); result completes once the user
-                // responds to that dialog (or immediately with -1/"denied" if
-                // Bluetooth is already off or the intent can't be launched).
+                // ── Classic BT discoverability ────────────────────────────────
                 "ensureDiscoverable" -> {
                     val seconds = call.argument<Int>("seconds") ?: 120
                     try {
+                        // Complete any stale pending result so Dart never hangs.
+                        discoverableResult?.success(false)
                         discoverableResult = result
                         val intent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
                             putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, seconds)
@@ -265,6 +275,10 @@ class MainActivity : FlutterActivity() {
                         ?: return@setMethodCallHandler result.error(
                             "NO_PEER", "peerId required", null
                         )
+                    // Cleanly close any previous native service for this peer
+                    // so its server/client sockets don't hold the RFCOMM UUID.
+                    activeServices.remove(peerId)?.disconnect()
+
                     val channelName = "com.example.client/rfcomm/$peerId"
                     val peerChannel = MethodChannel(
                         flutterEngine.dartExecutor.binaryMessenger,
@@ -276,19 +290,24 @@ class MainActivity : FlutterActivity() {
                     peerChannel.setMethodCallHandler { innerCall, innerResult ->
                         when (innerCall.method) {
                             "startServer" -> service.startServer(bluetoothAdapter) { ok, err ->
-                                if (ok) innerResult.success(null)
-                                else innerResult.error("SERVER_ERROR", err, null)
+                                runOnUiThread {
+                                    if (ok) innerResult.success(null)
+                                    else innerResult.error("SERVER_ERROR", err, null)
+                                }
                             }
                             "connectToDevice" -> {
                                 val mac = innerCall.argument<String>("macAddress")
                                     ?: return@setMethodCallHandler innerResult.error(
                                         "NO_MAC", "macAddress required", null
                                     )
-                                // Cancel discovery before connecting — required by Android
-                                bluetoothAdapter.cancelDiscovery()
+                                if (bluetoothAdapter.isDiscovering) {
+                                    bluetoothAdapter.cancelDiscovery()
+                                }
                                 service.connectToDevice(bluetoothAdapter, mac) { ok, err ->
-                                    if (ok) innerResult.success(null)
-                                    else innerResult.error("CONNECT_ERROR", err, null)
+                                    runOnUiThread {
+                                        if (ok) innerResult.success(null)
+                                        else innerResult.error("CONNECT_ERROR", err, null)
+                                    }
                                 }
                             }
                             "sendMessage" -> {
@@ -296,11 +315,16 @@ class MainActivity : FlutterActivity() {
                                     ?: return@setMethodCallHandler innerResult.error(
                                         "NO_MSG", "message required", null
                                     )
-                                service.sendMessage(msg) { ok -> innerResult.success(ok) }
+                                service.sendMessage(msg) { ok ->
+                                    runOnUiThread {
+                                        innerResult.success(ok)
+                                    }
+                                }
                             }
                             "disconnect" -> {
+                                // Only closes in-flight sockets on the service;
+                                // keep service in activeServices until closeSession.
                                 service.disconnect()
-                                activeServices.remove(peerId)
                                 innerResult.success(null)
                             }
                             else -> innerResult.notImplemented()
@@ -315,8 +339,7 @@ class MainActivity : FlutterActivity() {
                         ?: return@setMethodCallHandler result.error(
                             "NO_PEER", "peerId required", null
                         )
-                    activeServices[peerId]?.disconnect()
-                    activeServices.remove(peerId)
+                    activeServices.remove(peerId)?.disconnect()
                     result.success(null)
                 }
 
@@ -331,35 +354,21 @@ class MainActivity : FlutterActivity() {
         )
         sosChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                // Consumed once, at Dart startup — mirrors quick_actions'
-                // own cold-start handling for the existing shortcut.
                 "consumePendingSos" -> {
                     val had = pendingSos
                     pendingSos = false
                     result.success(had)
                 }
-                // Prompts the user with Android's own "Add tile?" system
-                // dialog (API 33+ only — StatusBarManager.requestAddTileService
-                // doesn't exist below that; despite the name, this lives on
-                // StatusBarManager, not TileService itself). Below API 33,
-                // the Dart side falls back to showing manual "swipe down
-                // twice, tap edit" instructions instead — see sos_service.dart.
                 "requestAddTile" -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         try {
                             val statusBarManager = getSystemService(StatusBarManager::class.java)
                             val componentName = ComponentName(this, HopsSosTileService::class.java)
                             val icon = Icon.createWithResource(this, R.mipmap.ic_launcher_monochrome)
-                            // Built as an explicit Consumer<Int> rather than a
-                            // trailing lambda — Kotlin's automatic SAM
-                            // conversion for this method's last
-                            // functional-interface parameter isn't reliable,
-                            // and left it unable to infer the callback
-                            // parameter's type.
                             val resultConsumer = Consumer<Int> { status ->
                                 val accepted =
                                     status == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
-                                    status == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
+                                            status == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
                                 result.success(accepted)
                             }
                             statusBarManager.requestAddTileService(
@@ -381,7 +390,19 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun hasPermission(permission: String): Boolean {
+    /**
+     * BLUETOOTH_SCAN / BLUETOOTH_CONNECT only exist as runtime permissions on
+     * Android 12+ (API 31+). On Android 11 and below, classic Bluetooth uses
+     * install-time BLUETOOTH / BLUETOOTH_ADMIN + runtime ACCESS_FINE_LOCATION.
+     */
+    private fun hasBtPermission(permission: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+            (permission == Manifest.permission.BLUETOOTH_SCAN ||
+                    permission == Manifest.permission.BLUETOOTH_CONNECT ||
+                    permission == Manifest.permission.BLUETOOTH_ADVERTISE)
+        ) {
+            return true
+        }
         return ActivityCompat.checkSelfPermission(
             this, permission
         ) == PackageManager.PERMISSION_GRANTED
