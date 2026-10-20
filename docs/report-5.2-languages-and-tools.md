@@ -8,14 +8,14 @@ language was determined by a hard constraint of the platform the code has to run
 
 | Language | Where it runs | Files | Lines | Share |
 |---|---|---:|---:|---:|
-| **Dart** | The Flutter application (student + admin) | 100 | 36,170 | 81.4% |
-| **SQL (PL/pgSQL)** | PostgreSQL migrations and stored procedures | 19 | 3,785 | 8.5% |
+| **Dart** | The Flutter application (student + admin) | 100 | 35,380 | 80.8% |
+| **SQL (PL/pgSQL)** | PostgreSQL migrations and stored procedures | 19 | 3,785 | 8.6% |
 | **HTML / CSS** | Marketing and download website | 6 | 1,445 | 3.3% |
-| **Dart (tests)** | Automated test suite | 7 | 1,347 | 3.0% |
-| **Kotlin** | Android native layer | 4 | 686 | 1.5% |
+| **Dart (tests)** | Automated test suite | 7 | 1,347 | 3.1% |
+| **Kotlin** | Android native layer | 4 | 716 | 1.6% |
 | **TypeScript** | Supabase Edge Functions (email delivery) | 7 | 602 | 1.4% |
 | **PowerShell** | Database backup and recovery scripts | 3 | 486 | 1.1% |
-| **Total** | | **146** | **44,521** | 100% |
+| **Total** | | **146** | **43,761** | 100% |
 
 Measured by line count across the repository. Dart dominates because the application
 itself is the system; everything else exists to support it.
