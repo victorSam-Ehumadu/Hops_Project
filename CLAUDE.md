@@ -296,6 +296,15 @@ unchanged path, so overwriting in place shows the *first* image forever. Both
 `edit_identity_screen.dart` (own avatar) and `chat_terminal.dart` (peer avatar) write a new
 timestamped file and delete the old one.
 
+**The avatar picker is the only camera path in the app, and the manifest must stay free of
+`android.permission.CAMERA`.** `image_picker`'s `ImageSource.camera` fires the system camera app
+via `ACTION_IMAGE_CAPTURE`, which needs no permission — *unless* the app declares CAMERA, in which
+case Android requires it granted and throws `SecurityException` otherwise. The plugin mirrors that
+rule exactly: `ImagePickerUtils.needRequestCameraPermission()` returns true only when the
+permission is present in the manifest. So declaring it would add a runtime prompt and a failure
+mode while buying nothing. Everything else that picks an image — the profile banner in
+`theme/profile_banners.dart` — is `ImageSource.gallery` only.
+
 ### 5b. The offline assistant (`services/hops_engine.dart`)
 
 `HopsEngine` is a singleton holding two unrelated subsystems that share a load-once lifecycle:

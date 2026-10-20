@@ -48,14 +48,81 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
     setState(() {});
   }
 
-  Future<void> _pickAvatar() async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 80,
-      maxWidth: 512,
-      maxHeight: 512,
+  /// Asks whether to use the camera or the gallery, then picks.
+  ///
+  /// The avatar is the ONE place in Hops that opens a camera — the profile
+  /// banner and everything else are gallery-only. Taking a photo in the
+  /// moment is worth a camera path; nothing else here is.
+  Future<void> _chooseAvatarSource() async {
+    final colors = Theme.of(context).colorScheme;
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: colors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colors.onSurface.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(100),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ListTile(
+              leading: Icon(Icons.photo_camera_outlined, color: colors.primary),
+              title: Text('Take a photo',
+                  style: TextStyle(
+                      color: colors.onSurface, fontWeight: FontWeight.w600)),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: Icon(Icons.photo_library_outlined, color: colors.primary),
+              title: Text('Choose from gallery',
+                  style: TextStyle(
+                      color: colors.onSurface, fontWeight: FontWeight.w600)),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
     );
+    if (source == null) return; // dismissed
+    await _pickAvatar(source);
+  }
+
+  Future<void> _pickAvatar(ImageSource source) async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image;
+    try {
+      image = await picker.pickImage(
+        source: source,
+        imageQuality: 80,
+        maxWidth: 512,
+        maxHeight: 512,
+      );
+    } catch (e) {
+      // A handset with no camera app, or one that refuses the capture
+      // intent, throws here rather than returning null. Say so instead of
+      // appearing to do nothing — the gallery is still available.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(source == ImageSource.camera
+              ? "Couldn't open the camera — you can still pick a photo from your gallery."
+              : "Couldn't open the gallery."),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
     if (image == null) return;
 
     // Each pick used to write a new timestamped file and just abandon the
@@ -157,7 +224,7 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
           children: [
             // Avatar section
             GestureDetector(
-              onTap: _pickAvatar,
+              onTap: _chooseAvatarSource,
               child: CircleAvatar(
                 radius: 48,
                 backgroundColor: colors.primaryContainer,
@@ -175,9 +242,10 @@ class _EditIdentityScreenState extends State<EditIdentityScreen> {
               // the avatar itself. Once one's set, this becomes the way to
               // clear it — showing "Remove photo" when there's nothing to
               // remove was confusing (and did nothing when tapped).
-              onPressed: _avatarPath != null ? _removeAvatar : _pickAvatar,
+              onPressed:
+                  _avatarPath != null ? _removeAvatar : _chooseAvatarSource,
               child: Text(
-                _avatarPath != null ? 'Remove photo' : 'Tap to change photo',
+                _avatarPath != null ? 'Remove photo' : 'Tap to add a photo',
                 style: TextStyle(color: colors.primary),   // visible
               ),
             ),
