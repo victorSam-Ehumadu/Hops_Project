@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:client/services/account_standing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/views/admin/admin_sign_in_screen.dart';
 import 'package:client/views/admin/admin_dashboard_tab.dart';
@@ -130,9 +131,24 @@ class _AdminShellState extends State<AdminShell> {
             reason: "Admin access for this account was removed.");
       }
     } on PostgrestException catch (e) {
-      if (e.message.contains('account_banned') && mounted) {
+      // Both verdicts, via the shared classifier.
+      //
+      // This branch used to check only 'account_banned', so a SUSPENDED
+      // admin kept the admin app — and with it every moderation power,
+      // including acting on the person who suspended them. It also
+      // described a ban as "suspended", which is the wrong word for
+      // something permanent.
+      //
+      // Recorded as well as acted on, so the suspension is still known
+      // after a restart and the admin sign-in screen can say why.
+      final standing = AccountStandingStore.classify(e);
+      if (standing != null && mounted) {
+        await AccountStandingStore.instance.record(standing);
+        if (!mounted) return;
         await signOutOfAdminApp(context,
-            reason: "This account has been suspended.");
+            reason: standing.kind == AccountStandingKind.banned
+                ? "This account has been banned by a Hops admin."
+                : "This account is suspended, so it has been signed out.");
       }
       // Any other error: offline/unreachable, try again next cycle.
     } catch (_) {

@@ -11,8 +11,9 @@ import 'package:client/theme/app_theme.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/hops_app.dart';
 import 'package:client/views/hops_splash_screen.dart';
-import 'package:client/views/account_blocked_screen.dart';
 import 'package:client/services/account_standing.dart';
+import 'package:client/views/account_management_screen.dart'
+    show deleteLocalDatabase, clearAccountScopedPrefs;
 import 'package:client/services/notification_service.dart';
 import 'package:client/widgets/alarm_ringing_banner.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -202,9 +203,6 @@ class _HopsRootState extends State<HopsRoot> {
   // the background.
   bool _splashDone = false;
 
-  // Bumped when a moderation block lifts, to re-run the launch decision.
-  int _standingRecheck = 0;
-
   @override
   void initState() {
     super.initState();
@@ -303,25 +301,14 @@ class _HopsRootState extends State<HopsRoot> {
       );
     }
     return FutureBuilder<AccountStanding?>(
-      // Keyed on _standingRecheck so clearing a block re-runs the decision
-      // instead of leaving the resolved Future (and the barrier) in place.
-      key: ValueKey(_standingRecheck),
       future: _resolveLaunchStanding(),
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const SizedBox.shrink();
         }
-        final standing = snapshot.data;
-        // null == no saved session. Same decision as before.
-        if (standing == null) return const HopsRootGatekeeper();
-        if (standing.blocksUse) {
-          return AccountBlockedScreen(
-            standing: standing,
-            onCleared: () {
-              if (mounted) setState(() => _standingRecheck++);
-            },
-          );
-        }
+        // null == no usable session: either none was saved, or the one
+        // that was is under a moderation block and has just been ended.
+        if (snapshot.data == null) return const HopsRootGatekeeper();
         return const HopsApp();
       },
     );
@@ -344,6 +331,20 @@ class _HopsRootState extends State<HopsRoot> {
   Future<AccountStanding?> _resolveLaunchStanding() async {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getString('saved_hops_token') == null) return null;
-    return AccountStandingStore.instance.load();
+    final standing = await AccountStandingStore.instance.load();
+    if (!standing.blocksUse) return standing;
+
+    // Blocked: end the session here rather than entering HopsApp and
+    // bouncing straight back out of it. Same split as
+    // endSessionForModeration — a ban takes the local data with it, a
+    // suspension keeps it so the user has their messages back when it
+    // lifts, with my_hops_id left as the marker of whose data it is.
+    if (standing.kind == AccountStandingKind.banned) {
+      await deleteLocalDatabase();
+      await clearAccountScopedPrefs();
+    } else {
+      await prefs.remove('saved_hops_token');
+    }
+    return null;
   }
 }

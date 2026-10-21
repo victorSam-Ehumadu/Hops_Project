@@ -30,6 +30,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:client/services/account_standing.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:client/theme/app_theme.dart';
 import 'package:client/services/notification_service.dart';
@@ -99,6 +100,10 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   themeNotifier.value = prefs.getInt('selected_theme_index') ?? 0;
   fontScaleNotifier.value = prefs.getDouble('font_scale') ?? 1.0;
+
+  // Load the stored moderation verdict before the first frame, so the
+  // launch gate below reads a populated value rather than the default.
+  await AccountStandingStore.instance.load();
 
   runApp(const HopsAdminRoot());
 }
@@ -212,7 +217,13 @@ class _AdminEntryGate extends StatelessWidget {
         final prefs = snapshot.data!;
         final token = prefs.getString('saved_hops_token');
         final role = prefs.getString('my_role');
-        if (token != null && role == 'admin') {
+        // A stored moderation verdict keeps a banned or suspended admin
+        // out at launch, exactly as it does in the student app — without
+        // this, force-closing and reopening restored full moderation
+        // powers until a poll next happened to succeed. Read from local
+        // storage, so it holds with no connection.
+        final blocked = AccountStandingStore.instance.current.value.blocksUse;
+        if (token != null && role == 'admin' && !blocked) {
           return const AdminShell();
         }
         return const AdminSignInScreen();

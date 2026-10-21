@@ -22,50 +22,56 @@ import 'package:client/utils/mesh_crypto.dart';
 import 'package:client/widgets/password_strength_bar.dart';
 import 'package:client/views/email_verification_screen.dart';
 import 'package:client/services/avatar_path_notifier.dart';
+import 'package:client/services/account_standing.dart';
+import 'package:client/services/bluetooth_name_guard.dart';
 
 /// Clears every locally-scoped identity key and the cached sqlite db, then
 /// drops the caller onto the gatekeeper. Shared by both "Log Out" and
 /// "Delete Account" (deletion also needs the server-side row gone first,
 /// which the caller does before calling this).
-Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async {
-  // Belt-and-suspenders: HopsApp's own dispose() already stops advertising
-  // once pushAndRemoveUntil below tears its route down, but that's an
-  // indirect consequence of widget disposal timing, not something this
-  // function controls directly. Stopping it explicitly, right here, means
-  // the beacon carrying this identity goes off the air immediately and
-  // deterministically the moment someone logs out — their dot shouldn't
-  // linger on anyone else's radar for even the length of a route
-  // transition after they've signed out.
+/// Stops this device broadcasting the signed-in identity.
+///
+/// Called by every teardown path. Explicit rather than relying on
+/// HopsApp.dispose() firing when its route is torn down: that is an
+/// indirect consequence of widget disposal timing, and the beacon
+/// carrying this identity should go off the air deterministically the
+/// moment the session ends, not a route transition later. Someone's dot
+/// should not linger on anyone else's radar after they are signed out.
+Future<void> _silenceIdentityRadio() async {
   await BlePeripheral.stopAdvertising();
   await FlutterBluePlus.stopScan();
+}
 
-  // Close our handle before unlinking the file — deleting an open sqlite db
-  // can leave it locked/corrupted, and DatabaseHelper's cached connection
-  // must be dropped too or every DB call for the rest of this app session
-  // keeps talking to the now-deleted file instead of the fresh one a new
-  // sign-up expects.
-  //
-  // Was reconstructing this path by hand via getDatabasesPath() — a
-  // *different* directory than the one DatabaseHelper actually opens the
-  // database in (see resolveDatabasePath()'s doc comment). That meant this
-  // deleteDatabase call was silently a no-op: it deleted a file that never
-  // existed, while the real database — every message, task, and vibe
-  // record — survived untouched and showed up again under the next
-  // account signed into on the same device.
+/// Deletes the local sqlite database — every message, task and vibe record.
+///
+/// Close our handle before unlinking the file: deleting an open sqlite db
+/// can leave it locked/corrupted, and DatabaseHelper's cached connection
+/// must be dropped too, or every DB call for the rest of this app session
+/// keeps talking to the now-deleted file instead of the fresh one a new
+/// sign-up expects.
+///
+/// This used to reconstruct the path by hand via getDatabasesPath() — a
+/// *different* directory than the one DatabaseHelper actually opens the
+/// database in (see resolveDatabasePath()'s doc comment). That made the
+/// delete silently a no-op: it removed a file that never existed, while
+/// the real database survived untouched and showed up again under the next
+/// account signed into on the same device.
+Future<void> deleteLocalDatabase() async {
   await DatabaseHelper.instance.close();
   await deleteDatabase(await DatabaseHelper.resolveDatabasePath());
+}
 
+/// Clears every account-scoped key in SharedPreferences, not just the
+/// session token — otherwise a different person signing in on this device
+/// inherits the previous account's avatar, nickname, bio and feature
+/// toggles.
+Future<void> clearAccountScopedPrefs() async {
   final prefs = await SharedPreferences.getInstance();
-  // Clear every locally-scoped identity key, not just the session token —
-  // otherwise a different person signing up on this device inherits the
-  // previous account's avatar, nickname, bio and feature toggles.
   await prefs.remove('saved_hops_token');
   await prefs.remove('my_username');
   await prefs.remove('my_hops_id');
   await prefs.remove('my_email');
   await prefs.remove('email_verified');
-  await prefs.remove('avatar_path');
-  avatarPathRevision.value++;
   await prefs.remove('nickname');
   await prefs.remove('bio');
   await prefs.remove('thinking_status');
@@ -79,15 +85,94 @@ Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async 
   await prefs.remove('pending_help_hint');
   await prefs.remove('my_role');
   await prefs.remove('my_admin_title');
+  await prefs.remove('avatar_path');
+  avatarPathRevision.value++;
   await const FlutterSecureStorage().delete(key: 'private_key');
   await const FlutterSecureStorage().delete(key: 'rotating_id_seed');
+}
+
+/// Clears every locally-scoped identity key and the cached sqlite db, then
+/// drops the caller onto the gatekeeper. Shared by "Log Out", "Delete
+/// Account" (deletion also needs the server-side row gone first, which the
+/// caller does before calling this) and a ban.
+Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async {
+  await _silenceIdentityRadio();
+  await deleteLocalDatabase();
+  await clearAccountScopedPrefs();
 
   if (context.mounted) {
-    Navigator.of(context).pushAndRemoveUntil(
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => const HopsRootGatekeeper()),
       (route) => false,
     );
   }
+}
+
+/// Ends the session immediately because the account was suspended or
+/// banned, and lands the user on the sign-in page.
+///
+/// The session genuinely ends — `saved_hops_token` is removed, so there is
+/// nothing left for the launch path to re-enter HopsApp with, and nothing
+/// the user can navigate back to. An earlier attempt held the session and
+/// covered the app with a barrier screen instead; that left a live token
+/// in place, which is not what "their session is terminated" means.
+///
+/// Ban and suspension differ in exactly one respect, and only in what is
+/// left on the device:
+///
+///   * A ban is permanent, so there is nothing to come back to and this is
+///     the full teardown — identical to Log Out.
+///   * A suspension expires. Deleting the sqlite database for a three-day
+///     timeout would destroy every message, task and vibe record
+///     irreversibly, which is well beyond what the moderator chose, so the
+///     data stays and only the session goes. `my_hops_id` is deliberately
+///     left behind as the marker that says who that data belongs to —
+///     discardLocalDataForAccountSwitch() below is what stops anyone else
+///     inheriting it.
+Future<void> endSessionForModeration(
+  BuildContext context,
+  AccountStanding standing,
+) async {
+  await _silenceIdentityRadio();
+  await BluetoothNameGuard.restore();
+
+  if (standing.kind == AccountStandingKind.banned) {
+    if (!context.mounted) return;
+    await wipeLocalIdentityAndReturnToGatekeeper(context);
+    return;
+  }
+
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.remove('saved_hops_token');
+
+  if (!context.mounted) return;
+  Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+    MaterialPageRoute(builder: (context) => const HopsRootGatekeeper()),
+    (route) => false,
+  );
+}
+
+/// Wipes local data when a *different* account signs in on this device.
+///
+/// Normally unnecessary: every ordinary sign-out already deletes the
+/// database, so there is nothing to inherit. A suspension is the exception
+/// — it leaves the database in place so the user gets their messages back
+/// when the suspension lifts (see endSessionForModeration). That is the
+/// one state in which the next person to sign in could otherwise inherit
+/// someone else's threads, so sign-in calls this with the id it just
+/// authenticated.
+///
+/// [signedInHopsId] is the id the server just returned. Returns true if
+/// local data was discarded.
+Future<bool> discardLocalDataForAccountSwitch(String? signedInHopsId) async {
+  final prefs = await SharedPreferences.getInstance();
+  final previous = prefs.getString('my_hops_id');
+  if (previous == null || signedInHopsId == null || previous == signedInHopsId) {
+    return false;
+  }
+  await deleteLocalDatabase();
+  await clearAccountScopedPrefs();
+  return true;
 }
 
 class AccountManagementScreen extends StatefulWidget {

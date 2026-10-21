@@ -34,7 +34,8 @@ import 'package:client/views/token_generator.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/services/account_standing.dart';
-import 'package:client/views/account_blocked_screen.dart';
+import 'package:client/views/account_management_screen.dart'
+    show endSessionForModeration;
 import 'package:client/models/feature_item.dart';
 import 'package:client/views/vibe_check_page.dart';
 import 'package:client/views/study_bunny_finder_page.dart';
@@ -141,10 +142,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // if it's been banned. See _syncIdentityStatus.
   Timer? _identitySyncTimer;
 
-  // True once the moderation barrier is on screen — the poll keeps
-  // running behind it, and a second pushAndRemoveUntil every 30
-  // seconds would reset the barrier's own countdown.
-  bool _accountBarrierShown = false;
+  // True once a moderation sign-out is under way — the poll keeps running
+  // until this widget is actually torn down, and firing a second teardown
+  // every 30 seconds would race the first one's navigation.
+  bool _moderationSignOutStarted = false;
 
   // True while nearbyConnectionsSessionCount (see main.dart) is above zero —
   // see _pauseBackgroundBleForNearbyConnections/_resumeBackgroundBle... below.
@@ -2184,37 +2185,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       // Re-checked: the notification above is itself an await, and this
       // runs on a background poll that can easily outlive the screen.
       if (!mounted) return;
-      _showAccountBlockedBarrier(standing);
+      // Ends the session and lands them on the sign-in page. Not a barrier
+      // over a still-live session — the token itself goes.
+      if (_moderationSignOutStarted) return;
+      _moderationSignOutStarted = true;
+      await endSessionForModeration(context, standing);
     } catch (_) {
       // Offline or Supabase unreachable — try again on the next cycle.
     }
-  }
-
-  /// Replaces the whole navigation stack with the barrier, so nothing the
-  /// user had open stays reachable behind it.
-  ///
-  /// pushAndRemoveUntil rather than a dialog or a pushed route: a
-  /// moderated account must not be able to dismiss its way back to a chat
-  /// that is still mounted underneath. Clearing the block sends them back
-  /// through HopsApp from scratch, which re-runs every startup check.
-  void _showAccountBlockedBarrier(AccountStanding standing) {
-    if (_accountBarrierShown) return;
-    _accountBarrierShown = true;
-    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (_) => AccountBlockedScreen(
-          standing: standing,
-          onCleared: () {
-            _accountBarrierShown = false;
-            Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const HopsApp()),
-              (route) => false,
-            );
-          },
-        ),
-      ),
-      (route) => false,
-    );
   }
 
   // Loads the rotating-ID seed generated at signup/sign-in (see

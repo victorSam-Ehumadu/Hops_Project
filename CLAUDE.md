@@ -368,7 +368,8 @@ The four gaps that made it look like nothing happened:
 4. **`describeAuthException` had no `account_suspended` branch**, so a suspended user's sign-in
    fell through to the generic "something went wrong on our end" — a working suspension reading
    as a server fault. It also described a *ban* as "suspended", which invites someone to wait
-   out something permanent instead of appealing.
+   out something permanent instead of appealing. The admin app's own poll had the same two
+   defects independently.
 
 Invariants worth preserving:
 
@@ -386,12 +387,35 @@ Invariants worth preserving:
   asking. That asymmetry is correct, don't "fix" it.
 - **An unparseable suspension expiry fails closed** (blocks). A re-check can always lift it;
   guessing "not blocked" silently discards the moderator's decision.
-- **A suspension must not wipe local data.** `wipeLocalIdentityAndReturnToGatekeeper` deletes
-  the sqlite database — every message, task and vibe record. Defensible for a permanent ban,
-  but for a three-day timeout it is irreversible collateral damage far beyond what the
-  moderator chose. A suspension holds the session and blocks the UI (`AccountBlockedScreen`)
-  instead. That screen also takes the radio down on the way in, so a moderated account stops
-  broadcasting whether or not the user cooperates with any button on it.
+- **Both verdicts end the session immediately and land on the gatekeeper.**
+  `endSessionForModeration` removes `saved_hops_token`, so there is nothing for the launch path
+  to re-enter `HopsApp` with and nothing to navigate back to. An earlier attempt held the
+  session and covered the app with a barrier screen; that left a live token in place, which is
+  not what "their session is terminated" means. Don't reintroduce it.
+- **Ban wipes local data, suspension keeps it.** The only difference between the two paths.
+  `wipeLocalIdentityAndReturnToGatekeeper` deletes the sqlite database — every message, task
+  and vibe record — which is right for something permanent and wrong for a three-day timeout,
+  where it is irreversible collateral damage beyond what the moderator chose. A suspension
+  therefore leaves the database alone and leaves `my_hops_id` behind as the marker of whose
+  data it is.
+- **That marker is load-bearing.** Keeping a database across a sign-out is the *only* state in
+  which the next person to sign in on that phone could inherit someone else's threads — sign-in
+  does no account-switch check of its own, it just overwrites prefs. So
+  `discardLocalDataForAccountSwitch` runs on every sign-in and wipes when the authenticated id
+  differs from the stored one. It must stay **before** the prefs writes that overwrite
+  `my_hops_id`, or it compares against the value it was meant to detect a change from.
+- **The gatekeeper says why.** A moderation sign-out is otherwise indistinguishable from being
+  logged out at random. `_explainModerationSignOutIfAny` reads the persisted verdict (no
+  network) into the existing status banner.
+- **The local sign-in pre-check is scoped to the blocked account's own email.** It refuses a
+  sign-in the server would refuse anyway, which matters because it works offline — but
+  blocking *every* sign-in on the device because the last user was suspended would lock out
+  everyone else sharing the phone.
+- **The admin app needs all of this too, and didn't have it.** `admin_shell.dart`'s poll
+  checked only `account_banned`, so a *suspended* admin kept the admin app and every
+  moderation power in it — including acting on whoever suspended them. `main_admin.dart` also
+  had no launch gate, so force-closing restored those powers. Both fixed; `main_admin.dart`
+  preloads the verdict before the first frame so the gate reads a populated value.
 
 Still true and not fixable here: a device that **never** goes online cannot learn it has been
 moderated. Nothing in the local BLE data plane consults the server, by design. The launch gate
