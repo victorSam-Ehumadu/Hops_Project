@@ -7,7 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `client/` — the Flutter app (both the student app and the admin app; see "Two entry points"
   below). All Flutter/Dart tooling must be run from here.
 - `supabase/` — `migrations/` (numbered SQL, `0001_…` upward) and `functions/`. This backs identity
-  and moderation only — see "Identity, auth & moderation".
+  and moderation only — see "Identity, auth & moderation". Migrations are applied **by hand** in
+  the SQL editor, so nothing records what went in; `check-applied-migrations.sql` is a read-only
+  probe that reports which ones are actually live. Run it before trusting any server-side
+  feature — a missing migration has already been mistaken for an app bug more than once.
 - `website/` — a static marketing/download site (plain HTML/CSS). No build step, unrelated to the
   app.
 - `scripts/` — PowerShell operational scripts (currently database backup/restore; see "Database
