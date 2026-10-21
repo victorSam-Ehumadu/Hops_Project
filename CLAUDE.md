@@ -32,6 +32,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     allowed to quote on stage.
   - `Hops User Testing Part 1.csv` — 13 respondents, 54 rated items, collected 11 Aug 2026 on an
     earlier build. Feeds Phase 5 §5.4 as the acceptance-testing evaluation.
+  - `report-rfcomm-wifi-dependency.md` — why the *first* 1:1 chat connection to a contact
+    needs Wi-Fi switched on, and why that does not contradict the offline claim. Source of
+    record for the in-app hint and for the viva answer.
   - `backup-demo-runbook.md` — running the restore verification as a live demonstration.
 
   Both presentation files are **generated** — see `docs/generators/` and its README.
@@ -61,7 +64,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **134 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **152 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -88,6 +91,12 @@ What is and isn't covered, so you know what a green run actually proves:
   prefix is *removed*, drop it from the guard, this test's expected list, and any literal payload
   assertion that used it — removing Hops & Robbers needed all three.
 - `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
+- `test/services/account_standing_test.dart` (18) — moderation verdicts: classifying the
+  server's error into ban/suspension, and whether that verdict currently blocks the app.
+  Pins that a non-moderation error (i.e. offline) is **never** read as a verdict, that both
+  SQLSTATEs the server uses classify identically, that a lapsed suspension stops blocking
+  with no server contact, and that an unparseable expiry fails *closed*. Every bug in this
+  area is silent — see "Moderation enforcement" below.
 - `test/services/accessibility_prefs_test.dart` (7) — the behaviour toggles. Pins that every
   one defaults **off** (`speakWatchMeAlerts` says a contact's name aloud, so a default flip
   would be a privacy regression nothing else would catch) and that the two speech toggles
@@ -268,7 +277,10 @@ natively in Kotlin, bridged to Dart per-peer:
   moment a connection lands. The wording states that the radio only needs to be **on**, not
   joined to a network, and that no data is used — otherwise it reads as a contradiction of the
   app's whole offline claim, which is the kind of doubt that's much more expensive than the
-  hint itself.
+  hint itself. The mechanism (Android gates discovery results behind Location, and Android's
+  location service leans on Wi-Fi scanning; a failing gate returns an empty result, never an
+  error) is written up in `docs/report-rfcomm-wifi-dependency.md`, along with the BLE
+  MAC-exchange change that would remove the dependency altogether.
 - Sockets are deliberately **insecure** RFCOMM on both ends. The secure variant silently kicks off
   OS-level bonding, which surfaced as an unsolicited "Pair with X?" dialog on every connection.
   Nothing here relies on bonding, so don't "fix" this back.
@@ -310,6 +322,78 @@ there's no token validation at startup, only the periodic `_syncIdentityStatus` 
 
 `profiles.role`, the moderation tables, and the admin action log are the only other server-side
 state — feature data (messages, tasks, vibes) never leaves the device.
+
+**`public.profiles` is not created by any migration.** It was made in the Supabase dashboard, so
+which constraints it carries was never under version control — and that is how two accounts came
+to share a username. `signup_hops_user` never had an explicit duplicate check; it relied entirely
+on catching `unique_violation` from the INSERT, and with no unique index in the database no
+violation was ever raised and the duplicate was created silently. `0020` adds
+`profiles_username_unique_ci` on `lower(username)` plus an explicit pre-check, and refuses to run
+with a clear listing if duplicates already exist (resolving them is a judgement call, so no
+migration here deletes an account). Case-insensitive deliberately: the wire format truncates
+sender tags to 8–9 characters, so `Victor` and `victor` are indistinguishable to most of the
+protocol. `0020` also restores the reserved-bot-username check that `0014` added and `0018`
+dropped when it re-created the function for the password salt.
+
+### 4c. Moderation enforcement (ban & suspend)
+
+Every bug in this area is **silent**: the symptom is "the admin action did nothing", which is
+indistinguishable from the admin app being broken. It was broken in four places at once, found
+during testing on 21 Oct 2026. Fixed in `0020_username_uniqueness_and_standing_enforcement.sql`
+and `services/account_standing.dart`.
+
+What the two verdicts mean, and why they behave differently:
+
+- **Ban** — permanent, no expiry. `ban_user` also sets `token_expires_at = now()`, killing the
+  session server-side.
+- **Suspend** — expires by itself. `suspend_user` deliberately does **not** touch
+  `token_expires_at`: a dead token would leave the account looking permanently signed out long
+  after the suspension lapsed. That is exactly why the sign-in path has to carry the check.
+
+The four gaps that made it look like nothing happened:
+
+1. **Neither sign-in function checked suspension.** `suspended_until` arrived in 0015, which
+   taught `get_my_status` about it and nothing else. `signin_hops_user` was last defined in 0008
+   and `signin_hops_user_by_email` in 0009 — both predate the column. A suspended user signed
+   out and back in and was let straight through. Ban had this same hole closed in 0008.
+2. **No enforcement at launch.** `main.dart` routed into `HopsApp` purely on
+   `saved_hops_token != null`. Force-close and reopen put a moderated user back in until a poll
+   next happened to succeed. The launch path now reads the persisted verdict first.
+3. **The verdict was never written down.** It lived in a local variable, so restarting the app
+   discarded it — and because Hops is offline-first, "a poll that succeeds" can be days away.
+   `AccountStandingStore` persists it to `SharedPreferences`.
+4. **`describeAuthException` had no `account_suspended` branch**, so a suspended user's sign-in
+   fell through to the generic "something went wrong on our end" — a working suspension reading
+   as a server fault. It also described a *ban* as "suspended", which invites someone to wait
+   out something permanent instead of appealing.
+
+Invariants worth preserving:
+
+- **A failed check is not a clean bill of health.** `AccountStandingStore.refresh` returns
+  `null` when it could not ask (offline, Supabase unreachable) and the stored verdict stands.
+  Never collapse `null` into "in good standing" — in an offline-first app that is the same as
+  having no moderation.
+- **Classify on message *and* details, not just `message`.** The two server paths raise with
+  different SQLSTATEs for the same condition (28000 from sign-in, 42501 from `get_my_status`),
+  so nothing may depend on the code. And `details` is typed `dynamic` — a blind `as String`
+  throws a `TypeError` from inside the handler whose job is to stop the app ignoring a ban.
+- **A lapsed suspension lifts itself with no network.** The expiry is known locally, so a
+  device that is offline when the week ends must not stay locked out — that is a punishment
+  nobody imposed. A ban has no expiry and cannot self-lift; an unban is only discoverable by
+  asking. That asymmetry is correct, don't "fix" it.
+- **An unparseable suspension expiry fails closed** (blocks). A re-check can always lift it;
+  guessing "not blocked" silently discards the moderator's decision.
+- **A suspension must not wipe local data.** `wipeLocalIdentityAndReturnToGatekeeper` deletes
+  the sqlite database — every message, task and vibe record. Defensible for a permanent ban,
+  but for a three-day timeout it is irreversible collateral damage far beyond what the
+  moderator chose. A suspension holds the session and blocks the UI (`AccountBlockedScreen`)
+  instead. That screen also takes the radio down on the way in, so a moderated account stops
+  broadcasting whether or not the user cooperates with any button on it.
+
+Still true and not fixable here: a device that **never** goes online cannot learn it has been
+moderated. Nothing in the local BLE data plane consults the server, by design. The launch gate
+and the persisted verdict narrow the window to "one successful poll, ever", which is the best
+this architecture allows.
 
 ### 4b. Runtime permissions — always version-gated
 
@@ -549,7 +633,9 @@ Things that are non-obvious and cost time to rediscover:
 Current shape of the backend, useful for sanity-checking a dump: 8 tables, all with RLS enabled
 and **zero policies** (deny-all by design — everything goes through 65 `SECURITY DEFINER`
 functions), 74 `REVOKE`s, 61 `GRANT EXECUTE`s. If a dump comes back with policies in it, something
-changed.
+changed. Since `0020` there is also a unique index `profiles_username_unique_ci` on
+`lower(username)` — a dump without it means `0020` was never applied, and duplicate usernames are
+possible again.
 
 The reasoning behind all of this is written up for the report in
 `docs/report-4.8-security-and-backup-design.md`; keep the two in sync if the procedure changes.

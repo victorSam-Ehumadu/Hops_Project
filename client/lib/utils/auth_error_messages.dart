@@ -7,22 +7,59 @@
 // same way no matter which screen it surfaced on.
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+/// `details` is typed dynamic on PostgrestException and is not always a
+/// String — a blind `as String` cast throws a TypeError from inside the
+/// very handler that exists to produce a readable message.
+String? _detailOf(Object e) {
+  if (e is! PostgrestException) return null;
+  final d = e.details;
+  if (d is! String) return null;
+  final trimmed = d.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
 String describeAuthException(Object e) {
   final text = e.toString();
 
-  // account_banned carries its reason in the PostgrestException's `details`
-  // (see ban_user/signin_hops_user*/get_my_status in
-  // supabase/migrations/0008_admin_moderation.sql) — unlike every other
-  // branch here, it's safe to be this specific: this is always the account
+  // Both moderation outcomes carry their detail in the
+  // PostgrestException's `details` — see ban_user/suspend_user,
+  // signin_hops_user*/get_my_status in 0008/0015/0020. Unlike every other
+  // branch here it's safe to be this specific: this is always the account
   // owner's own sign-in/session, not a third party probing whether some
   // other username exists, so naming the reason leaks nothing.
+  //
+  // Ban and suspension are deliberately worded as the different things
+  // they are. This used to describe a BAN as "suspended", which was both
+  // wrong and actively misleading once real suspensions existed — a
+  // permanent removal reading as a temporary one invites the user to wait
+  // it out instead of appealing.
   if (text.contains('account_banned')) {
-    final reason = e is PostgrestException && e.details != null && (e.details as String).isNotEmpty
-        ? e.details as String
-        : null;
+    final reason = _detailOf(e);
     return reason == null
-        ? "This account has been suspended by a Hops admin."
-        : "This account has been suspended by a Hops admin: $reason";
+        ? "This account has been banned by a Hops admin."
+        : "This account has been banned by a Hops admin: $reason";
+  }
+  // Raised by get_my_status since 0015 and by both sign-in functions since
+  // 0020. Before 0020 sign-in didn't check suspension at all, so this
+  // string had nothing to match and a suspended user signing in fell
+  // through to the generic "something went wrong" below — indistinguishable
+  // from a server fault, which is how a working suspension looked like a
+  // broken app.
+  //
+  // DETAIL is formatted `YYYY-MM-DD — reason`, or just the bare date when
+  // no reason was recorded.
+  if (text.contains('account_suspended')) {
+    final detail = _detailOf(e);
+    if (detail == null) {
+      return "This account is temporarily suspended by a Hops admin.";
+    }
+    final parts = detail.split('—');
+    final until = parts.first.trim();
+    final reason = parts.length > 1 ? parts.sublist(1).join('—').trim() : '';
+    final when = until.isEmpty ? "" : " until $until";
+    return reason.isEmpty
+        ? "This account is suspended$when."
+        : "This account is suspended$when: $reason";
   }
   if (text.contains('SocketException') ||
       text.contains('Failed host lookup') ||

@@ -11,6 +11,8 @@ import 'package:client/theme/app_theme.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/hops_app.dart';
 import 'package:client/views/hops_splash_screen.dart';
+import 'package:client/views/account_blocked_screen.dart';
+import 'package:client/services/account_standing.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/widgets/alarm_ringing_banner.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -200,6 +202,9 @@ class _HopsRootState extends State<HopsRoot> {
   // the background.
   bool _splashDone = false;
 
+  // Bumped when a moderation block lifts, to re-run the launch decision.
+  int _standingRecheck = 0;
+
   @override
   void initState() {
     super.initState();
@@ -297,17 +302,48 @@ class _HopsRootState extends State<HopsRoot> {
         },
       );
     }
-    return FutureBuilder<SharedPreferences>(
-      future: SharedPreferences.getInstance(),
+    return FutureBuilder<AccountStanding?>(
+      // Keyed on _standingRecheck so clearing a block re-runs the decision
+      // instead of leaving the resolved Future (and the barrier) in place.
+      key: ValueKey(_standingRecheck),
+      future: _resolveLaunchStanding(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) return const SizedBox.shrink();
-        final savedToken = snapshot.data!.getString('saved_hops_token');
-        if (savedToken != null) {
-          return const HopsApp();
-        } else {
-          return const HopsRootGatekeeper();
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const SizedBox.shrink();
         }
+        final standing = snapshot.data;
+        // null == no saved session. Same decision as before.
+        if (standing == null) return const HopsRootGatekeeper();
+        if (standing.blocksUse) {
+          return AccountBlockedScreen(
+            standing: standing,
+            onCleared: () {
+              if (mounted) setState(() => _standingRecheck++);
+            },
+          );
+        }
+        return const HopsApp();
       },
     );
+  }
+
+  /// Resolves what the launch path should show: null when there is no
+  /// saved session, otherwise this account's moderation standing.
+  ///
+  /// The standing comes from local storage, NOT from the network. That is
+  /// the point — the old launch path checked only that a token existed, so
+  /// a banned or suspended user could force-close the app and be back in
+  /// until a 30-second poll next happened to succeed, and on an offline
+  /// device that was never. Reading the persisted verdict makes a restart
+  /// the thing that re-applies the block rather than the thing that shakes
+  /// it off. See account_standing.dart.
+  ///
+  /// A lapsed suspension clears itself inside load(), so this returns
+  /// good standing for one that has run its course without needing a
+  /// server round trip.
+  Future<AccountStanding?> _resolveLaunchStanding() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString('saved_hops_token') == null) return null;
+    return AccountStandingStore.instance.load();
   }
 }

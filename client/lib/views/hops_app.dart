@@ -33,7 +33,8 @@ import 'package:client/widgets/hops_bot_avatar.dart';
 import 'package:client/views/token_generator.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/views/root_gatekeeper.dart';
-import 'package:client/views/account_management_screen.dart' show wipeLocalIdentityAndReturnToGatekeeper;
+import 'package:client/services/account_standing.dart';
+import 'package:client/views/account_blocked_screen.dart';
 import 'package:client/models/feature_item.dart';
 import 'package:client/views/vibe_check_page.dart';
 import 'package:client/views/study_bunny_finder_page.dart';
@@ -139,6 +140,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // supabase/migrations/0008_admin_moderation.sql), or force-logged-out
   // if it's been banned. See _syncIdentityStatus.
   Timer? _identitySyncTimer;
+
+  // True once the moderation barrier is on screen — the poll keeps
+  // running behind it, and a second pushAndRemoveUntil every 30
+  // seconds would reset the barrier's own countdown.
+  bool _accountBarrierShown = false;
 
   // True while nearbyConnectionsSessionCount (see main.dart) is above zero —
   // see _pauseBackgroundBleForNearbyConnections/_resumeBackgroundBle... below.
@@ -2142,29 +2148,73 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         }
       }
     } on PostgrestException catch (e) {
-      if (e.message.contains('account_banned') && mounted) {
-        await NotificationService.showAccountBannedNotification();
-        // Re-checked: the notification above is itself an await, and this
-        // runs on a background poll that can easily outlive the screen.
-        if (!mounted) return;
-        await wipeLocalIdentityAndReturnToGatekeeper(context);
-      } else if (e.message.contains('account_suspended') && mounted) {
-        // Was previously unhandled here — get_my_status (0015) has raised
-        // 'account_suspended' for a while, but this branch only ever
-        // checked for 'account_banned', so it fell through to the generic
-        // catch-all below and did nothing. A suspended account stayed
-        // signed in on-device indefinitely (until it happened to hit some
-        // *other* RPC that separately checks suspended_until) instead of
-        // being signed out the same way a ban is.
-        await NotificationService.showAccountSuspendedNotification(until: e.details as String?);
-        if (!mounted) return;
-        await wipeLocalIdentityAndReturnToGatekeeper(context);
+      // Classification and persistence both live in AccountStandingStore
+      // so the poll, the sign-in path and the launch gate cannot drift
+      // apart on what counts as a ban.
+      //
+      // This used to translate the error inline, matching only
+      // `e.message.contains(...)`, and then immediately call
+      // wipeLocalIdentityAndReturnToGatekeeper. Three problems, all fixed
+      // by going through the store:
+      //
+      //   * The verdict was never written down, so force-closing the app
+      //     discarded it and nothing re-applied it at launch.
+      //   * A suspension got the same full local wipe as a ban — the
+      //     sqlite database deleted, every message, task and vibe record
+      //     gone, for what might be a one-day timeout. Disproportionate
+      //     and irreversible; a suspension now holds the session and
+      //     blocks the UI instead.
+      //   * The user was dropped at the sign-in page with no explanation
+      //     at all, which reads as a broken app rather than a moderation
+      //     decision.
+      final standing = AccountStandingStore.classify(e);
+      if (standing == null) {
+        // Any other Postgrest error: offline or Supabase unreachable, try
+        // again on the next cycle.
+        return;
       }
-      // Any other Postgrest error: offline or Supabase unreachable, try
-      // again on the next cycle.
+      await AccountStandingStore.instance.record(standing);
+      if (standing.kind == AccountStandingKind.banned) {
+        await NotificationService.showAccountBannedNotification();
+      } else {
+        await NotificationService.showAccountSuspendedNotification(
+          until: standing.until?.toIso8601String().split('T').first,
+        );
+      }
+      // Re-checked: the notification above is itself an await, and this
+      // runs on a background poll that can easily outlive the screen.
+      if (!mounted) return;
+      _showAccountBlockedBarrier(standing);
     } catch (_) {
       // Offline or Supabase unreachable — try again on the next cycle.
     }
+  }
+
+  /// Replaces the whole navigation stack with the barrier, so nothing the
+  /// user had open stays reachable behind it.
+  ///
+  /// pushAndRemoveUntil rather than a dialog or a pushed route: a
+  /// moderated account must not be able to dismiss its way back to a chat
+  /// that is still mounted underneath. Clearing the block sends them back
+  /// through HopsApp from scratch, which re-runs every startup check.
+  void _showAccountBlockedBarrier(AccountStanding standing) {
+    if (_accountBarrierShown) return;
+    _accountBarrierShown = true;
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => AccountBlockedScreen(
+          standing: standing,
+          onCleared: () {
+            _accountBarrierShown = false;
+            Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (_) => const HopsApp()),
+              (route) => false,
+            );
+          },
+        ),
+      ),
+      (route) => false,
+    );
   }
 
   // Loads the rotating-ID seed generated at signup/sign-in (see
