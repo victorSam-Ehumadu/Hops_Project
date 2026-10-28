@@ -70,7 +70,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **172 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **182 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -105,6 +105,12 @@ What is and isn't covered, so you know what a green run actually proves:
   ceiling, that measurement is in UTF-8 *bytes* (a char-based check allows roughly double), and
   that each feature's budget leaves room for its own framing. One test documents the broken
   limits so nobody restores them.
+- `test/services/read_receipt_test.dart` (10) — parsing an `RCP:` read-receipt line. Its
+  output goes straight into a SQL `IN` clause and its input is text off a Bluetooth socket
+  from another device, so ids are checked for full uuid *shape*, not just length — one test
+  uses a 36-character non-uuid that a length-only check would have admitted. Another pins
+  that partial corruption keeps the valid ids rather than discarding the batch, since one bad
+  entry would otherwise block those messages from ever being acknowledged.
 - `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
 - `test/services/account_standing_test.dart` (18) — moderation verdicts: classifying the
   server's error into ban/suspension, and whether that verdict currently blocks the app.
@@ -290,7 +296,16 @@ natively in Kotlin, bridged to Dart per-peer:
   connection.
 - `lib/services/rfcomm_chat_service.dart` is the Dart-side wrapper (`startServer`,
   `connectToDevice`, `sendMessage`, `disconnect`), plus the profile exchange (`sendProfile` /
-  `onProfileReceived`) that syncs a contact's avatar and bio. That exchange is the **only** way
+  `onProfileReceived`) that syncs a contact's avatar and bio.
+- **Read receipts** ride the same line protocol as `RCP:<uuid>,<uuid>,…` — one line for a whole
+  backlog rather than one per message. `messages.read_at` (schema v11) holds the three states:
+  `delivered = 0` is pending, `delivered = 1` with a null `read_at` is sent, and a non-null
+  `read_at` is read. That column means **two different things depending on direction** — on an
+  outgoing row it is when the peer reported reading it; on an inbound row it is our own marker
+  that we have already acknowledged it and need not again. Receipts are sent only while the
+  thread is *open*, not when a message arrives, because a receipt should mean a person saw it.
+  They are deliberately not queued: a receipt is worth nothing except live, and the backlog is
+  re-acknowledged on the next connect anyway. That exchange is the **only** way
   cosmetics cross devices — see `services/cosmetic_prefs.dart`'s header.
 - **The first connection to a given contact needs Wi-Fi switched on at both ends.** Android
   leans on it during classic-BT discovery, and without it the two phones routinely never find
@@ -472,7 +487,7 @@ one — `admin_settings_screen.dart` needs it to decide whether to offer `openAp
 ### 5. Local persistence
 
 - `lib/database/database_helper.dart` — singleton `sqflite` wrapper, versioned schema
-  (`_databaseVersion`, currently 10) with four tables: `messages` (mesh chat log + relay queue),
+  (`_databaseVersion`, currently 11) with four tables: `messages` (mesh chat log + relay queue),
   `vibe_records`, `tasks`, `contact_profiles` (peer avatar path / bio, populated by the RFCOMM
   profile exchange). On Windows/Linux, `main.dart` swaps in `sqflite_common_ffi`. Bump
   `_databaseVersion` and add an `_onUpgrade` branch for schema changes — don't edit `_onCreate`

@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 class DatabaseHelper {
   static const _databaseName = "MeshNetwork.db";
-  static const _databaseVersion = 10;
+  static const _databaseVersion = 11;
 
   static const table = 'messages';
   static const vibeTable = 'vibe_records';
@@ -30,6 +30,17 @@ class DatabaseHelper {
   // always written as delivered. Defaults to 1 so pre-existing rows from
   // before this column existed don't retroactively show as pending.
   static const columnDelivered = 'delivered';
+  // When the PEER confirmed reading an outgoing message, as epoch ms.
+  // Null means not yet read — which is also every inbound row (there is
+  // nothing to report back to ourselves) and every row that predates this
+  // column.
+  //
+  // A nullable timestamp rather than a second boolean: the three states a
+  // message can be in are already ordered (pending -> delivered -> read),
+  // so two independent flags could represent "read but not delivered",
+  // which is not a thing. It also means the read *time* is available for
+  // free if it is ever wanted.
+  static const columnReadAt = 'read_at';
 
   // Columns for Vibe Records
   static const vibeColId = 'id';
@@ -133,7 +144,8 @@ class DatabaseHelper {
         $columnNeedsRelay INTEGER NOT NULL,
         $columnTimestamp INTEGER NOT NULL,
         $columnPeerId TEXT,
-        $columnDelivered INTEGER NOT NULL DEFAULT 1
+        $columnDelivered INTEGER NOT NULL DEFAULT 1,
+        $columnReadAt INTEGER
       )
     ''');
 
@@ -224,6 +236,76 @@ class DatabaseHelper {
     if (oldVersion < 10) {
       await db.execute('ALTER TABLE $contactProfilesTable ADD COLUMN $cpColThinking TEXT');
     }
+    if (oldVersion < 11) {
+      // Nullable with no default, so every existing message reads as
+      // "not read" rather than being retroactively claimed as read.
+      await db.execute('ALTER TABLE $table ADD COLUMN $columnReadAt INTEGER');
+    }
+  }
+
+  // ---------- Read receipts ----------
+
+  /// Marks outgoing messages as read by the peer.
+  ///
+  /// Called when an RCP: receipt arrives (see rfcomm_chat_service.dart).
+  /// Ids come off the wire from the peer, so this is deliberately narrow
+  /// about what it will touch:
+  ///
+  ///   * scoped to [peerUsername], so a receipt from one contact cannot
+  ///     mark a conversation with somebody else as read;
+  ///   * only rows we SENT (is_for_me = 0) — a peer has no business
+  ///     reporting on messages they sent us;
+  ///   * never overwrites an existing read_at, so a replayed receipt
+  ///     cannot move the timestamp later.
+  ///
+  /// Returns how many rows actually changed, so the caller can skip a
+  /// pointless UI rebuild on a duplicate receipt.
+  Future<int> markMessagesReadByPeer(
+      String peerUsername, List<String> ids) async {
+    if (ids.isEmpty) return 0;
+    final db = await instance.database;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    return await db.rawUpdate(
+      'UPDATE $table SET $columnReadAt = ? '
+      'WHERE $columnId IN ($placeholders) '
+      'AND $columnPeerId = ? AND $columnIsForMe = 0 AND $columnReadAt IS NULL',
+      [DateTime.now().millisecondsSinceEpoch, ...ids, peerUsername],
+    );
+  }
+
+  /// Ids of messages this contact sent us that we have not yet reported
+  /// reading. Drives what gets put in the next RCP: receipt.
+  ///
+  /// Tracked by writing read_at on INBOUND rows too. That field means
+  /// something different on each side — "when the peer read my message"
+  /// outgoing, "when I read theirs, and therefore no longer need to tell
+  /// them" inbound — which is worth being explicit about, because the two
+  /// meanings share one column.
+  Future<List<String>> unacknowledgedIncomingMessageIds(
+      String peerUsername) async {
+    final db = await instance.database;
+    final rows = await db.query(
+      table,
+      columns: [columnId],
+      where: '$columnPeerId = ? AND $columnIsForMe = 1 AND $columnReadAt IS NULL',
+      whereArgs: [peerUsername],
+    );
+    return rows.map((r) => r[columnId] as String).toList();
+  }
+
+  /// Records that we have read (and reported reading) these inbound
+  /// messages, so the same receipt is not sent again on every rebuild.
+  Future<void> markIncomingAcknowledged(
+      String peerUsername, List<String> ids) async {
+    if (ids.isEmpty) return;
+    final db = await instance.database;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    await db.rawUpdate(
+      'UPDATE $table SET $columnReadAt = ? '
+      'WHERE $columnId IN ($placeholders) '
+      'AND $columnPeerId = ? AND $columnIsForMe = 1',
+      [DateTime.now().millisecondsSinceEpoch, ...ids, peerUsername],
+    );
   }
 
   // ---------- Vibe Records ----------

@@ -12,6 +12,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:ble_peripheral/ble_peripheral.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:client/services/bluetooth_name_guard.dart';
 
@@ -24,6 +25,9 @@ class RfcommChatService {
   final void Function(String id)? onMessageDeleted;
   final void Function(ChatConnectionState state)? onStateChanged;
   final void Function(String bio, String thinking, Uint8List? avatarBytes)? onProfileReceived;
+
+  /// The peer has read these message ids (ones we sent them).
+  final void Function(List<String> ids)? onReadReceipt;
   final void Function(Uint8List seed)? onRotatingSeedReceived;
   final String? knownMacAddress;
   final void Function(String macAddress)? onMacLearned;
@@ -36,6 +40,10 @@ class RfcommChatService {
   static const String _prefixProfile = 'PRF:';
   static const String _prefixSeed = 'SED:';
   static const String _prefixDelete = 'DEL:';
+  // Read receipts. Carries a comma-separated list of message ids the peer
+  // has now read, so a thread opened on a backlog costs one line rather
+  // than one per message.
+  static const String _prefixReceipt = 'RCP:';
   static const int _kMessageIdLength = 36;
 
   static const int _maxConnectAttempts = 5;
@@ -85,6 +93,7 @@ class RfcommChatService {
     this.onMessageDeleted,
     this.onStateChanged,
     this.onProfileReceived,
+    this.onReadReceipt,
     this.onRotatingSeedReceived,
     this.knownMacAddress,
     this.onMacLearned,
@@ -370,6 +379,36 @@ class RfcommChatService {
     }
   }
 
+  /// Parses an `RCP:` line into the message ids it reports as read.
+  ///
+  /// Pulled out of _handleLine and made static so it is testable without a
+  /// live socket — worth it because the output of this function goes
+  /// straight into a SQL `IN` clause. Anything that is not exactly a uuid
+  /// is dropped rather than passed along: these bytes come off a Bluetooth
+  /// socket from another device, and a malformed or hostile line should
+  /// yield nothing rather than something.
+  ///
+  /// The length check is a complete one here because every id this app
+  /// generates is a v4 uuid (see Uuid().v4() at the call sites), so
+  /// 36 characters of the right shape is the only valid form.
+  @visibleForTesting
+  static List<String> parseReadReceiptIds(String line) {
+    if (!line.startsWith(_prefixReceipt)) return const [];
+    return line
+        .substring(_prefixReceipt.length)
+        .split(',')
+        .map((e) => e.trim())
+        .where(_looksLikeMessageId)
+        .toList();
+  }
+
+  static final RegExp _uuidShape = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+      r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+
+  static bool _looksLikeMessageId(String s) =>
+      s.length == _kMessageIdLength && _uuidShape.hasMatch(s);
+
   void _handleLine(String line) {
     try {
       if (line.startsWith(_prefixChat)) {
@@ -400,6 +439,9 @@ class RfcommChatService {
             ? Uint8List.fromList(bytes.sublist(avatarStart))
             : null;
         onProfileReceived?.call(bio, thinking, avatarBytes);
+      } else if (line.startsWith(_prefixReceipt)) {
+        final ids = parseReadReceiptIds(line);
+        if (ids.isNotEmpty) onReadReceipt?.call(ids);
       } else if (line.startsWith(_prefixSeed)) {
         final bytes = base64Decode(line.substring(_prefixSeed.length));
         if (bytes.isEmpty) return;
@@ -426,6 +468,18 @@ class RfcommChatService {
   }
 
   Future<bool> sendDeleteMessage(String id) => _sendLine(_prefixDelete + id);
+
+  /// Tells the peer we have read these messages of theirs.
+  ///
+  /// Best-effort by nature: _sendLine returns false when not connected,
+  /// and there is deliberately no queue behind it. A receipt is only worth
+  /// anything live — if the connection is down, the messages get
+  /// re-acknowledged the next time the thread is open and connected, which
+  /// is the same moment the peer could actually see the result.
+  Future<bool> sendReadReceipt(List<String> ids) {
+    if (ids.isEmpty) return Future.value(false);
+    return _sendLine(_prefixReceipt + ids.join(','));
+  }
 
   Future<bool> sendProfile({
     required String bio,

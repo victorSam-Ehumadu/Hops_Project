@@ -222,10 +222,15 @@ class _IndividualChatTerminalViewState
           setState(() => _firstEverConnection = false);
         }
       },
-      onMessageReceived: (id, text) => _handleIncomingMessage(text, id: id),
+      onMessageReceived: (id, text) async {
+        await _handleIncomingMessage(text, id: id);
+        // The thread is open, so this message has been seen.
+        await _acknowledgeVisibleMessages();
+      },
       onMessageDeleted: _handleIncomingDelete,
       onProfileReceived: _handlePeerProfileReceived,
       onRotatingSeedReceived: _handlePeerSeedReceived,
+      onReadReceipt: _handleReadReceipt,
       onStateChanged: (state) {
         if (!mounted) return;
         setState(() {
@@ -240,6 +245,10 @@ class _IndividualChatTerminalViewState
           _flushUndeliveredMessages();
           _sendMyProfile();
           _sendMyRotatingSeed();
+          // Catches up a backlog: anything read while disconnected gets
+          // acknowledged now, in one line, the moment there is a
+          // connection to say it over.
+          _acknowledgeVisibleMessages();
         }
       },
     );
@@ -358,6 +367,46 @@ class _IndividualChatTerminalViewState
     });
     _armBleFallbackTimer();
     await _chatService?.connect();
+  }
+
+  /// The peer has read messages we sent. Scoped and validated in
+  /// DatabaseHelper (see markMessagesReadByPeer) rather than here, since
+  /// these ids arrive off the wire.
+  Future<void> _handleReadReceipt(List<String> ids) async {
+    final changed = await DatabaseHelper.instance
+        .markMessagesReadByPeer(widget.peerName, ids);
+    // Only rebuild when something actually moved — a peer re-sending the
+    // same receipt is normal and should not repaint the thread.
+    if (changed > 0 && mounted) await _loadPeerMessageLogs();
+  }
+
+  /// Reports that we have read this contact's messages.
+  ///
+  /// Called when the thread is on screen: on open, on every incoming
+  /// message, and on (re)connect. "On screen" is the right trigger rather
+  /// than "received", because a receipt should mean a person saw it, not
+  /// that a radio did.
+  ///
+  /// A message that arrives while this screen is NOT open is never
+  /// acknowledged, because nothing calls this then — the trigger is the
+  /// thread being open, not the message arriving. That is the intended
+  /// behaviour: a notification firing does not mean anyone read anything.
+  /// It does mean the backlog is acknowledged in one batch next time the
+  /// thread is opened with a connection up, which is also the first moment
+  /// the peer could see the result.
+  Future<void> _acknowledgeVisibleMessages() async {
+    if (widget.isBot) return; // the assistant is local; nothing to report
+    final pending = await DatabaseHelper.instance
+        .unacknowledgedIncomingMessageIds(widget.peerName);
+    if (pending.isEmpty) return;
+    final sent = await _chatService?.sendReadReceipt(pending) ?? false;
+    // Only record them as acknowledged if the receipt actually went out.
+    // Marking them locally on a failed send would mean the peer never
+    // learns, and we would never try again.
+    if (sent) {
+      await DatabaseHelper.instance
+          .markIncomingAcknowledged(widget.peerName, pending);
+    }
   }
 
   Future<void> _flushUndeliveredMessages() async {
@@ -753,6 +802,8 @@ class _IndividualChatTerminalViewState
                         (msg[DatabaseHelper.columnDelivered] as int? ??
                             1) ==
                             1;
+                    final readByPeer =
+                        msg[DatabaseHelper.columnReadAt] != null;
                     final ts = msg[DatabaseHelper.columnTimestamp] as int;
                     return Align(
                       alignment: isMe
@@ -817,21 +868,45 @@ class _IndividualChatTerminalViewState
                                         .withValues(alpha: 0.4),
                                   ),
                                 ),
-                                if (isMe && !delivered) ...[
+                                // Three states, outgoing only. Inbound
+                                // rows reuse read_at for our own
+                                // bookkeeping (see DatabaseHelper), so
+                                // showing a tick on them would be
+                                // meaningless.
+                                if (isMe) ...[
                                   const SizedBox(width: 4),
-                                  Icon(Icons.schedule,
-                                      size: 11,
-                                      color: colors.onSurface
-                                          .withValues(alpha: 0.4)),
-                                  const SizedBox(width: 2),
-                                  Text(
-                                    "Not delivered yet",
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: colors.onSurface
-                                          .withValues(alpha: 0.4),
+                                  if (!delivered) ...[
+                                    Icon(Icons.schedule,
+                                        size: 11,
+                                        color: colors.onSurface
+                                            .withValues(alpha: 0.4)),
+                                    const SizedBox(width: 2),
+                                    Text(
+                                      "Not delivered yet",
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: colors.onSurface
+                                            .withValues(alpha: 0.4),
+                                      ),
                                     ),
-                                  ),
+                                  ] else
+                                    Icon(
+                                      readByPeer
+                                          ? Icons.done_all_rounded
+                                          : Icons.done_rounded,
+                                      size: 13,
+                                      // Colour as well as shape: a single
+                                      // vs. double tick is a small
+                                      // difference to read at this size,
+                                      // and this is the kind of thing
+                                      // people glance at.
+                                      color: readByPeer
+                                          ? colors.primary
+                                          : colors.onSurface
+                                              .withValues(alpha: 0.45),
+                                      semanticLabel:
+                                          readByPeer ? 'Read' : 'Sent',
+                                    ),
                                 ],
                               ],
                             ),
