@@ -38,6 +38,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `report-rfcomm-wifi-dependency.md` — why the *first* 1:1 chat connection to a contact
     needs Wi-Fi switched on, and why that does not contradict the offline claim. Source of
     record for the in-app hint and for the viva answer.
+  - `deployment-domain-and-backup.md` — DNS/SendGrid setup for the `hopsapp.me` sender, and
+    what "a backup of the app" should actually mean (Vercel is the wrong tool for an APK;
+    tagged GitHub Releases plus a kept copy of the gitignored `client/.env` are the gap).
   - `backup-demo-runbook.md` — running the restore verification as a live demonstration.
 
   Both presentation files are **generated** — see `docs/generators/` and its README.
@@ -67,7 +70,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **152 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **172 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -78,7 +81,7 @@ What is and isn't covered, so you know what a green run actually proves:
   window-rollover tolerance, flare signature chunking reassembled at full RSA-2048 length. This is
   the highest-value file in the suite — it pins the tightest constraint in the codebase and is
   pure Dart with no plugins.
-- `test/utils/password_policy_test.dart` (27) — username/email/password rules and strength
+- `test/utils/password_policy_test.dart` (35) — username/email/password rules and strength
   scoring. The blocklist tests guard two things that are easy to undo: the blocklist is checked
   **before** the character-class rules (below them it is unreachable, since every entry is
   lowercase letters and digits and fails the uppercase rule first), and it compares a *folded*
@@ -93,6 +96,15 @@ What is and isn't covered, so you know what a green run actually proves:
   add a prefix, or the new one gets mistaken for a user's real Bluetooth name. Conversely, when a
   prefix is *removed*, drop it from the guard, this test's expected list, and any literal payload
   assertion that used it — removing Hops & Robbers needed all three.
+- `test/services/advertisement_budget_test.dart` (12) — the advertisement-name byte budget
+  and each feature's framing arithmetic against it. This is the exact thing that drifted and
+  silently broke Vibe Check and Study Bunny on real devices: both set their input `maxLength`
+  to a number that looked like the budget but ignored their own prefix/id framing, producing
+  names over the 26-byte ceiling that the radio then rejected **asynchronously** — so the send
+  looked successful and the report appeared locally while never leaving the phone. Pins the
+  ceiling, that measurement is in UTF-8 *bytes* (a char-based check allows roughly double), and
+  that each feature's budget leaves room for its own framing. One test documents the broken
+  limits so nobody restores them.
 - `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
 - `test/services/account_standing_test.dart` (18) — moderation verdicts: classifying the
   server's error into ban/suspension, and whether that verdict currently blocks the app.
@@ -185,6 +197,15 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
   construction — check `_advertisePresenceBeacon` before adding another user of it.
 - Nearby BLE device count (app-bar chip) is a *separate*, unfiltered 3-second scan
   (`_updateBleDeviceCount`) so it reflects total ambient BLE traffic, not just Hops peers.
+
+**Every advertisement name must fit `kAdvertisementNameMaxBytes` (26), measured in UTF-8
+bytes.** Use `advertisementNameFits()` to check and `advertisementTextBudget(overhead)` to
+size an input field — never a hand-written number. A feature that picks its own limit gets it
+wrong: both Vibe Check (24) and Study Bunny (20) set theirs to the text budget with no
+allowance for their own framing, so ordinary input overflowed the packet. The failure is
+invisible from the sending side — `_advertiseWithName` now refuses an over-long name outright,
+and `_handleAdvertisingStatusUpdate` surfaces radio failures for **every** feature rather than
+only flares, which is what made this class of bug undiagnosable.
 
 **Advertisement size is the tightest constraint in the codebase.** The plugin puts the local name in
 both the advertise payload and the scan response, and the advertise payload also carries the 128-bit

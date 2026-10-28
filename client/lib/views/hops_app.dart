@@ -1043,12 +1043,32 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await BluetoothNameGuard.restore();
   }
 
+  // The name of the advertisement we most recently asked the radio to
+  // send. BlePeripheral's status callback reports a failure with no
+  // indication of WHICH advertisement failed, so this is what lets
+  // _handleAdvertisingStatusUpdate name the affected feature instead of
+  // showing a bare error code.
+  String? _lastAttemptedAdvertisementName;
+
   Future<void> _advertiseWithName(
     String localName,
     List<String> services, {
     ManufacturerData? manufacturerData,
     bool manufacturerDataInScanResponse = false,
   }) async {
+    _lastAttemptedAdvertisementName = localName;
+    // Refuse to send a name that cannot fit rather than letting the radio
+    // reject the whole advertisement asynchronously. Over-long names were
+    // the practical cause of "I sent it and nothing arrived": the send
+    // appeared to succeed and the failure only surfaced on a callback
+    // that, until now, ignored everything that was not a flare.
+    if (!advertisementNameFits(localName)) {
+      debugPrint('Advertisement name too long for one packet '
+          '(${utf8.encode(localName).length}B > '
+          '$kAdvertisementNameMaxBytes B): $localName');
+      _reportAdvertisingFailure('it was too long to broadcast');
+      return;
+    }
     await BlePeripheral.stopAdvertising();
     await BlePeripheral.startAdvertising(
       localName: localName,
@@ -1563,7 +1583,16 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   Future<void> _advertiseVibeTag(String location, int level) async {
     final advName = "VBT:$location:$level";
-    if (advName.length > 29) { _showToastFeedbackAlert("Location name too long"); return; }
+    // Byte-measured against the real ceiling. Was `length > 29`, which is
+    // both the wrong number (26 is the actual limit — see
+    // kAdvertisementNameMaxBytes) and the wrong unit (UTF-16 code units,
+    // not UTF-8 bytes), so a long location name sailed through and then
+    // failed silently on the radio.
+    if (!advertisementNameFits(advName)) {
+      _showToastFeedbackAlert(
+          "That location name is too long to broadcast - try a shorter one.");
+      return;
+    }
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 30), () {
@@ -1604,7 +1633,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   Future<void> _advertiseStudyTag(String id, String subject) async {
     final advName = "SBF:$id:$subject";
-    if (advName.length > 29) { _showToastFeedbackAlert("Subject too long"); return; }
+    if (!advertisementNameFits(advName)) {
+      _showToastFeedbackAlert(
+          "That subject is too long to broadcast - try a shorter one.");
+      return;
+    }
     _myActiveStudyTagId = id;
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
@@ -2293,9 +2326,94 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // rejected outright.
   bool _bleAdvertiseSupported = true;
 
+  /// Turns an Android AdvertiseCallback failure into something a student
+  /// can act on. The raw values are constants like
+  /// ADVERTISE_FAILED_DATA_TOO_LARGE, which mean nothing to a user and
+  /// were previously shown verbatim.
+  static String _describeAdvertisingError(String error) {
+    final e = error.toUpperCase();
+    if (e.contains('DATA_TOO_LARGE')) {
+      return 'it was too long to broadcast';
+    }
+    if (e.contains('TOO_MANY_ADVERTISERS')) {
+      return "the phone's Bluetooth is busy";
+    }
+    if (e.contains('ALREADY_STARTED')) {
+      return 'another Hops broadcast was still going out';
+    }
+    if (e.contains('FEATURE_UNSUPPORTED')) {
+      return "this phone cannot broadcast over Bluetooth";
+    }
+    if (e.contains('INTERNAL_ERROR')) {
+      return "the phone's Bluetooth reported an internal error";
+    }
+    return error;
+  }
+
+  /// Maps an advertisement prefix back to the human name of the feature
+  /// that sent it. Keep in step with the dispatch chain in the scan
+  /// handler and with bluetooth_name_guard.dart's prefix list.
+  static String? _featureNameForAdvertisement(String? advName) {
+    if (advName == null) return null;
+    const labels = <String, String>{
+      'VBT:': 'Your Vibe Check report',
+      'VBX:': 'That report deletion',
+      'SBF:': 'Your study session',
+      'SBI:': 'Your reply',
+      'SBX:': 'That study session change',
+      'LNF:': 'Your Lost & Found post',
+      'LNR:': 'That resolution',
+      'FR:': 'Your friend request',
+      'FA:': 'Your friend accept',
+      'WR:': 'Your watch request',
+      'WA:': 'Your watch accept',
+      'CHT:': 'Your chat invite',
+      'CM:': 'Your message',
+      'CA:': 'Your alert',
+      'CX:': 'That deletion',
+      'DM:': 'Your message',
+      'ACK:': 'That pairing code',
+      'HOP:': 'That pairing code',
+      'EMG:': 'Your Emergency Flare',
+      'ADM:': 'Your Official Alert',
+    };
+    for (final entry in labels.entries) {
+      if (advName.startsWith(entry.key)) return entry.value;
+    }
+    return null;
+  }
+
+  /// Tells the user that something they just sent did not leave the radio.
+  ///
+  /// This used to be flare-only: the status callback returned early for
+  /// every other feature, so a failed Vibe Check, Study Bunny tag, Lost &
+  /// Found post, friend request or community message was written to
+  /// debugPrint and otherwise swallowed. The sender saw their own entry
+  /// appear locally (every feature records its own report immediately) and
+  /// had no way to know nothing had been transmitted — which presents
+  /// exactly as "I sent it, the other phone got nothing."
+  void _reportAdvertisingFailure(String reason) {
+    if (!mounted) return;
+    final feature =
+        _featureNameForAdvertisement(_lastAttemptedAdvertisementName);
+    final what = feature ?? "That";
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("$what was not sent — $reason. "
+            "Check Bluetooth is on and try again."),
+        backgroundColor: Colors.orange.shade900,
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
   void _handleAdvertisingStatusUpdate(bool advertising, String? error) {
     if (error == null) return;
-    debugPrint('❌ BLE advertising failed: $error');
+    debugPrint('BLE advertising failed: $error');
+    // Every feature now hears about this, not just flares. The flare
+    // branch below stays separate because it has to do more than report:
+    // it must also stop claiming the flare is live.
+    _reportAdvertisingFailure(_describeAdvertisingError(error));
     // A flare that failed to go out must never keep claiming it's live —
     // same rule _broadcastEmergencyFlare already applies to the errors it
     // *can* see. This is the path that catches the ones it can't.
@@ -2306,10 +2424,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       _flareSigCycleTimer = null;
       if (mounted) {
         setState(() => _isFlareActive = false);
+        // Replaces the generic notice above with the louder, flare-specific
+        // one — this is the one case where the stakes justify shouting.
+        ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                "⚠️ Emergency flare did NOT go out ($error). Check Bluetooth is on, then try again."),
+                "Emergency flare did NOT go out (${_describeAdvertisingError(error)}). "
+                "Check Bluetooth is on, then try again."),
             backgroundColor: Colors.red.shade900,
             duration: const Duration(seconds: 10),
           ),

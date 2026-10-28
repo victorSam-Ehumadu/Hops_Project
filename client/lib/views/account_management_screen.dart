@@ -697,7 +697,10 @@ class _ChangeEmailScreenState extends State<_ChangeEmailScreen> {
   Future<void> _submit() async {
     final password = _passwordController.text;
     final newEmail = _newEmailController.text.trim();
-    final emailError = validateEmail(newEmail);
+    // Same rule as signup: this sets the account's address, so it must
+    // be an institutional one. Otherwise the signup restriction would
+    // be trivially bypassable by signing up and changing it after.
+    final emailError = validateAccountEmail(newEmail);
 
     if (password.isEmpty) {
       setState(() => _error = "Enter your password to confirm.");

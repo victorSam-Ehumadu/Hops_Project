@@ -6,6 +6,7 @@
 // verification screens, so the same underlying failure always reads the
 // same way no matter which screen it surfaced on.
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:client/utils/password_policy.dart';
 
 /// `details` is typed dynamic on PostgrestException and is not always a
 /// String — a blind `as String` cast throws a TypeError from inside the
@@ -78,6 +79,14 @@ String describeAuthException(Object e) {
   // without saying why reads as the server being wrong.
   if (text.contains('username_reserved')) {
     return "That name is reserved for the built-in Hops assistant — please pick another.";
+  }
+  // Raised by signup_hops_user / change_hops_email since 0021. The client
+  // checks this too (password_policy.dart's validateAccountEmail), so
+  // reaching here means either an older build or a direct RPC call — the
+  // server is the real gate, since signup is granted to `anon`.
+  if (text.contains('email_domain_not_allowed')) {
+    return "Use your Richfield student email (ending in "
+        "$kInstitutionalEmailDomain) to create a Hops account.";
   }
   if (text.contains('email_taken')) {
     return "An account already exists with that email address.";

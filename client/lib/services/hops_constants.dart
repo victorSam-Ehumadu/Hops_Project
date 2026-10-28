@@ -95,6 +95,38 @@ const int kCommunityChunkBudgetBytes = 20;
 // the cost is only that long messages take one more chunk.
 const int kCommunityNameBudget = 24;
 
+/// Hard ceiling for ANY advertisement local name, in UTF-8 bytes.
+///
+/// Same arithmetic as kCommunityNameBudget above, stopping at the computed
+/// ceiling rather than taking its extra two bytes of margin: the name
+/// rides the scan response, giving 31 - 2 (AD header) = 29, minus the
+/// 3-byte TX Power structure many Android stacks append whether asked to
+/// or not = 26.
+///
+/// Guards that used 29 were wrong, and wrong in the worst direction: a
+/// 27-28 byte name passed the check, overflowed the packet, and failed the
+/// whole advertisement with ADVERTISE_FAILED_DATA_TOO_LARGE. Since that
+/// verdict only arrives asynchronously on a callback (see
+/// hops_app.dart's _handleAdvertisingStatusUpdate) the send looked
+/// successful and simply never left the radio.
+const int kAdvertisementNameMaxBytes = 26;
+
+/// Whether [name] fits in a single advertisement.
+///
+/// Measured in UTF-8 BYTES, not characters — the budget is a byte budget,
+/// so an accented or emoji character costs more than one. `.length` on a
+/// Dart String counts UTF-16 code units and silently under-counts both.
+bool advertisementNameFits(String name) =>
+    utf8.encode(name).length <= kAdvertisementNameMaxBytes;
+
+/// How many bytes of room are left for free text in an advertisement whose
+/// fixed framing (prefix, separators, any id) costs [overheadBytes].
+/// Lets a UI constrain its input field instead of failing at send time.
+int advertisementTextBudget(int overheadBytes) {
+  final left = kAdvertisementNameMaxBytes - overheadBytes;
+  return left < 0 ? 0 : left;
+}
+
 const String kCommunityChatPrefix = 'CM:';
 // Admin-originated — same layout, different prefix, so one decode path
 // handles both; only the styling and the role check on resolution differ.

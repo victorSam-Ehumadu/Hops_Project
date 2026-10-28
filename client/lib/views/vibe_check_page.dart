@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:client/services/hops_constants.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
@@ -37,6 +38,9 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
   Timer? _expiryTimer;
 
   int _selectedCrowdLevel = 0;
+
+  // "VBT:" (4) + ":" (1) + one level digit (1) = 6 bytes of framing.
+  static final int _kLocationMaxLength = advertisementTextBudget(6);
 
   final TextEditingController _locationController = TextEditingController();
   final FocusNode _focusNode = FocusNode();     // explicit focus for the text field
@@ -274,7 +278,17 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                   child: TextField(
                     controller: _locationController,
                     focusNode: _focusNode,
-                    maxLength: 24,
+                    // Derived from the wire budget, not guessed. Was 24,
+                    // which is the TEXT budget with no allowance for this
+                    // format's own framing: "VBT:" + location + ":" +
+                    // level costs 6 bytes on top, so a 21-character
+                    // location produced a 27-byte name. That passed the
+                    // old `> 29` guard and then failed on the radio with
+                    // ADVERTISE_FAILED_DATA_TOO_LARGE — silently, because
+                    // the failure only arrives on an async callback that
+                    // ignored everything except flares. The report showed
+                    // up locally and never left the phone.
+                    maxLength: _kLocationMaxLength,
                     style: TextStyle(color: colors.onSurface),  // typed text visible
                     decoration: InputDecoration(
                       hintText: "e.g., Library, Cafeteria",

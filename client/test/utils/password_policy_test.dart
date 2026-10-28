@@ -198,4 +198,64 @@ void main() {
       expect(seen.length, greaterThanOrEqualTo(4));
     });
   });
+
+  group('validateAccountEmail (institutional domain)', () {
+    test('accepts a Richfield student address', () {
+      expect(validateAccountEmail('victor@my.richfield.ac.za'), isNull);
+    });
+
+    test('accepts it case-insensitively', () {
+      // Signup lowercases before storing, so rejecting on case here would
+      // refuse an address the server would happily accept.
+      expect(validateAccountEmail('Victor@My.Richfield.AC.ZA'), isNull);
+    });
+
+    test('rejects an outside domain', () {
+      final err = validateAccountEmail('victor@gmail.com');
+      expect(err, isNotNull);
+      expect(err, contains(kInstitutionalEmailDomain));
+    });
+
+    test('rejects a lookalike domain that merely contains it', () {
+      // The check is endsWith, not contains — otherwise
+      // my.richfield.ac.za.attacker.com would pass.
+      expect(validateAccountEmail('x@my.richfield.ac.za.example.com'),
+          isNotNull);
+    });
+
+    test('still applies the ordinary format rules first', () {
+      expect(validateAccountEmail('not-an-email'), isNotNull);
+      expect(validateAccountEmail(''), isNotNull);
+    });
+
+    test('honours the test allowlist', () {
+      // The allowlist ships empty; this pins the mechanism so that
+      // emptying it for release cannot silently disable it instead.
+      for (final allowed in kTestEmailAllowlist) {
+        expect(validateAccountEmail(allowed), isNull,
+            reason: '$allowed is on the allowlist and must be accepted');
+      }
+    });
+
+    test('the allowlist holds full addresses, never bare domains', () {
+      // A bare '@gmail.com' entry would reopen signup to everyone, which
+      // is the entire thing the restriction exists to prevent.
+      for (final allowed in kTestEmailAllowlist) {
+        expect(allowed.startsWith('@'), isFalse,
+            reason: '$allowed looks like a domain, not an address');
+        expect(allowed, contains('@'));
+        expect(allowed, equals(allowed.toLowerCase()),
+            reason: 'comparison is lowercased, so entries must be too');
+      }
+    });
+  });
+
+  group('validateEmail stays generic', () {
+    test('accepts a non-institutional address', () {
+      // Load-bearing: forgot-password uses this, and accounts created
+      // before the restriction have outside addresses. Tightening this
+      // would lock every legacy account out of password recovery.
+      expect(validateEmail('legacy@gmail.com'), isNull);
+    });
+  });
 }

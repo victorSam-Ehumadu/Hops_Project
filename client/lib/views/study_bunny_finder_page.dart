@@ -9,6 +9,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:client/services/hops_constants.dart';
 import 'package:client/widgets/hops_card.dart';
 import 'package:client/utils/report_content.dart';
 import 'package:client/utils/profanity_filter.dart';
@@ -51,7 +52,12 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
   final TextEditingController _subjectController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
 
-  static const int _subjectMaxLength = 20;
+  // Derived from the wire budget rather than guessed. Was 20, which left
+  // no room for this format's framing: "SBF:" (4) + a 4-char id + ":" (1)
+  // costs 9 bytes, so a 20-character subject produced a 29-byte name —
+  // over the 26-byte ceiling, and so rejected by the radio after the send
+  // had already appeared to succeed. Same silent failure Vibe Check had.
+  static final int _subjectMaxLength = advertisementTextBudget(9);
 
   @override
   void initState() {

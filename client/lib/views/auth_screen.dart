@@ -526,7 +526,10 @@ class _AuthScreenState extends State<AuthScreen> with SingleTickerProviderStateM
       setState(() => _fieldError = usernameError);
       return;
     }
-    final emailError = validateEmail(_signupEmailController.text);
+    // Institutional domain enforced here, not in validateEmail — see
+    // validateAccountEmail's note on why forgot-password must stay
+    // generic.
+    final emailError = validateAccountEmail(_signupEmailController.text);
     if (emailError != null) {
       setState(() => _fieldError = emailError);
       return;
