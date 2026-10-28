@@ -70,7 +70,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **194 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **212 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -105,6 +105,12 @@ What is and isn't covered, so you know what a green run actually proves:
   ceiling, that measurement is in UTF-8 *bytes* (a char-based check allows roughly double), and
   that each feature's budget leaves room for its own framing. One test documents the broken
   limits so nobody restores them.
+- `test/services/admin_stats_test.dart` (18) — the statistics window arithmetic and CSV
+  export. Pins the boundary bug worth preventing: a custom range must include the *whole* of
+  its end day, since treating the picked date as midnight silently drops a day and the chart
+  still looks plausible. Also that no preset window ends in the future (empty trailing buckets
+  read as a collapse to zero), the hour/day bucket switch, and RFC 4180 quoting — a label or
+  username containing a comma would otherwise shift every later column.
 - `test/services/study_location_test.dart` (12) — the Study Bunny location code. Mostly
   guarding one thing: the location travels as a one-byte **index** into `kStudyLocations`, so
   that list's order *is* wire format. Reordering or removing an entry relabels every tag in
@@ -370,6 +376,17 @@ there's no token validation at startup, only the periodic `_syncIdentityStatus` 
 
 `profiles.role`, the moderation tables, and the admin action log are the only other server-side
 state — feature data (messages, tasks, vibes) never leaves the device.
+
+**This bounds what the admin statistics can ever say.** `0022_admin_statistics.sql` plus
+`services/admin_stats_service.dart` back a filterable, charted view (24h/7d/30d/custom range,
+hand-painted `CustomPainter` charts — no chart dependency, so it inherits the active theme),
+a most-active-users ranking, and CSV export. But the server holds no message, chat or feature
+data, so none of it can be reported on and nothing there pretends to; the screen says so
+explicitly, because a dashboard that silently omits all feature usage invites the conclusion
+that nobody uses the app. One trap worth knowing: **`admin_actions_log` is not purely admin
+activity** — `log_emergency_flare` writes a row with the *raising student* as
+`actor_username`, so anything counting "admin actions" must exclude
+`action = 'emergency_flare'` or it double-counts student activity as moderation.
 
 **`public.profiles` is not created by any migration.** It was made in the Supabase dashboard, so
 which constraints it carries was never under version control — and that is how two accounts came
