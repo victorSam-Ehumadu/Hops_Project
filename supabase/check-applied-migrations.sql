@@ -1,8 +1,28 @@
 -- Which migrations in supabase/migrations/ are actually applied?
 --
--- Read-only. Paste the whole file into the Supabase SQL editor and run it.
--- Nothing here writes, locks, or drops anything, so it is safe to run
--- against the live project at any time.
+-- WHERE TO RUN THIS
+--
+--   Supabase dashboard -> your project -> SQL Editor -> New query.
+--   Paste, then run. Read-only: nothing here writes, locks or drops
+--   anything, so it is safe against the live project at any time.
+--
+-- HOW TO RUN IT — THIS FILE HOLDS TWO QUERIES
+--
+--   The Supabase SQL Editor displays only the LAST result set when you run
+--   several statements at once. Run the whole file and you will see only
+--   QUERY 2 (usually empty) and conclude nothing happened.
+--
+--   So run them one at a time: SELECT the lines of one query with the
+--   mouse and press Run / Ctrl+Enter. The editor runs just the selection.
+--
+--     QUERY 1  the migration report      -- start at "with probe(...)"
+--     QUERY 2  duplicate usernames       -- start at the banner near the end
+--
+--   Query 1 is the one you want. Query 2 only matters if Query 1 reports
+--   "0020 (a) unique username index" as not applied.
+--
+--   psql works too, and shows both:
+--     psql "<session-pooler-URI>" -f supabase/check-applied-migrations.sql
 --
 -- WHY THIS EXISTS
 --
@@ -24,6 +44,10 @@
 -- this repository, and the gap is worth closing before trusting any
 -- feature that depends on it.
 
+-- ===========================================================================
+-- QUERY 1 OF 2 — THE MIGRATION REPORT.  Select from here to the first
+-- semicolon (the "order by seq;" line) and Run.
+-- ===========================================================================
 with probe(seq, migration, applied, evidence) as (
   select 1, '0001_lockdown_profiles',
     to_regclass('public.profiles_public') is not null,
@@ -185,10 +209,13 @@ select
 from probe
 order by seq;
 
--- ---------------------------------------------------------------------------
--- If 0020 (a) comes back NO, check for duplicates BEFORE running it — the
--- migration refuses to proceed while any exist, and this is the list it
--- will complain about.
+-- ===========================================================================
+-- QUERY 2 OF 2 — DUPLICATE USERNAMES.  Select from here down and Run.
+-- ===========================================================================
+--
+-- Only needed if Query 1 reported "0020 (a) unique username index" as not
+-- applied. 0020 refuses to proceed while duplicates exist, and this is the
+-- list it will complain about. No rows returned = nothing to fix.
 -- ---------------------------------------------------------------------------
 select lower(username) as duplicated_username,
        count(*) as accounts,

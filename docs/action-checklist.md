@@ -14,9 +14,15 @@ identical to a bug from the outside.
 Three migrations are written and committed but **not applied**. Until they
 are, the features they back silently do nothing.
 
-- [ ] **Run the probe first.** Paste `supabase/check-applied-migrations.sql`
-      into the Supabase SQL editor. Read-only, safe any time. It tells you
-      exactly which of 0001–0022 are live.
+- [ ] **Run the probe first.** Supabase dashboard → your project → **SQL
+      Editor** → New query. Paste `supabase/check-applied-migrations.sql`.
+      Read-only, safe any time. It tells you exactly which of 0001–0022
+      are live.
+
+      The file holds **two** queries, and the Supabase editor shows only
+      the *last* result set when several run together — so highlight
+      Query 1 (lines 50–210, ending `order by seq;`) and press Run on
+      just that. Banners in the file mark where each one starts.
 - [ ] **Check for duplicate usernames.** The probe's second query lists
       them. `0020` refuses to run while any exist — deliberately, since
       choosing which of two accounts named `victor` is real is your call,
