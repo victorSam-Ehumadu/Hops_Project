@@ -133,6 +133,46 @@ with probe(seq, migration, applied, evidence) as (
                and p.pronargs = 5
                and p.prosrc like '%is_reserved_username%'),
     'signup_hops_user/5 checks is_reserved_username'
+
+  -- 0021 and 0022, same per-half treatment as 0020: each probe covers one
+  -- thing that can be missing on its own.
+  union all select 23, '0021 (a) institutional domain rule',
+    exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'public' and p.proname = 'is_allowed_account_email'),
+    'function is_allowed_account_email'
+  union all select 24, '0021 (b) signup enforces the domain',
+    exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'public' and p.proname = 'signup_hops_user'
+               and p.pronargs = 5
+               and p.prosrc like '%is_allowed_account_email%'),
+    'signup_hops_user/5 calls is_allowed_account_email'
+  union all select 25, '0021 (c) email encryption columns',
+    exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'profiles'
+               and column_name = 'email_encrypted')
+      and exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'profiles'
+                     and column_name = 'email_lookup'),
+    'profiles.email_encrypted + email_lookup'
+  union all select 26, '0021 (d) encryption keys configured',
+    -- Separate from (c) because 0021 adds the columns but SKIPS the
+    -- backfill when the keys are unset, leaving them all null. Columns
+    -- present with no keys is a half-done state, not a done one.
+    (current_setting('app.email_encryption_key', true) is not null
+      and current_setting('app.email_blind_index_key', true) is not null),
+    'app.email_encryption_key + app.email_blind_index_key are set'
+  union all select 27, '0021 (e) email actually encrypted',
+    not exists (select 1 from public.profiles
+                 where email is not null and email_encrypted is null),
+    'every row with an email has ciphertext (null = backfill never ran)'
+  union all select 28, '0022 statistics functions',
+    (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname in ('get_admin_stats_range',
+                          'get_admin_stats_timeseries',
+                          'get_admin_most_active_users',
+                          'assert_caller_is_admin')) = 4,
+    'all four statistics functions present'
 )
 select
   migration,
