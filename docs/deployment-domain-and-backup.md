@@ -29,9 +29,12 @@ demo.
 ### Steps
 
 1. In SendGrid: **Settings → Sender Authentication → Authenticate Your
-   Domain**. Enter `hopsapp.me`. It generates three CNAME records.
-2. Add those CNAMEs at your domain registrar exactly as given. They look
-   like:
+   Domain**. Enter `hopsapp.me`. It generates a set of DNS records — add
+   **every** record it lists, however many that is (see §1b; the count
+   varies with your account settings).
+2. Add them at your registrar exactly as given — §1b has click-by-click
+   steps for Namecheap and the one Host-field mistake that silently breaks
+   verification. They look like:
 
    | Type | Host | Points to |
    |---|---|---|
@@ -67,6 +70,150 @@ demo.
    student needs somewhere to appeal to.
 6. Send one real OTP to a Gmail address and confirm it arrives in the
    inbox rather than spam. That is the only check that matters.
+
+---
+
+## 1b. Adding the records in Namecheap
+
+Where: **namecheap.com → sign in → Domain List → `Manage` next to
+hopsapp.me → `Advanced DNS` tab → Host Records → `ADD NEW RECORD`.**
+
+### The one mistake everyone makes
+
+**The Host field takes only the part BEFORE your domain. Namecheap appends
+the rest for you.**
+
+SendGrid will show you a record for, say, `em1234.hopsapp.me`. In the Host
+field you type **`em1234`** — not the full hostname. Paste the whole thing
+and you silently create `em1234.hopsapp.me.hopsapp.me`, which resolves
+nowhere and verifies as "pending" forever with no error to explain why.
+
+| SendGrid/Vercel shows | Namecheap Host field |
+|---|---|
+| `em1234.hopsapp.me` | `em1234` |
+| `s1._domainkey.hopsapp.me` | `s1._domainkey` |
+| `_dmarc.hopsapp.me` | `_dmarc` |
+| `hopsapp.me` (the root) | `@` |
+| `www.hopsapp.me` | `www` |
+
+### Before adding anything: clear the parking records
+
+A fresh Namecheap domain ships with two records that will fight yours:
+
+- a **CNAME** on Host `www` pointing at `parkingpage.namecheap.com`
+- a **URL Redirect Record** on Host `@`
+
+Delete both (trash icon on the right of each row). The `www` one in
+particular blocks the Vercel CNAME, because a host can only have one CNAME.
+
+### Stay on BasicDNS
+
+Advanced DNS only does anything while the domain uses Namecheap's own
+nameservers. On the **Domain** tab, `NAMESERVERS` must be **Namecheap
+BasicDNS**.
+
+If you instead point the nameservers at Vercel, Namecheap's Advanced DNS
+is ignored entirely and **every record below has to be created in Vercel's
+DNS panel instead** — including the SendGrid and DMARC ones. That split is
+the single easiest way to break OTP email while the website keeps working,
+so pick one DNS host and keep everything there. Staying on BasicDNS is
+simpler.
+
+### The records to add
+
+TTL: leave as **Automatic** for all of them.
+
+**Email — ADD EVERY RECORD SENDGRID LISTS.** However many it shows, add all
+of them. SendGrid is the authority on what it needs, and the count varies
+by account and by which features are enabled. Do not go by a number quoted
+anywhere else, including here.
+
+Domain Authentication with automated security on — the default — usually
+gives three:
+
+| Type | Host (what you type) | Value |
+|---|---|---|
+| CNAME | `em1234` | `u1234567.wl.sendgrid.net` |
+| CNAME | `s1._domainkey` | `s1.domainkey.u1234567.wl.sendgrid.net` |
+| CNAME | `s2._domainkey` | `s2.domainkey.u1234567.wl.sendgrid.net` |
+
+You will see **more than three** if any of these apply. They are all
+legitimate — add them too:
+
+- **Link Branding** enabled: two extra CNAMEs, typically `url1234` and a
+  bare numeric host, both pointing at `sendgrid.net`. They rewrite click
+  tracking to your domain instead of `sendgrid.net`. Optional as a
+  feature, but once enabled the records are required.
+- **Automated security switched off**: TXT records for SPF and DKIM
+  instead of the DKIM CNAMEs. Works equally well; it just means you own
+  key rotation rather than SendGrid handling it behind the CNAME.
+- **A custom return path or subuser**: one more CNAME.
+- **A DMARC record SendGrid suggests**: add it, but read the DMARC section
+  below first — the `rua=` address has to be one you can actually receive
+  at, which SendGrid cannot know.
+
+Values are per-account. The table shows only the *shape* — copy from your
+own SendGrid screen, not from here.
+
+Every one of them still follows the Host-field rule above: type only the
+part before `.hopsapp.me`.
+
+**Email — DMARC.**
+
+| Type | Host | Value |
+|---|---|---|
+| TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:dmarc@hopsapp.me` |
+
+**Website — Vercel.**
+
+| Type | Host | Value |
+|---|---|---|
+| A | `@` | `76.76.21.21` |
+| CNAME | `www` | `cname.vercel-dns.com` |
+
+Check these two against what Vercel's **Settings → Domains** panel tells
+you — it is the authority and the values do change. The root must be an
+**A** record, not a CNAME: DNS does not permit a CNAME at a zone apex.
+
+### Making dmarc@hopsapp.me actually receive mail
+
+The `rua=` address in a DMARC record is where reports get sent, and right
+now nothing can receive at `hopsapp.me` — no MX records exist.
+
+Do **not** just point it at a Gmail address. A DMARC report address on a
+different domain requires an authorisation record published by that
+domain (`hopsapp.me._report._dmarc.gmail.com`), which you cannot create,
+so the reports are silently refused.
+
+The clean fix is Namecheap's free **Email Forwarding**, which keeps the
+address on your own domain:
+
+1. **Domain** tab → `REDIRECT EMAIL` section → `ADD FORWARDER`.
+2. Forward `dmarc@hopsapp.me` to your own inbox.
+3. While there, add `no-reply@hopsapp.me` too — it is the sender address,
+   and mail to an address that hard-bounces is a small deliverability
+   negative. Forwarding it somewhere you ignore is better than it not
+   existing.
+
+Namecheap adds the needed MX records for forwarding automatically.
+
+### Checking it worked
+
+DNS is usually minutes but can take up to 48 hours. Verify from a terminal
+rather than guessing:
+
+```
+nslookup -type=cname s1._domainkey.hopsapp.me
+nslookup -type=txt _dmarc.hopsapp.me
+nslookup hopsapp.me
+```
+
+On PowerShell, `Resolve-DnsName s1._domainkey.hopsapp.me -Type CNAME` does
+the same. If a lookup comes back with your domain doubled
+(`...hopsapp.me.hopsapp.me`), that is the Host-field mistake above.
+
+Then press **Verify** in SendGrid and **Refresh** in Vercel. Neither
+re-checks on its own.
 
 ---
 
