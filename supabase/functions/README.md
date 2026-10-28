@@ -66,12 +66,29 @@ it; password reset is not.
    if you're using the CLI with a linked project):
    `0007_email_auth_and_otp.sql`
 
-2. Install the [Supabase CLI](https://supabase.com/docs/guides/cli) if you
-   haven't already, then from the repo root:
+2. Get the CLI. No install needed if Node is present — `npx --yes
+   supabase@latest <cmd>` works and is what this project uses.
+
+   **Authenticate with a personal access token, not `supabase login`.**
+   The login flow opens a browser and requires an interactive terminal, so
+   it fails with `LoginMissingTokenError: Cannot use automatic login flow
+   inside non-TTY environments` under any wrapped or scripted shell —
+   including an agent session. Create one at
+   https://supabase.com/dashboard/account/tokens, then **in your own
+   PowerShell window**:
+   ```powershell
+   cd C:\Projects\Hops_Project
+   $env:SUPABASE_ACCESS_TOKEN = "sbp_your_token_here"
    ```
-   supabase login
-   supabase link --project-ref <your-project-ref>
-   ```
+   One window for all the commands below, because the variable only lives
+   for that session.
+
+   `$env:` rather than passing `--token` on each command for the same
+   reason `scripts/backup-db.ps1` reads its URI via `Read-Host`: Windows
+   PowerShell appends every typed command to `ConsoleHost_history.txt`
+   permanently, so a token in an argument is written to disk for good.
+
+   `--project-ref <ref>` on each command avoids needing `supabase link`.
 
 3. Sign up at [resend.com](https://resend.com). Under **Domains → Add
    Domain**, add `hopsapp.me` and create the DNS records it shows —
@@ -101,10 +118,20 @@ it; password reset is not.
 
 4. Deploy all three functions:
    ```
-   supabase functions deploy send-password-reset-otp
-   supabase functions deploy send-verification-email
-   supabase functions deploy send-moderation-email
+   npx --yes supabase@latest functions deploy send-password-reset-otp --project-ref <ref>
+   npx --yes supabase@latest functions deploy send-verification-email --project-ref <ref>
+   npx --yes supabase@latest functions deploy send-moderation-email   --project-ref <ref>
    ```
+
+   **All three, every time `_shared/send_email.ts` changes.** The bundler
+   inlines that file into each function, so editing it locally changes
+   nothing until each one is redeployed — and a function still running the
+   previous bundle will report the previous provider's errors. That is
+   exactly how the SendGrid-to-Resend switch appeared not to work: the
+   secret had been updated, but the deployed code was still asking for
+   `SENDGRID_API_KEY`.
+
+   Run these from the repo root, not from `client/`.
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` don't need to be set manually
 — Supabase injects those into every Edge Function automatically.
