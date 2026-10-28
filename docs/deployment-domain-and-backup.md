@@ -13,25 +13,33 @@ configuration plus DNS.
 
 ### Why this is worth doing beyond looking tidier
 
-The project currently uses SendGrid **Single Sender Verification** — one
-verified mailbox, no DNS. That works, but it has a real defect recorded in
-`send_email.ts`: there is no domain-level authentication, so Gmail,
-Outlook and Yahoo have no cryptographic reason to trust the sender, and
-OTP emails land in spam. Nothing in the sending code can override a
-filtering decision made on the recipient's side.
+Before the domain existed the project used SendGrid **Single Sender
+Verification** — one verified mailbox, no DNS. That worked, but with a
+real defect: no domain-level authentication, so Gmail, Outlook and Yahoo
+had no cryptographic reason to trust the sender, and OTP mail landed in
+spam. No change to the sending code can override a filtering decision made
+on the recipient's side.
 
-Owning `hopsapp.me` is what fixes that, via **Domain Authentication**
-(SPF + DKIM). This is the difference between "the code sends the email"
-and "the student actually receives it", and it is worth demonstrating: an
-OTP that reliably arrives is a visible quality difference during a live
-demo.
+Owning `hopsapp.me` is what fixes that, via **SPF + DKIM**. That is the
+difference between "the code sends the email" and "the student actually
+receives it", and it is worth demonstrating: an OTP that reliably arrives
+is a visible quality difference in a live demo.
+
+**The provider is now Resend, not SendGrid** — the SendGrid trial expired
+into `401 Maximum credits exceeded`, and the Single Sender advantage that
+justified it stopped mattering once the domain was verified. Resend's free
+tier is 3,000/month against SendGrid's post-trial allowance. The DNS work
+below is the same shape either way; only the specific records differ, and
+they come from whichever provider's dashboard you are using.
 
 ### Steps
 
-1. In SendGrid: **Settings → Sender Authentication → Authenticate Your
-   Domain**. Enter `hopsapp.me`. It generates a set of DNS records — add
-   **every** record it lists, however many that is (see §1b; the count
-   varies with your account settings).
+1. In Resend: **Domains → Add Domain** → `hopsapp.me`. It generates a set
+   of DNS records — add **every** record it lists, however many that is
+   (see §1b). Typically a `MX`/`TXT` pair for the sending subdomain plus a
+   DKIM `TXT`; the exact set is per-account, so copy from your own screen.
+   (On SendGrid this step was **Settings → Sender Authentication →
+   Authenticate Your Domain**, and the records were three CNAMEs.)
 2. Add them at your registrar exactly as given — §1b has click-by-click
    steps for Namecheap and the one Host-field mistake that silently breaks
    verification. They look like:
@@ -217,10 +225,14 @@ simpler.
 
 TTL: leave as **Automatic** for all of them.
 
-**Email — ADD EVERY RECORD SENDGRID LISTS.** However many it shows, add all
-of them. SendGrid is the authority on what it needs, and the count varies
-by account and by which features are enabled. Do not go by a number quoted
-anywhere else, including here.
+**Email — ADD EVERY RECORD YOUR PROVIDER LISTS.** However many it shows,
+add all of them. The provider is the authority on what it needs, and the
+count varies by account and by which features are enabled. Do not go by a
+number quoted anywhere else, including here.
+
+The project uses **Resend**; the SendGrid tables below are kept because
+the Host-field rules they illustrate are identical for any provider, and
+because the SendGrid records may still be in your zone and need removing.
 
 Domain Authentication with automated security on — the default — usually
 gives three:

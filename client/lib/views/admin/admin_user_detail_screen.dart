@@ -168,15 +168,25 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
       // came back as {ok:false, error:...} exactly the same way, but was
       // silently dropped, so a ban/suspend could "succeed" here while the
       // target was never actually told, with nothing in the UI to say so.
-      // A common real cause for 'send_failed' on this project's setup:
-      // Resend's shared onboarding@resend.dev sender only delivers to the
-      // Resend account's own verified address until a real sending domain
-      // is verified and HOPS_EMAIL_FROM is set — see
-      // supabase/functions/_shared/send_email.ts.
+      //
+      // Every branch leads with "Done, but" deliberately: the moderation
+      // action itself has already succeeded server-side by this point, and
+      // only the courtesy email failed. An admin who reads this as the ban
+      // having failed would go and apply it a second time.
+      //
+      // See supabase/functions/_shared/send_email.ts for where each code
+      // comes from.
       if (mounted && data is Map && data['ok'] == false) {
         final err = data['error'] as String?;
         final message = switch (err) {
           'no_email_on_file' => "No email on file for this account — they won't be emailed about this.",
+          // Resolves on its own, so this one is worth retrying later —
+          // unlike the two configuration faults below.
+          'quota_exceeded' => "Done, but the daily email limit has been "
+              "reached — they haven't been emailed. Resend it later from "
+              "their profile.",
+          'sender_not_verified' => "Done, but the sending domain isn't "
+              "verified with the email provider, so they weren't emailed.",
           'send_failed' => "Done, but the notification email failed to send "
               "(check the Resend sending domain / RESEND_API_KEY).",
           'email_not_configured' => "Done, but no email service is configured "

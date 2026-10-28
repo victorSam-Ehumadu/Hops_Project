@@ -42,7 +42,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     migrations are unapplied, domain/DNS steps, two-device testing, and the flags that must be
     flipped before real users (test-email allowlist, `debugUnlimitedCarrots`, `0009`'s email
     relaxation). Keep it current as items are done.
-  - `deployment-domain-and-backup.md` — DNS/SendGrid setup for the `hopsapp.me` sender, and
+  - `deployment-domain-and-backup.md` — DNS setup for the `hopsapp.me` sender (Resend; was
+    SendGrid until its trial expired — see `supabase/functions/README.md`), and
     what "a backup of the app" should actually mean (Vercel is the wrong tool for an APK;
     tagged GitHub Releases plus a kept copy of the gitignored `client/.env` are the gap).
   - `backup-demo-runbook.md` — running the restore verification as a live demonstration.

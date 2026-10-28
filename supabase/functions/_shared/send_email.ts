@@ -1,38 +1,41 @@
-// Thin wrapper around SendGrid's Mail Send API
-// (https://docs.sendgrid.com/api-reference/mail-send/mail-send) — chosen
-// over Resend for this project specifically because Resend's free path
-// (the onboarding@resend.dev sandbox sender) only ever delivers to the
-// Resend account's own verified email address until a full domain is
-// verified via DNS. SendGrid's free tier supports "Single Sender
-// Verification" instead: verify one email address you already own (click a
-// link, no DNS records, no domain purchase) and send from it to anyone.
-// To use a different provider (Postmark, SES, etc.), this is the only file
-// that needs to change; every caller just awaits sendEmail().
+// Thin wrapper around Resend's Send Email API
+// (https://resend.com/docs/api-reference/emails/send-email).
 //
-// Required setup (not done by this code — see the README note at the
-// bottom of each function's index.ts): sign up at sendgrid.com, verify a
-// Single Sender under Settings > Sender Authentication, create an API key
-// (Mail Send permission is enough), then:
-//   supabase secrets set SENDGRID_API_KEY=SG.your_key_here
-//   supabase secrets set HOPS_EMAIL_FROM="Hops <you@example.com>"
-// HOPS_EMAIL_FROM must be exactly the address you verified — SendGrid
-// rejects sends from any address that isn't a verified Single Sender (or
-// on a verified domain), so there's no working default to fall back to
-// here the way there might be with a pre-verified provider domain.
-const SENDGRID_API_KEY = Deno.env.get("SENDGRID_API_KEY");
+// WHY RESEND, HAVING PREVIOUSLY BEEN SENDGRID
+//
+// SendGrid was chosen originally for one specific reason: its free tier
+// supported "Single Sender Verification" — verify one mailbox you already
+// own by clicking a link, no DNS and no domain purchase — whereas Resend's
+// free path (the onboarding@resend.dev sandbox sender) only ever delivered
+// to the Resend account's own address until a domain was verified by DNS.
+// With no domain, SendGrid was the only one that could mail a real student.
+//
+// Both halves of that have since changed:
+//
+//   1. The project now owns hopsapp.me and its DNS is already set up, so
+//      Resend's domain requirement is no longer an obstacle — it is a step
+//      that has effectively been done.
+//   2. The SendGrid trial expired, and sends began failing with
+//      401 "Maximum credits exceeded".
+//
+// Resend's free tier is 3,000 emails/month (100/day), which is far more
+// headroom than SendGrid's post-trial allowance, and the Single Sender
+// advantage that justified SendGrid no longer applies.
+//
+// Every caller just awaits sendEmail(); this is the only file that changed
+// in the switch, and sendEmail's signature is deliberately identical to
+// the SendGrid version so the three functions were untouched.
+//
+// Required setup:
+//   1. Sign up at resend.com.
+//   2. Domains -> Add Domain -> hopsapp.me, and add the DNS records it
+//      shows (see docs/deployment-domain-and-backup.md for the Namecheap
+//      specifics — same Host-field rules as before).
+//   3. API Keys -> Create, with Sending access.
+//   4. supabase secrets set RESEND_API_KEY=re_your_key_here
+//      (HOPS_EMAIL_FROM is unchanged and carries over as-is.)
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 const FROM_ADDRESS = Deno.env.get("HOPS_EMAIL_FROM");
-
-// Accepts "Name <email@example.com>" (matching how HOPS_EMAIL_FROM is
-// documented/set above) or a bare "email@example.com". SendGrid wants
-// name/email as separate JSON fields rather than one combined string.
-function parseFromAddress(raw: string): { email: string; name?: string } {
-  const match = raw.match(/^(.*)<([^<>]+)>\s*$/);
-  if (match) {
-    const name = match[1].trim().replace(/^"|"$/g, "");
-    return { email: match[2].trim(), name: name.length > 0 ? name : undefined };
-  }
-  return { email: raw.trim() };
-}
 
 // Every email this project sends is small, controlled HTML (our own
 // templates in email_template.ts — never raw user input as the top-level
@@ -40,13 +43,13 @@ function parseFromAddress(raw: string): { email: string; name?: string } {
 // so a regex strip is safe here and doesn't need a real HTML parser.
 // Sending HTML with no text/plain alternative is itself a minor spam
 // signal — mail filters expect a multipart/alternative with both parts —
-// so this exists to close that gap. It is NOT what fixes spam-folder
-// placement on its own; that needs SendGrid Domain Authentication (DKIM/
-// SPF on a real domain). Single Sender Verification, which is what this
-// project currently has configured, has no domain-level authentication to
-// give Gmail/Yahoo/Outlook a reason to trust an unfamiliar sender, and
-// that's a spam-filtering decision made entirely on the recipient's side —
-// nothing this file sends can override it.
+// so this exists to close that gap.
+//
+// Unlike the SendGrid era, spam-folder placement is no longer the expected
+// outcome: hopsapp.me is domain-authenticated (SPF + DKIM) with a DMARC
+// record, so receivers have a cryptographic reason to trust the sender.
+// Check the Authentication-Results header on a real delivery rather than
+// assuming either way.
 function stripHtmlToText(html: string): string {
   return html
     .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "")
@@ -59,7 +62,6 @@ function stripHtmlToText(html: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -75,43 +77,69 @@ export async function sendEmail(opts: {
   // passes it.
   replyTo?: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  if (!SENDGRID_API_KEY) {
-    console.error("SENDGRID_API_KEY is not set — cannot send email. Run: supabase secrets set SENDGRID_API_KEY=...");
+  if (!RESEND_API_KEY) {
+    console.error(
+      "RESEND_API_KEY is not set — cannot send email. Run: supabase secrets set RESEND_API_KEY=re_...",
+    );
     return { ok: false, error: "email_not_configured" };
   }
   if (!FROM_ADDRESS) {
-    console.error("HOPS_EMAIL_FROM is not set — cannot send email. Run: supabase secrets set HOPS_EMAIL_FROM=\"Hops <you@example.com>\" (must match a verified Single Sender in SendGrid).");
+    console.error(
+      'HOPS_EMAIL_FROM is not set — cannot send email. Run: supabase secrets set HOPS_EMAIL_FROM="Hops <no-reply@hopsapp.me>" (the domain must be verified in Resend).',
+    );
     return { ok: false, error: "email_not_configured" };
   }
 
-  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+  const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+      "Authorization": `Bearer ${RESEND_API_KEY}`,
       "Content-Type": "application/json",
     },
+    // Resend takes `from` as a single "Name <addr>" string, so the
+    // parseFromAddress() helper SendGrid needed (it wanted name and email
+    // as separate JSON fields) is gone. HOPS_EMAIL_FROM passes straight
+    // through in whichever of the two documented forms it holds.
     body: JSON.stringify({
-      personalizations: [{ to: [{ email: opts.to }] }],
-      from: parseFromAddress(FROM_ADDRESS),
+      from: FROM_ADDRESS,
+      to: [opts.to],
       subject: opts.subject,
-      // text/plain listed first — SendGrid (like most providers) expects
-      // the plain part before the html part in a multipart/alternative.
-      content: [
-        { type: "text/plain", value: stripHtmlToText(opts.html) },
-        { type: "text/html", value: opts.html },
-      ],
-      ...(opts.replyTo ? { reply_to: { email: opts.replyTo } } : {}),
+      html: opts.html,
+      text: stripHtmlToText(opts.html),
+      ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
     }),
   });
 
-  // SendGrid returns 202 with an empty body on success — unlike Resend it
-  // doesn't hand back a message id to log, so there's nothing to read out
-  // of a successful response here.
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    console.error("SendGrid send failed:", res.status, detail);
+    console.error("Resend send failed:", res.status, detail);
+    // Quota and rate limiting are reported distinctly from a genuine
+    // misconfiguration, because they are not the same problem and the
+    // previous lumping of them cost real debugging time: SendGrid's
+    // "Maximum credits exceeded" surfaced in the app as "the mail server
+    // rejected it", which points at the sender and sent us auditing DNS
+    // that was perfectly correct.
+    //
+    // 429 is Resend's rate limit (2 requests/second) as well as its
+    // monthly cap, and both are states that resolve on their own.
+    if (res.status === 429 || detail.includes("quota") ||
+        detail.includes("limit")) {
+      return { ok: false, error: "quota_exceeded" };
+    }
+    // 403 from Resend is usually an unverified sending domain, which IS a
+    // configuration fault and worth distinguishing from a transient one.
+    if (res.status === 403) {
+      return { ok: false, error: "sender_not_verified" };
+    }
     return { ok: false, error: "send_failed" };
   }
+
+  // Resend returns 200 with {"id": "..."} — worth logging, since that id
+  // is what their dashboard and support search on when a specific message
+  // has to be traced. SendGrid returned an empty 202 and gave us nothing
+  // to record here.
+  const body = await res.json().catch(() => null);
+  if (body?.id) console.log("Resend accepted message:", body.id);
 
   return { ok: true };
 }

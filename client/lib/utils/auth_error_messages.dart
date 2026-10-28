@@ -19,6 +19,36 @@ String? _detailOf(Object e) {
   return trimmed.isEmpty ? null : trimmed;
 }
 
+/// Turns the `error` code an email Edge Function returns alongside
+/// `{ok: false}` into something a user can act on.
+///
+/// These three states deserve different wording because they call for
+/// different actions, and lumping them together already cost real
+/// debugging time: SendGrid's quota exhaustion surfaced as "the mail
+/// server rejected it", which points at the sender, so the DNS and the
+/// From address were audited at length while both were perfectly correct.
+///
+/// See supabase/functions/_shared/send_email.ts for where each code comes
+/// from. [skipHint] appends the "you can skip this" sentence, which is
+/// true for email verification but not for a password reset.
+String describeEmailSendFailure(Object? errorCode, {String skipHint = ''}) {
+  final code = errorCode is String ? errorCode : '';
+  switch (code) {
+    case 'quota_exceeded':
+      // Resolves by itself, so say so — otherwise this reads as broken.
+      return "The daily email limit has been reached, so the code couldn't "
+          "be sent. Try again later.$skipHint";
+    case 'sender_not_verified':
+    case 'email_not_configured':
+      // A real setup fault, and not one the user can fix.
+      return "Email isn't set up on the server yet, so the code couldn't be "
+          "sent. This is a setup issue, not something you did wrong."
+          "$skipHint";
+    default:
+      return "Couldn't send the code just now.$skipHint";
+  }
+}
+
 String describeAuthException(Object e) {
   final text = e.toString();
 

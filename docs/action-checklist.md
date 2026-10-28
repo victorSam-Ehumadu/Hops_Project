@@ -87,11 +87,30 @@ are, the features they back silently do nothing.
 Two independent jobs on the same domain. Details in
 `docs/deployment-domain-and-backup.md`.
 
-### Email sending
+### Email sending — now Resend, not SendGrid
 
-- [x] SendGrid → **Settings → Sender Authentication → Authenticate Your
-      Domain** → `hopsapp.me`. Add the three CNAMEs it generates at your
-      registrar, then Verify.
+The SendGrid trial expired into `401 Maximum credits exceeded`, and the
+Single Sender advantage that justified choosing it stopped mattering once
+`hopsapp.me` was verified. `_shared/send_email.ts` was rewritten for
+Resend (free tier 3,000/month); `sendEmail()`'s signature is unchanged so
+the three functions were untouched.
+
+- [x] ~~SendGrid domain authentication~~ — superseded.
+- [ ] **Resend → Domains → Add Domain → `hopsapp.me`.** Add every DNS
+      record it lists. Same Namecheap Host-field rules as before (§1b of
+      `deployment-domain-and-backup.md`).
+- [ ] **Remove the old SendGrid CNAMEs** from Namecheap once Resend
+      verifies — the `em…` and `s1/s2._domainkey` rows. Harmless if left,
+      but they are dead records pointing at an expired account.
+- [ ] **Create a Resend API key** (API Keys → Create, Sending access) and
+      set it:
+      ```
+      RESEND_API_KEY = re_your_key_here
+      ```
+      Via **Project Settings → Edge Functions → Secrets** if you have no
+      CLI. Raw value — no shell quotes.
+- [ ] **Delete the now-unused `SENDGRID_API_KEY` secret** so a stale
+      credential is not left configured.
 - [ ] Add the DMARC TXT record at `_dmarc.hopsapp.me`, starting with
       `p=none`.
 - [ ] `supabase secrets set HOPS_EMAIL_FROM="Hops <no-reply@hopsapp.me>"`

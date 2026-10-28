@@ -479,7 +479,11 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
       if (!ok) {
         setState(() {
           _sendingCode = false;
-          _error = "Couldn't send a confirmation code — try again in a moment.";
+          // "try again in a moment" was wrong for two of the three
+          // failures: a quota needs longer than a moment, and a missing
+          // sending domain never resolves by retrying at all.
+          _error = describeEmailSendFailure(
+              (res.data is Map) ? res.data['error'] : null);
         });
         return;
       }
