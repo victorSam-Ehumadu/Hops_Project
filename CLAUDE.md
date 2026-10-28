@@ -70,7 +70,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **182 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **194 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -105,6 +105,12 @@ What is and isn't covered, so you know what a green run actually proves:
   ceiling, that measurement is in UTF-8 *bytes* (a char-based check allows roughly double), and
   that each feature's budget leaves room for its own framing. One test documents the broken
   limits so nobody restores them.
+- `test/services/study_location_test.dart` (12) — the Study Bunny location code. Mostly
+  guarding one thing: the location travels as a one-byte **index** into `kStudyLocations`, so
+  that list's order *is* wire format. Reordering or removing an entry relabels every tag in
+  flight with no error anywhere — someone in the Library shows as being in a lab. Tests pin
+  the order itself (not just membership, which a reorder would survive), the marker byte, and
+  that an unknown index reads as "no location" rather than clamping into range.
 - `test/services/read_receipt_test.dart` (10) — parsing an `RCP:` read-receipt line. Its
   output goes straight into a SQL `IN` clause and its input is text off a Bluetooth socket
   from another device, so ids are checked for full uuid *shape*, not just length — one test
@@ -191,7 +197,10 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
   handshake), `CHT:` (chat ping — addressed to a peer by *truncated plaintext username*, not a
   rotating token, since you can't know a contact's token before a chat has ever connected),
   `VBT:`/`VBX:` (Vibe Check tag/expiry), `LNR:` (Lost & Found resolution),
-  `SBF:`/`SBI:`/`SBC:`/`SBX:` (Study Bunny).
+  `SBF:`/`SBI:`/`SBC:`/`SBX:` (Study Bunny). A Study Bunny tag's **location** rides
+  manufacturer data rather than the name (`kStudyLocationProtocolMarker`), because
+  `SBF:<id>:` already costs 9 of the 26 bytes — and as a one-byte index into
+  `kStudyLocations`, which is **append-only**: the index is the wire format.
   Chunked multi-part payloads have their own prefix constants in `hops_constants.dart`:
   `kCommunityChatPrefix` (`CM:`), `kAdminCommunityChatPrefix` (`CA:`), `kCommunityDeletePrefix`
   (`CX:`), `kDirectMessagePrefix` (`DM:`), `kLostFoundPrefix` (`LNF:`).

@@ -804,6 +804,83 @@ String? decodeDiscoverableName(List<int> bytes) {
   return utf8.decode(bytes.sublist(1), allowMalformed: true);
 }
 
+// ── Study Bunny location (manufacturer data) ────────────────────────────
+//
+// Where someone is studying, riding alongside the SBF: advertisement.
+//
+// WHY NOT IN THE NAME. "SBF:" + a 4-char id + ":" already costs 9 of the
+// 26-byte ceiling, leaving 17 for the subject. Splitting that between a
+// subject and a free-text location leaves roughly eight characters each,
+// which is too little for either to be useful — and over-stuffing the name
+// is exactly what silently broke this feature before (see
+// kAdvertisementNameMaxBytes). Manufacturer data is the channel this
+// codebase already uses where the name is full, and nothing else competes
+// for the single slot during an SBF: advertisement.
+//
+// WHY A CODE RATHER THAN FREE TEXT. One byte instead of ten, and — more
+// usefully — locations that actually group. Free text produces "Library",
+// "library" and "Libry" as three different places, so a list of who is
+// studying where cannot be grouped or filtered. A fixed campus list also
+// makes posting a tag a two-tap operation, which matters for something
+// sent on the way into a study session.
+//
+// Backward compatible in both directions by construction: an older build
+// ignores manufacturer data it does not recognise, and a newer one treats
+// its absence as "no location given". Neither needs to know about the
+// other, which is why this is additive rather than a format change.
+const int kStudyLocationProtocolMarker = 0x4C; // ascii 'L'
+
+/// The campus study locations a tag can name, in wire order.
+///
+/// **Append only, and never reorder or remove.** The index is what travels
+/// on the air, so inserting an entry in the middle silently relabels every
+/// tag already in flight — a device would report the Library and be shown
+/// as being in a lab. Retire an entry by leaving it in place and hiding it
+/// from the picker.
+const List<String> kStudyLocations = <String>[
+  'Library',
+  'Library — Quiet Zone',
+  'Computer Lab',
+  'Cafeteria',
+  'Student Centre',
+  'Lecture Hall',
+  'Study Room',
+  'Courtyard',
+  'Residence',
+  'Off campus',
+];
+
+Uint8List encodeStudyLocation(int locationIndex) {
+  return Uint8List.fromList([
+    kStudyLocationProtocolMarker,
+    locationIndex & 0xFF,
+  ]);
+}
+
+/// The location index carried alongside an SBF: advertisement, or null if
+/// there is none or it is not one this build knows.
+///
+/// An out-of-range index returns null rather than clamping. Clamping would
+/// invent a location the sender never chose, and a tag with no location is
+/// a state the UI already handles — whereas a wrong location is worse than
+/// no location for a feature whose whole purpose is finding someone.
+int? decodeStudyLocation(List<int> bytes) {
+  if (bytes.length < 2 || bytes[0] != kStudyLocationProtocolMarker) {
+    return null;
+  }
+  final index = bytes[1];
+  if (index >= kStudyLocations.length) return null;
+  return index;
+}
+
+/// Display name for a location index, or null when absent/unknown.
+String? studyLocationName(int? index) {
+  if (index == null || index < 0 || index >= kStudyLocations.length) {
+    return null;
+  }
+  return kStudyLocations[index];
+}
+
 // ── Lost & Found board post encoding (chunked) ──────────────────────────
 //
 // A post carries a type flag plus two free-text fields (object, location).

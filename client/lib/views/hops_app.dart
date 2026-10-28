@@ -1631,7 +1631,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // _myActiveStudyTagId below.
   String? _myActiveStudyTagId;
 
-  Future<void> _advertiseStudyTag(String id, String subject) async {
+  Future<void> _advertiseStudyTag(String id, String subject,
+      {int? locationIndex}) async {
     final advName = "SBF:$id:$subject";
     if (!advertisementNameFits(advName)) {
       _showToastFeedbackAlert(
@@ -1640,7 +1641,22 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     }
     _myActiveStudyTagId = id;
     await BlePeripheral.stopAdvertising();
-    await _advertiseWithName(advName, []);
+    // The location rides manufacturer data in the scan response, because
+    // the name has no room for it — "SBF:" + id + ":" already costs 9 of
+    // the 26-byte ceiling. See hops_constants.dart's
+    // kStudyLocationProtocolMarker. Nothing else competes for the single
+    // manufacturer-data slot during an SBF: advertisement.
+    await _advertiseWithName(
+      advName,
+      [],
+      manufacturerData: locationIndex == null
+          ? null
+          : ManufacturerData(
+              manufacturerId: kCommunityManufacturerId,
+              data: encodeStudyLocation(locationIndex),
+            ),
+      manufacturerDataInScanResponse: locationIndex != null,
+    );
     Future.delayed(kStudyTagAdvertiseDuration, () {
       if (!mounted) return;
       if (_myActiveStudyTagId == id) _myActiveStudyTagId = null;
@@ -2556,7 +2572,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             final id = name.substring(4, 8);
             final subject = name.substring(9);
             if (subject.isNotEmpty) {
-              final isNew = StudyBunnyStore.instance.record(id: id, subject: subject);
+              // Rides the same ScanResult as the name, so it is always
+              // available here when the sender included one. A result
+              // without it (older build, or no location chosen) decodes
+              // to null and record() keeps any location already known for
+              // this tag — see its own note on why.
+              final mfgBytes = r.advertisementData
+                  .manufacturerData[kCommunityManufacturerId];
+              final locationIndex =
+                  mfgBytes == null ? null : decodeStudyLocation(mfgBytes);
+              final isNew = StudyBunnyStore.instance.record(
+                  id: id, subject: subject, locationIndex: locationIndex);
               if (isNew) UnreadTracker.instance.mark(UnreadSource.studyBunny);
             }
           }

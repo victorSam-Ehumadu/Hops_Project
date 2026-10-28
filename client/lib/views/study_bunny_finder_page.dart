@@ -27,7 +27,8 @@ String _generateTagId() {
 
 class StudyBunnyFinderPage extends StatefulWidget {
   final String myUsername;
-  final Future<void> Function(String id, String subject) onAdvertiseStudyTag;
+  final Future<void> Function(String id, String subject,
+      {int? locationIndex}) onAdvertiseStudyTag;
   final Future<void> Function(String id) onSendStudyInterest;
   final Future<void> Function(String id) onDeleteStudyTag;
 
@@ -48,6 +49,12 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
   Timer? _expiryTimer;
   Timer? _broadcastEndTimer;
   String? _myActiveId;
+
+  // Index into kStudyLocations, or null for "not saying". Optional on
+  // purpose: someone broadcasting that they are studying is not obliged to
+  // say exactly where, and requiring it would make the quick path slower
+  // for no benefit.
+  int? _selectedLocationIndex;
 
   final TextEditingController _subjectController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
@@ -98,10 +105,12 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
     // Show our own tag immediately — our own advertisement is filtered out
     // of our own scan results (same reason Vibe Check does this), so
     // without it the session you just started is the one you can't see.
-    _store.record(id: id, subject: subject);
+    _store.record(
+        id: id, subject: subject, locationIndex: _selectedLocationIndex);
     if (mounted) setState(() => _myActiveId = id);
 
-    await widget.onAdvertiseStudyTag(id, subject);
+    await widget.onAdvertiseStudyTag(id, subject,
+        locationIndex: _selectedLocationIndex);
 
     _broadcastEndTimer?.cancel();
     _broadcastEndTimer = Timer(kStudyTagAdvertiseDuration, () {
@@ -114,6 +123,17 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
         SnackBar(content: Text("Broadcasting \"$subject\" for the next ${kStudyTagAdvertiseDuration.inMinutes ~/ 60} hour.")),
       );
     }
+  }
+
+  /// What this device is currently broadcasting, including the location
+  /// when one was chosen — so the poster can see exactly what others see.
+  String _myActiveBroadcastLabel() {
+    final report = _store.reports.value[_myActiveId];
+    if (report == null) return 'Broadcasting:';
+    final where = report.locationName;
+    return where == null
+        ? 'Broadcasting: ${report.subject}'
+        : 'Broadcasting: ${report.subject} · $where';
   }
 
   Future<void> _deleteMyTag() async {
@@ -196,7 +216,7 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        "Broadcasting: ${_store.reports.value[_myActiveId]?.subject ?? ''}",
+                        _myActiveBroadcastLabel(),
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -213,6 +233,9 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
               ),
               const SizedBox(height: 12),
             ] else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               Row(
                 children: [
                   Expanded(
@@ -241,6 +264,44 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     onPressed: _startStudying,
+                  ),
+                ],
+              ),
+                  const SizedBox(height: 10),
+                  // A fixed list, not free text. One byte on the wire
+                  // instead of ten (see hops_constants.dart's
+                  // kStudyLocationProtocolMarker), and locations that
+                  // actually group — free text gives "Library", "library"
+                  // and "Libry" as three different places, so a list of
+                  // who is studying where could not be grouped at all.
+                  Text(
+                    "Where? (optional)",
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: colors.onSurface.withValues(alpha: 0.7),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (var i = 0; i < kStudyLocations.length; i++)
+                        ChoiceChip(
+                          label: Text(
+                            kStudyLocations[i],
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          selected: _selectedLocationIndex == i,
+                          visualDensity: VisualDensity.compact,
+                          // Tapping the selected chip clears it, so
+                          // "actually, never mind" does not require
+                          // leaving the screen.
+                          onSelected: (chosen) => setState(() =>
+                              _selectedLocationIndex = chosen ? i : null),
+                        ),
+                    ],
                   ),
                 ],
               ),
@@ -348,6 +409,35 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                                     ],
                                   ],
                                 ),
+                                // Location on its own line with a pin, so
+                                // "where" is scannable down the list —
+                                // which is the point of the feature. Only
+                                // rendered when there is one: it is
+                                // optional, and tags from an older build
+                                // carry none.
+                                if (report.locationName != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.place_outlined,
+                                            size: 11, color: colors.primary),
+                                        const SizedBox(width: 3),
+                                        Flexible(
+                                          child: Text(
+                                            report.locationName!,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: colors.primary,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 Text(
                                   isMine ? "Your session · ${_reportAge(report.timestamp)}" : "Studying · ${_reportAge(report.timestamp)}",
                                   style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
