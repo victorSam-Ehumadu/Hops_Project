@@ -20,6 +20,21 @@ you can send to any recipient after verifying one email address you
 already own, no domain/DNS required. Swap in Postmark/SES/Resend/etc. by
 editing that one file; nothing else needs to change.
 
+## When sending stops working
+
+`401 {"errors":[{"message":"Maximum credits exceeded"}]}` in a function's
+logs is the free plan's daily send cap, not a configuration fault. The app
+surfaces it as "Couldn't send the code — the mail server rejected it",
+which reads like a broken sender and sends you auditing DNS for no reason.
+Check **SendGrid → Settings → Account Details** and the Activity Feed
+first. The quota resets daily.
+
+Worth knowing before a live demonstration: sign-up and password reset each
+cost one send, as does every ban/suspend notice. Rehearsing the moderation
+flow is the easiest way to exhaust the allowance before an audience sees
+it. Email verification is skippable by design and an account works without
+it; password reset is not.
+
 ## One-time setup
 
 1. Run the new migration against your Supabase project (same as every

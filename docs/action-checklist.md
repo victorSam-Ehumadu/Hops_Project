@@ -105,6 +105,27 @@ Two independent jobs on the same domain. Details in
       Do not jump to `p=reject` before the demo — it can silently drop your
       own OTP mail.
 
+### Email quota — a real demo-day risk
+
+SendGrid's free plan caps daily sends (typically 100). Exceeding it returns
+`401 Maximum credits exceeded`, which surfaces in the app as "Couldn't send
+the code — the mail server rejected it" and looks exactly like a
+misconfiguration. It is not: check
+**SendGrid → Settings → Account Details** and the Activity Feed before
+debugging anything.
+
+- [ ] **Create the demo accounts before presentation day.** Once signed in,
+      nothing in the app touches email again — the entire BLE side is
+      unaffected by the quota.
+- [ ] **Know what degrades.** Email verification is skippable by design
+      (the error screen offers *Skip for now*) so an account still works
+      without it. **Forgot Password is not** — it needs a live OTP. Demo
+      that early in the session, or from a recording.
+- [ ] **Count the sends you will need.** Each sign-up is one email, each
+      password reset one, each ban/suspend notice one. Rehearsing the
+      moderation flow repeatedly is the likeliest way to burn the day's
+      allowance before the demo starts.
+
 ### Website hosting
 
 - [ ] Deploy `website/` to Vercel. **Root Directory must be `website`**,
