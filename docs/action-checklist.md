@@ -31,26 +31,39 @@ are, the features they back silently do nothing.
       This is the one that makes **suspend and ban actually work** — until
       it is applied, a suspended user can sign straight back in. Also stops
       duplicate usernames.
-- [ ] **Generate two encryption keys** *before* `0021`, or it adds the
-      columns and skips the backfill:
+- [ ] **Create two Vault secrets** *before* `0021`, or it adds the columns
+      and skips the backfill. `alter database ... set` does NOT work on
+      Supabase — the `postgres` role is not a superuser and it fails with
+      `42501 permission denied to set parameter`. Use Vault:
       ```sql
-      select encode(gen_random_bytes(32), 'hex');  -- run twice
-      alter database postgres set app.email_encryption_key   = '<first>';
-      alter database postgres set app.email_blind_index_key  = '<second>';
+      select vault.create_secret(
+               encode(extensions.gen_random_bytes(32), 'hex'),
+               'hops_email_encryption_key',
+               'Hops: symmetric key for profiles.email_encrypted');
+
+      select vault.create_secret(
+               encode(extensions.gen_random_bytes(32), 'hex'),
+               'hops_email_blind_index_key',
+               'Hops: HMAC key for profiles.email_lookup');
       ```
-- [ ] **Store both keys somewhere off the database** — password manager or
-      encrypted note. Losing the encryption key loses every stored address
-      with no way back. Neither key is recoverable from a database backup,
-      which is the entire point of them.
-- [ ] **Open a NEW SQL Editor tab before applying `0021`.**
-      `alter database ... set` applies to new sessions only, so the tab that
-      set the keys cannot see them. Confirm first:
+      The key is generated inside the database, so it never passes through
+      a clipboard or chat window. No new session needed — it is table data.
+- [ ] **Verify both exist** (two rows expected):
       ```sql
-      select current_setting('app.email_encryption_key', true) is not null as enc_key,
-             current_setting('app.email_blind_index_key', true) is not null as idx_key;
+      select name, created_at from vault.decrypted_secrets
+       where name like 'hops_email_%';
       ```
-      Both must be `true`, or `0021` adds its columns and silently skips the
-      backfill.
+- [ ] **Record both keys off the database** — password manager, not the
+      repo:
+      ```sql
+      select name, decrypted_secret from vault.decrypted_secrets
+       where name like 'hops_email_%';
+      ```
+      Vault is the safer store, but its master key belongs to **this**
+      Supabase project. Restore a dump into a different project — which is
+      what `verify-backup.ps1` does locally — and `email_encrypted` cannot
+      be decrypted there. With the hex recorded you can set it as a GUC on
+      the restore target; without it that data is gone.
 - [ ] **Apply `0021_institutional_email_and_email_encryption.sql`.**
       Restricts signup to `@my.richfield.ac.za` and encrypts email at rest.
 - [ ] **Apply `0022_admin_statistics.sql`.** The charts and rankings.

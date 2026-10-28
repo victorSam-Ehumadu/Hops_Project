@@ -48,58 +48,124 @@
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------------
--- 1. Key material.
+-- 1. Key material — stored in Supabase Vault.
 --
--- Read from a Postgres GUC rather than stored in a table, so it is not in
--- the dump that the encryption exists to protect. Set it once per project:
+-- NOT `alter database ... set`. That was the first attempt and it cannot
+-- work here: setting a custom parameter at database level requires
+-- superuser, and Supabase's `postgres` role is not one, so it fails with
+--   ERROR 42501: permission denied to set parameter "app.email_..."
 --
---   alter database postgres set app.email_encryption_key = '<64 hex chars>';
---   alter database postgres set app.email_blind_index_key = '<64 hex chars>';
+-- Supabase Vault is the platform's own secret store. It is a better fit
+-- than a GUC would have been anyway: Vault keeps secrets encrypted at
+-- rest using a master key held OUTSIDE the database, so a leaked
+-- `pg_dump` contains only ciphertext for the keys as well as for the
+-- emails they protect. That is precisely the threat this feature exists
+-- to address.
 --
--- Generate each with:  select encode(gen_random_bytes(32), 'hex');
+-- CREATE THE TWO SECRETS (run once, in the SQL Editor):
 --
--- ORDER MATTERS, AND SO DOES THE CONNECTION. `alter database ... set`
--- applies to NEW sessions only — the one that ran it still sees the old
--- (absent) value. Set the keys, then open a fresh SQL Editor tab (or
--- reload the page) before running this migration, and confirm with:
+--   select vault.create_secret(
+--            encode(extensions.gen_random_bytes(32), 'hex'),
+--            'hops_email_encryption_key',
+--            'Hops: symmetric key for profiles.email_encrypted');
 --
---   select current_setting('app.email_encryption_key', true) is not null
---          as enc_key_visible,
---          current_setting('app.email_blind_index_key', true) is not null
---          as idx_key_visible;
+--   select vault.create_secret(
+--            encode(extensions.gen_random_bytes(32), 'hex'),
+--            'hops_email_blind_index_key',
+--            'Hops: HMAC key for profiles.email_lookup');
 --
--- Both must be true. If they are not, section 4 below quietly SKIPS its
--- backfill (by design — it would rather add the columns and tell you than
--- fail the whole migration), leaving every email_encrypted null. Re-running
--- this file once the keys are visible completes it; everything here is
--- idempotent.
+-- The key is generated inside the database and never passes through a
+-- clipboard, a terminal history or a chat window. Nothing to paste, and
+-- nothing to leak by pasting.
 --
--- KEEP A COPY SOMEWHERE OFF THE DATABASE. Losing the encryption key means
--- losing every stored address with no way back; losing the blind-index key
--- means every email lookup stops matching. Neither is recoverable from a
--- backup of the database alone — that is the point.
+-- VERIFY both exist before running the rest of this file:
 --
--- These raise rather than defaulting to a constant. A hardcoded fallback
--- key would silently produce ciphertext anyone reading this file could
--- decrypt, which is worse than not encrypting, because it reads as
--- protection in the report while providing none.
+--   select name, created_at from vault.decrypted_secrets
+--    where name like 'hops_email_%';
+--
+-- Two rows expected. Unlike the GUC approach this needs no new session —
+-- it is table data, visible immediately.
+--
+-- KEEP A COPY OF BOTH OFF THIS DATABASE anyway:
+--
+--   select name, decrypted_secret from vault.decrypted_secrets
+--    where name like 'hops_email_%';
+--
+-- Worth doing despite Vault being the safer store, because the Vault
+-- master key belongs to THIS Supabase project. Restoring a `pg_dump` into
+-- a different project — which is exactly what scripts/verify-backup.ps1
+-- does locally — gives you rows whose email_encrypted cannot be decrypted
+-- there. With the hex keys recorded you can set them as a GUC on the
+-- restore target (the fallback below reads one); without them that data is
+-- gone. Treat them like the database password: password manager, not the
+-- repository.
+--
+-- TO ROTATE a key later, use vault.update_secret() — but note that
+-- re-encrypting existing rows is a separate migration, since every
+-- email_encrypted value was produced with the old key.
 -- ---------------------------------------------------------------------------
+
+-- Resolves one 32-byte key, as hex, from Vault — falling back to a
+-- database parameter so this still works on a plain Postgres (and on a
+-- restored backup, where Vault cannot decrypt anything: see the note
+-- above about the master key belonging to one project).
+--
+-- Raises rather than defaulting to a constant. A hardcoded fallback key
+-- would silently produce ciphertext that anyone reading this file could
+-- decrypt — worse than not encrypting, because it reads as protection in
+-- the report while providing none.
+create or replace function public.hops_secret_bytes(
+  p_vault_name text,
+  p_guc_name text
+) returns bytea
+language plpgsql
+stable
+security definer
+set search_path = public, extensions
+as $fn$
+declare
+  v_key text;
+begin
+  -- Vault first. Wrapped because the whole schema is absent on a
+  -- non-Supabase Postgres, which is a missing-table error rather than an
+  -- empty result.
+  begin
+    select ds.decrypted_secret into v_key
+      from vault.decrypted_secrets ds
+     where ds.name = p_vault_name
+     limit 1;
+  exception
+    when undefined_table or undefined_schema or insufficient_privilege then
+      v_key := null;
+  end;
+
+  if v_key is null or length(v_key) < 64 then
+    v_key := current_setting(p_guc_name, true);
+  end if;
+
+  if v_key is null or length(v_key) < 64 then
+    raise exception
+      'Secret % is not configured (need 64 hex chars). See migration 0021 for how to create it in Vault.',
+      p_vault_name
+      using errcode = '42501';
+  end if;
+
+  return decode(v_key, 'hex');
+end;
+$fn$;
+
+revoke all on function public.hops_secret_bytes(text, text) from public;
+
 create or replace function public.email_encryption_key()
 returns bytea
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, extensions
 as $fn$
-declare
-  v_key text := current_setting('app.email_encryption_key', true);
 begin
-  if v_key is null or length(v_key) < 64 then
-    raise exception
-      'app.email_encryption_key is not set (need 64 hex chars). See migration 0021.'
-      using errcode = '42501';
-  end if;
-  return decode(v_key, 'hex');
+  return public.hops_secret_bytes('hops_email_encryption_key',
+                                  'app.email_encryption_key');
 end;
 $fn$;
 
@@ -110,17 +176,11 @@ returns bytea
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = public, extensions
 as $fn$
-declare
-  v_key text := current_setting('app.email_blind_index_key', true);
 begin
-  if v_key is null or length(v_key) < 64 then
-    raise exception
-      'app.email_blind_index_key is not set (need 64 hex chars). See migration 0021.'
-      using errcode = '42501';
-  end if;
-  return decode(v_key, 'hex');
+  return public.hops_secret_bytes('hops_email_blind_index_key',
+                                  'app.email_blind_index_key');
 end;
 $fn$;
 
@@ -275,7 +335,7 @@ begin
   exception
     when others then
       raise notice
-        'Encryption keys not set — columns added but NOT backfilled. Set app.email_encryption_key and app.email_blind_index_key (see the header), then re-run this migration.';
+        'Encryption keys not configured — columns added but NOT backfilled. Create the two Vault secrets (see this file''s header), then re-run this migration. The domain restriction below is unaffected and is now active.';
       return;
   end;
 
