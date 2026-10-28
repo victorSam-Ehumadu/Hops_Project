@@ -96,25 +96,31 @@ Resend (free tier 3,000/month); `sendEmail()`'s signature is unchanged so
 the three functions were untouched.
 
 - [x] ~~SendGrid domain authentication~~ — superseded.
-- [ ] **Resend → Domains → Add Domain → `hopsapp.me`.** Add every DNS
+- [x] **Resend → Domains → Add Domain → `hopsapp.me`.** Add every DNS
       record it lists. Same Namecheap Host-field rules as before (§1b of
       `deployment-domain-and-backup.md`).
 - [ ] **Remove the old SendGrid CNAMEs** from Namecheap once Resend
       verifies — the `em…` and `s1/s2._domainkey` rows. Harmless if left,
       but they are dead records pointing at an expired account.
-- [ ] **Create a Resend API key** (API Keys → Create, Sending access) and
+- [x] **Create a Resend API key** (API Keys → Create, Sending access) and
       set it:
       ```
       RESEND_API_KEY = re_your_key_here
       ```
       Via **Project Settings → Edge Functions → Secrets** if you have no
       CLI. Raw value — no shell quotes.
+- [x] **Deploy all three functions** after any `_shared/send_email.ts`
+      change — the bundler inlines it, so a local edit does nothing until
+      each is redeployed. This is what made the Resend switch look broken.
+      `npx --yes supabase@latest functions deploy <name> --project-ref <ref>`
+      from the repo root, in your own PowerShell (`supabase login` needs a
+      real terminal).
 - [ ] **Delete the now-unused `SENDGRID_API_KEY` secret** so a stale
       credential is not left configured.
 - [ ] Add the DMARC TXT record at `_dmarc.hopsapp.me`, starting with
       `p=none`.
-- [ ] `supabase secrets set HOPS_EMAIL_FROM="Hops <no-reply@hopsapp.me>"`
-- [ ] Send one OTP to a Gmail address and confirm it lands in the **inbox,
+- [x] `supabase secrets set HOPS_EMAIL_FROM="Hops <no-reply@hopsapp.me>"`
+- [x] Send one OTP to a Gmail address and confirm it lands in the **inbox,
       not spam**. That is the only check that matters — and the thing this
       whole step buys you, since Single Sender Verification has no domain
       authentication and OTPs currently get filtered.
