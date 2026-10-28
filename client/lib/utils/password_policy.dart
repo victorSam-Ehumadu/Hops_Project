@@ -76,8 +76,8 @@ const String kInstitutionalEmailDomain = '@my.richfield.ac.za';
 /// mirrored server-side in 0021 — both must be emptied, since either one
 /// alone still lets a signup through.
 const List<String> kTestEmailAllowlist = <String>[
-  // Add the exact test addresses you need, lowercase, e.g.:
-  // 'group18.hops.test@gmail.com',
+  'victorsamehumadu@gmail.com',
+  'vikkysamehumadu@gmail.com',
 ];
 
 /// Validates an address that is about to BECOME an account's email —

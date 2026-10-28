@@ -165,3 +165,92 @@ download page on `hopsapp.me` via Vercel for the "it is deployed"
 requirement. Say plainly that the app is an Android package rather than a
 web app — that is a correct architectural consequence of an offline-first
 BLE mesh, not a gap.
+
+---
+
+## 3. Hosting the website on hopsapp.me
+
+`website/` is plain HTML and CSS with no build step, which makes this
+about as simple as deployment gets. `website/vercel.json` configures it:
+clean URLs, long-lived caching for `assets/`, the correct
+`application/vnd.android.package-archive` type for any `.apk` served, and
+a set of security headers. `404.html` is picked up automatically.
+
+### Deploy
+
+```
+npm i -g vercel          # once
+cd website
+vercel                   # first run: links the project, deploys a preview
+vercel --prod            # publish
+```
+
+Vercel will ask for the root directory — it is `website`, not the repo
+root, or it will try to build the Flutter app.
+
+Alternatively connect the GitHub repo in the Vercel dashboard and set
+**Root Directory** to `website`, **Framework Preset** to *Other*, and
+leave the build command empty. Every push to `main` then redeploys.
+
+### Point the domain at it
+
+1. Vercel dashboard → the project → **Settings → Domains** → add
+   `hopsapp.me` and `www.hopsapp.me`.
+2. At your registrar, either delegate the whole domain to Vercel's
+   nameservers (simplest), or add the records Vercel shows:
+
+   | Type | Host | Value |
+   |---|---|---|
+   | A | `@` | `76.76.21.21` |
+   | CNAME | `www` | `cname.vercel-dns.com` |
+
+   Use the values the dashboard gives you — they do change.
+3. HTTPS is issued automatically once DNS resolves.
+
+**If you delegate nameservers to Vercel, the SendGrid and DMARC records
+from section 1 must be re-created in Vercel's DNS**, not left at the old
+registrar — they will stop resolving otherwise, and OTP email quietly
+starts failing SPF/DKIM. This is the one way these two sections interact,
+and it is easy to miss because email keeps *sending*; it just stops being
+trusted.
+
+### Wiring the APK to the download page
+
+`download.html` now links to:
+
+```
+https://github.com/victorSam-Ehumadu/Hops_Project/releases/latest/download/hops.apk
+```
+
+`releases/latest/download/...` always resolves to the newest release, so
+publishing a new build updates the site with no edit. The asset must be
+named exactly `hops.apk`:
+
+```
+cd client
+flutter build apk --release
+cp build/app/outputs/flutter-apk/app-release.apk hops.apk
+gh release create v1.0-phase5 hops.apk     --title "Phase 5 submission build"     --notes "Build demonstrated for Phase 5."
+```
+
+**One blocker to check first: release assets on a private repository are
+not publicly downloadable.** If `Hops_Project` is still private, anyone
+clicking Download gets a 404. Two ways round it:
+
+- **Make the repository public.** Check first that nothing sensitive is
+  committed. `client/.env` and `backups/` are both gitignored, so the
+  likely candidates are already excluded — but confirm with
+  `git log --all --name-only | sort -u | grep -iE 'env|secret|key|backup'`
+  before flipping it, because git history keeps anything ever committed
+  even if it was later deleted.
+- **Serve the APK from the site instead.** Drop it at
+  `website/assets/hops.apk` and change the link to `/assets/hops.apk`.
+  `vercel.json` already sets the right content type. Simpler and works
+  with a private repo; the cost is a ~50 MB binary in git history, which
+  grows with every build you commit.
+
+The page also now carries install instructions, which matter more than
+they look: Android blocks installing an APK from a browser by default, and
+a user who hits that prompt with no guidance concludes the download is
+broken. The steps also state the Wi-Fi requirement for the first 1:1
+connection, so it is set out before someone hits it rather than after.

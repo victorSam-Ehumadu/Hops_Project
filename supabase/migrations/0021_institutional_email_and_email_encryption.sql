@@ -186,7 +186,10 @@ declare
   -- TESTING ONLY. Full addresses, never a bare domain — '@gmail.com' here
   -- would reopen signup to everyone. Empty this before real use, and empty
   -- kTestEmailAllowlist in password_policy.dart at the same time.
-  v_allowlist text[] := array[]::text[];
+  v_allowlist text[] := array[
+    'victorsamehumadu@gmail.com',
+    'vikkysamehumadu@gmail.com'
+  ]::text[];
 begin
   if v_email = '' then
     return false;

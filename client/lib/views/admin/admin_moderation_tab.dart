@@ -316,6 +316,53 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
                                   r['snapshot_text'] as String? ?? '',
                                   style: const TextStyle(fontSize: 14),
                                 ),
+                                // What the reporter wrote themselves.
+                                // Visually distinct from snapshot_text
+                                // above, which is the reported CONTENT —
+                                // conflating the two would be bad, since
+                                // one is evidence and the other is an
+                                // account of it. Only rendered when
+                                // present: the field is optional, and
+                                // every report filed before the note
+                                // existed has none.
+                                if ((r['note'] as String?)?.trim().isNotEmpty
+                                    ?? false) ...[
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: colors.primary
+                                          .withValues(alpha: 0.07),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border(
+                                        left: BorderSide(
+                                            color: colors.primary, width: 3),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          "REPORTER'S NOTE",
+                                          style: TextStyle(
+                                            fontSize: 9.5,
+                                            letterSpacing: 0.7,
+                                            fontWeight: FontWeight.w700,
+                                            color: colors.primary,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          (r['note'] as String).trim(),
+                                          style: const TextStyle(
+                                              fontSize: 13, height: 1.4),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 8),
                                 Text(
                                   targetUsername != null

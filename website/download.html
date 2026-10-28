@@ -50,11 +50,24 @@
           <p><strong>The full app.</strong> Every feature works here &mdash; Radar, Emergency Flare,
              chat, Hops Share, Community Alerts and the rest.</p>
           <p style="font-size:13px; color: var(--text-soft);">Requires Android 7.0 (Nougat) or newer.</p>
-          <!-- TODO: replace with the real APK / Play Store link before launch -->
+          <!--
+            Points at the newest GitHub Release asset, so publishing a new
+            release updates this link with no site change. The asset must be
+            uploaded named exactly hops.apk for this URL to resolve.
+
+            NOTE: release assets on a PRIVATE repository are not publicly
+            downloadable. If Hops_Project is still private, either make it
+            public or drop the APK at website/assets/hops.apk and point this
+            at /assets/hops.apk instead (vercel.json already serves .apk
+            with the right Content-Type).
+          -->
           <p style="margin-top:16px;">
-            <a class="btn btn-primary" href="#" aria-disabled="true" tabindex="-1">Download APK</a>
+            <a class="btn btn-primary"
+               href="https://github.com/victorSam-Ehumadu/Hops_Project/releases/latest/download/hops.apk"
+               download>Download APK</a>
           </p>
-          <p style="font-size:12px; color: var(--text-soft);">Link not live yet &mdash; placeholder</p>
+          <p style="font-size:12px; color: var(--text-soft);">
+             Not on the Play Store &mdash; see the install steps below.</p>
         </div>
 
         <div class="card" style="text-align:center;">
@@ -95,6 +108,37 @@
         </div>
 
       </div>
+
+      <div class="card" style="margin-top:28px;">
+        <h3>Installing on Android</h3>
+        <p>Hops is distributed as an APK rather than through the Play Store,
+           so Android will ask you to confirm the install. This is normal for
+           an app installed directly, and the prompts differ slightly between
+           phones.</p>
+        <ol style="line-height:1.8;">
+          <li>Tap <strong>Download APK</strong> above. Your browser may warn
+              that this kind of file can be harmful &mdash; that warning
+              appears for every APK, not just this one.</li>
+          <li>Open the downloaded file. Android will say installing from this
+              source is blocked.</li>
+          <li>Choose <strong>Settings</strong> on that prompt and switch on
+              <em>Allow from this source</em> (older phones call it
+              <em>Install unknown apps</em> or <em>Unknown sources</em>).</li>
+          <li>Go back and tap <strong>Install</strong>.</li>
+          <li>Open Hops. It will ask for <strong>Bluetooth</strong>,
+              <strong>Location</strong> and <strong>Notifications</strong>.
+              All three are needed for the mesh to work &mdash; Android
+              requires Location permission before it will report nearby
+              Bluetooth devices at all.</li>
+        </ol>
+        <p style="font-size:13px; color: var(--text-soft);">
+           Creating your account is the one step that needs a connection.
+           Note that the <strong>first</strong> 1:1 chat connection to each
+           contact also needs Wi-Fi switched on at both ends &mdash; it does
+           not need to be joined to a network, and no data is used. After
+           that first connection, it is pure Bluetooth.</p>
+      </div>
+
 
       <div class="note-box" style="margin-top: 40px; text-align: center;">
         <strong>On first launch</strong> Hops asks for Bluetooth and location permissions &mdash;
