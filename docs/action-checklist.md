@@ -42,6 +42,15 @@ are, the features they back silently do nothing.
       encrypted note. Losing the encryption key loses every stored address
       with no way back. Neither key is recoverable from a database backup,
       which is the entire point of them.
+- [ ] **Open a NEW SQL Editor tab before applying `0021`.**
+      `alter database ... set` applies to new sessions only, so the tab that
+      set the keys cannot see them. Confirm first:
+      ```sql
+      select current_setting('app.email_encryption_key', true) is not null as enc_key,
+             current_setting('app.email_blind_index_key', true) is not null as idx_key;
+      ```
+      Both must be `true`, or `0021` adds its columns and silently skips the
+      backfill.
 - [ ] **Apply `0021_institutional_email_and_email_encryption.sql`.**
       Restricts signup to `@my.richfield.ac.za` and encrypts email at rest.
 - [ ] **Apply `0022_admin_statistics.sql`.** The charts and rankings.

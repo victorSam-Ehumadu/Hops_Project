@@ -42,6 +42,9 @@
 --    encrypts to different bytes each time.
 -- ---------------------------------------------------------------------------
 
+-- Supabase ships pgcrypto pre-installed in the `extensions` schema, so this
+-- is normally a no-op; it is here for a plain Postgres. `if not exists`
+-- matches the extension wherever it already lives, so this never moves it.
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------------
@@ -54,6 +57,22 @@ create extension if not exists pgcrypto;
 --   alter database postgres set app.email_blind_index_key = '<64 hex chars>';
 --
 -- Generate each with:  select encode(gen_random_bytes(32), 'hex');
+--
+-- ORDER MATTERS, AND SO DOES THE CONNECTION. `alter database ... set`
+-- applies to NEW sessions only — the one that ran it still sees the old
+-- (absent) value. Set the keys, then open a fresh SQL Editor tab (or
+-- reload the page) before running this migration, and confirm with:
+--
+--   select current_setting('app.email_encryption_key', true) is not null
+--          as enc_key_visible,
+--          current_setting('app.email_blind_index_key', true) is not null
+--          as idx_key_visible;
+--
+-- Both must be true. If they are not, section 4 below quietly SKIPS its
+-- backfill (by design — it would rather add the columns and tell you than
+-- fail the whole migration), leaving every email_encrypted null. Re-running
+-- this file once the keys are visible completes it; everything here is
+-- idempotent.
 --
 -- KEEP A COPY SOMEWHERE OFF THE DATABASE. Losing the encryption key means
 -- losing every stored address with no way back; losing the blind-index key
@@ -120,7 +139,14 @@ returns bytea
 language sql
 stable
 security definer
-set search_path = public
+-- search_path includes `extensions` because this function calls pgcrypto.
+-- Supabase installs pgcrypto into the `extensions` schema, not `public`,
+-- so `set search_path = public` alone makes pgp_sym_encrypt/pgp_sym_decrypt/
+-- hmac invisible and the function fails to create with
+-- "function pgp_sym_encrypt(text, text) does not exist". Listing a schema
+-- that does not exist is harmless, so this also works on a plain Postgres
+-- where pgcrypto landed in public.
+set search_path = public, extensions
 as $fn$
   select case
     when p_email is null then null
@@ -133,7 +159,14 @@ returns text
 language plpgsql
 stable
 security definer
-set search_path = public
+-- search_path includes `extensions` because this function calls pgcrypto.
+-- Supabase installs pgcrypto into the `extensions` schema, not `public`,
+-- so `set search_path = public` alone makes pgp_sym_encrypt/pgp_sym_decrypt/
+-- hmac invisible and the function fails to create with
+-- "function pgp_sym_encrypt(text, text) does not exist". Listing a schema
+-- that does not exist is harmless, so this also works on a plain Postgres
+-- where pgcrypto landed in public.
+set search_path = public, extensions
 as $fn$
 begin
   if p_cipher is null then
@@ -154,12 +187,26 @@ returns text
 language sql
 stable
 security definer
-set search_path = public
+-- search_path includes `extensions` because this function calls pgcrypto.
+-- Supabase installs pgcrypto into the `extensions` schema, not `public`,
+-- so `set search_path = public` alone makes pgp_sym_encrypt/pgp_sym_decrypt/
+-- hmac invisible and the function fails to create with
+-- "function pgp_sym_encrypt(text, text) does not exist". Listing a schema
+-- that does not exist is harmless, so this also works on a plain Postgres
+-- where pgcrypto landed in public.
+set search_path = public, extensions
 as $fn$
   select case
     when p_email is null then null
+    -- convert_to(...) because pgcrypto provides hmac(text,text,text) and
+    -- hmac(bytea,bytea,text) but NOT a mixed hmac(text,bytea,text). The
+    -- key function returns bytea, so the data has to be bytea too or the
+    -- function fails to create with "No function matches the given name
+    -- and argument types".
     else encode(
-      hmac(lower(trim(p_email)), public.email_blind_index_key(), 'sha256'),
+      hmac(convert_to(lower(trim(p_email)), 'UTF8'),
+           public.email_blind_index_key(),
+           'sha256'),
       'hex')
   end;
 $fn$;
