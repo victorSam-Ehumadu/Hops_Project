@@ -9,6 +9,15 @@ identical to a bug from the outside.
 
 ---
 
+> **One thing about the Supabase SQL Editor, since it keeps catching
+> people:** when a script contains several statements, it displays only the
+> **last** result set. So a two-statement script looks like it only did one
+> thing, and a report query pasted after another query seems to return
+> nothing. Nothing is actually wrong — but it means you should verify with
+> a separate `select` rather than trusting what the editor shows, and run
+> report queries one at a time by selecting just those lines before
+> pressing Run.
+
 ## 1. Database — do this first, nothing else depends on itself
 
 Three migrations are written and committed but **not applied**. Until they
