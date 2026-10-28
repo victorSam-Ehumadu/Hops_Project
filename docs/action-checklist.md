@@ -23,7 +23,7 @@ identical to a bug from the outside.
 Three migrations are written and committed but **not applied**. Until they
 are, the features they back silently do nothing.
 
-- [ ] **Run the probe first.** Supabase dashboard → your project → **SQL
+- [x] **Run the probe first.** Supabase dashboard → your project → **SQL
       Editor** → New query. Paste `supabase/check-applied-migrations.sql`.
       Read-only, safe any time. It tells you exactly which of 0001–0022
       are live.
@@ -36,11 +36,11 @@ are, the features they back silently do nothing.
       them. `0020` refuses to run while any exist — deliberately, since
       choosing which of two accounts named `victor` is real is your call,
       not a migration's. Delete or rename the extras.
-- [ ] **Apply `0020_username_uniqueness_and_standing_enforcement.sql`.**
+- [x] **Apply `0020_username_uniqueness_and_standing_enforcement.sql`.**
       This is the one that makes **suspend and ban actually work** — until
       it is applied, a suspended user can sign straight back in. Also stops
       duplicate usernames.
-- [ ] **Create two Vault secrets** *before* `0021`, or it adds the columns
+- [x] **Create two Vault secrets** *before* `0021`, or it adds the columns
       and skips the backfill. `alter database ... set` does NOT work on
       Supabase — the `postgres` role is not a superuser and it fails with
       `42501 permission denied to set parameter`. Use Vault:
@@ -57,7 +57,7 @@ are, the features they back silently do nothing.
       ```
       The key is generated inside the database, so it never passes through
       a clipboard or chat window. No new session needed — it is table data.
-- [ ] **Verify both exist** (two rows expected):
+- [x] **Verify both exist** (two rows expected):
       ```sql
       select name, created_at from vault.decrypted_secrets
        where name like 'hops_email_%';
@@ -73,9 +73,9 @@ are, the features they back silently do nothing.
       what `verify-backup.ps1` does locally — and `email_encrypted` cannot
       be decrypted there. With the hex recorded you can set it as a GUC on
       the restore target; without it that data is gone.
-- [ ] **Apply `0021_institutional_email_and_email_encryption.sql`.**
+- [x] **Apply `0021_institutional_email_and_email_encryption.sql`.**
       Restricts signup to `@my.richfield.ac.za` and encrypts email at rest.
-- [ ] **Apply `0022_admin_statistics.sql`.** The charts and rankings.
+- [x] **Apply `0022_admin_statistics.sql`.** The charts and rankings.
 - [ ] **Re-run the probe.** Rows `0021 (d)` and `(e)` matter most: `(d)`
       confirms the keys are set, `(e)` confirms the backfill actually ran.
       Columns existing is *not* the same as email being encrypted.
@@ -89,7 +89,7 @@ Two independent jobs on the same domain. Details in
 
 ### Email sending
 
-- [ ] SendGrid → **Settings → Sender Authentication → Authenticate Your
+- [x] SendGrid → **Settings → Sender Authentication → Authenticate Your
       Domain** → `hopsapp.me`. Add the three CNAMEs it generates at your
       registrar, then Verify.
 - [ ] Add the DMARC TXT record at `_dmarc.hopsapp.me`, starting with

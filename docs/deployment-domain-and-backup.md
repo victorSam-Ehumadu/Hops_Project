@@ -71,6 +71,43 @@ demo.
 6. Send one real OTP to a Gmail address and confirm it arrives in the
    inbox rather than spam. That is the only check that matters.
 
+### After SendGrid says "Verified"
+
+Verification proves the DNS is right. It does **not** change what the app
+sends — `_shared/send_email.ts` reads `HOPS_EMAIL_FROM` and keeps using
+whatever that is, so until the secret changes, mail still goes out from the
+old Single Sender address and still lands in spam. Four steps:
+
+1. **Add the DMARC record** (Namecheap, Host `_dmarc`, TXT) and set up
+   forwarding for `dmarc@` so the reports have somewhere to land — see
+   §1b.
+2. **Point the functions at the new sender:**
+   ```
+   supabase secrets set HOPS_EMAIL_FROM="Hops <no-reply@hopsapp.me>"
+   supabase secrets set HOPS_APPEALS_EMAIL="<a mailbox you read>"
+   ```
+3. **Redeploy all three functions.** Not optional:
+   ```
+   supabase functions deploy send-password-reset-otp
+   supabase functions deploy send-verification-email
+   supabase functions deploy send-moderation-email
+   ```
+   `send_email.ts` captures the secret in a **top-level `const`**, which
+   runs once when a function instance cold-starts — not per request. A
+   warm instance therefore keeps serving the old address indefinitely
+   after a secret change. Redeploying forces fresh instances.
+4. **Test, and check the headers rather than just the arrival.** Trigger
+   Forgot Password in the app against an allowlisted address, then in
+   Gmail open the message → ⋮ → **Show original**. You want:
+   ```
+   SPF:   PASS
+   DKIM:  PASS
+   DMARC: PASS
+   ```
+   All three passing is the actual goal — "it arrived" can still be true
+   for mail that only just escaped the spam folder. If DKIM fails while
+   SPF passes, a `_domainkey` CNAME is wrong.
+
 ---
 
 ## 1b. Adding the records in Namecheap
