@@ -69,11 +69,17 @@ select '0021b email encryption columns',
             then 'yes' else 'NO' end
 union all
 -- Separate from 0021b on purpose: 0021 adds the columns but SKIPS its
--- backfill when the keys are unset, leaving every value null. Columns
--- present with no keys is a half-done state, not a done one.
-select '0021c encryption keys set',
-       case when current_setting('app.email_encryption_key', true) is not null
-             and current_setting('app.email_blind_index_key', true) is not null
+-- backfill when the keys are unavailable, leaving every value null.
+-- Columns present with no keys is a half-done state, not a done one.
+--
+-- Reads Vault, not a database parameter — `alter database ... set` needs
+-- superuser and cannot work on Supabase, which is why 0021 uses Vault.
+select '0021c Vault keys present',
+       case when coalesce((select count(*) >= 2
+                             from vault.decrypted_secrets
+                            where name in ('hops_email_encryption_key',
+                                           'hops_email_blind_index_key')),
+                          false)
             then 'yes' else 'NO' end
 union all
 select '0022 statistics functions',
@@ -85,6 +91,27 @@ select '0022 statistics functions',
                                        'get_admin_most_active_users',
                                        'assert_caller_is_admin')) = 4
             then 'yes' else 'NO' end
+union all
+-- The row that actually proves encryption works: ciphertext present AND
+-- it decrypts back to the original. 'partial' means the backfill ran
+-- against some rows only.
+select '0021d email actually encrypted',
+       case
+         when not exists (select 1 from information_schema.columns
+                           where table_schema = 'public'
+                             and table_name = 'profiles'
+                             and column_name = 'email_encrypted')
+           then 'n/a - 0021 not applied'
+         when (select count(*) from public.profiles where email is not null) = 0
+           then 'n/a - no emails stored'
+         when (select count(*) from public.profiles
+                where email is not null and email_encrypted is null) = 0
+           then 'yes'
+         when (select count(*) from public.profiles
+                where email is not null and email_encrypted is not null) > 0
+           then 'partial - re-run 0021'
+         else 'NO - backfill never ran'
+       end
 union all
 -- Not a migration: 0020 refuses to run while any duplicate exists, so
 -- this is folded in here to save running a second query for it.

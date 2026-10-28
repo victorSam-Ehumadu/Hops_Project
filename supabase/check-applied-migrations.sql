@@ -113,11 +113,21 @@ with probe(seq, migration, applied, evidence) as (
       and exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                    where n.nspname = 'public' and p.proname = 'suspend_user'),
     'profiles.suspended_until + function suspend_user'
+  -- Was probing resolve_report for '%target_email%', which NEVER appears
+  -- in 0016 — that file's own header says the moderation email is handled
+  -- client-side and "nothing in THIS file changes for it". So the probe
+  -- reported 0016 as missing on a database where it was applied. What 0016
+  -- actually adds is admin_actions_log.reporter_username, so a
+  -- report-driven log row can show who reported as well as who was
+  -- reported.
   union all select 16, '0016_moderation_email_and_log_detail',
-    exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-             where n.nspname = 'public' and p.proname = 'resolve_report'
-               and p.prosrc like '%target_email%'),
-    'resolve_report returns the target email'
+    exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'admin_actions_log'
+               and column_name = 'reporter_username')
+      and exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                   where n.nspname = 'public' and p.proname = 'resolve_report'
+                     and p.prosrc like '%reporter_username%'),
+    'admin_actions_log.reporter_username + resolve_report writes it'
   union all select 17, '0017_report_content_types_study_lost_found',
     exists (select 1 from pg_constraint c
              join pg_class t on t.oid = c.conrelid
@@ -178,13 +188,21 @@ with probe(seq, migration, applied, evidence) as (
                    where table_schema = 'public' and table_name = 'profiles'
                      and column_name = 'email_lookup'),
     'profiles.email_encrypted + email_lookup'
-  union all select 26, '0021 (d) encryption keys configured',
-    -- Separate from (c) because 0021 adds the columns but SKIPS the
-    -- backfill when the keys are unset, leaving them all null. Columns
-    -- present with no keys is a half-done state, not a done one.
-    (current_setting('app.email_encryption_key', true) is not null
-      and current_setting('app.email_blind_index_key', true) is not null),
-    'app.email_encryption_key + app.email_blind_index_key are set'
+  -- Separate from (c) because 0021 adds the columns but SKIPS the backfill
+  -- when the keys are unavailable, leaving them all null. Columns present
+  -- with no keys is a half-done state, not a done one.
+  --
+  -- Reads VAULT, not a database parameter. The first version of 0021 kept
+  -- the keys in `app.email_encryption_key` via `alter database ... set`,
+  -- which cannot work on Supabase (that needs superuser; the postgres role
+  -- is not one). 0021 was rewritten to use Vault and this probe was left
+  -- checking the parameter, so it reported "not applied" for keys that
+  -- were present and working.
+  union all select 26, '0021 (d) Vault keys present',
+    coalesce((select count(*) >= 2 from vault.decrypted_secrets
+               where name in ('hops_email_encryption_key',
+                              'hops_email_blind_index_key')), false),
+    'two Vault secrets named hops_email_*'
   union all select 27, '0021 (e) email actually encrypted',
     not exists (select 1 from public.profiles
                  where email is not null and email_encrypted is null),
