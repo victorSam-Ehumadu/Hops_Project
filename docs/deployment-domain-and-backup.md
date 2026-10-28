@@ -96,6 +96,34 @@ nowhere and verifies as "pending" forever with no error to explain why.
 | `hopsapp.me` (the root) | `@` |
 | `www.hopsapp.me` | `www` |
 
+### "Value" (SendGrid) and "Target" (Namecheap) are the same field
+
+Namecheap labels a CNAME's destination **Target**; SendGrid calls it
+**Value**. Same thing — the hostname the record points at. Namecheap uses
+**Value** for TXT and A rows, so the label changes per record type even
+within the same panel.
+
+The part worth getting right: **Host and Target behave in opposite ways.**
+
+| Field | What to enter | Namecheap appends your domain? |
+|---|---|---|
+| **Host** | only the part before `.hopsapp.me` | **yes** |
+| **Target** / **Value** | the full hostname, exactly as given | **no** |
+
+So one SendGrid row:
+
+```
+s1._domainkey.hopsapp.me   CNAME   s1.domainkey.u1234567.wl.sendgrid.net
+```
+
+becomes Host `s1._domainkey` (trimmed) and Target
+`s1.domainkey.u1234567.wl.sendgrid.net` (complete, untouched). Trimming
+the Target, or appending `.hopsapp.me` to it, breaks the record just as
+surely as pasting the full hostname into Host does — and just as
+silently.
+
+No trailing dot is needed; Namecheap normalises that.
+
 ### Before adding anything: clear the parking records
 
 A fresh Namecheap domain ships with two records that will fight yours:
