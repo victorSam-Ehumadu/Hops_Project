@@ -81,21 +81,50 @@ old Single Sender address and still lands in spam. Four steps:
 1. **Add the DMARC record** (Namecheap, Host `_dmarc`, TXT) and set up
    forwarding for `dmarc@` so the reports have somewhere to land — see
    §1b.
-2. **Point the functions at the new sender:**
+2. **Point the functions at the new sender.** The three functions
+   (`send-password-reset-otp`, `send-verification-email`,
+   `send-moderation-email`) all share `_shared/send_email.ts`, which reads
+   this one secret — so this changes all three at once.
+
+   With the CLI:
    ```
    supabase secrets set HOPS_EMAIL_FROM="Hops <no-reply@hopsapp.me>"
    supabase secrets set HOPS_APPEALS_EMAIL="<a mailbox you read>"
    ```
-3. **Redeploy all three functions.** Not optional:
+
+   Without it — **Project Settings → Edge Functions → Secrets**
+   (`/dashboard/project/<ref>/settings/functions`). `HOPS_EMAIL_FROM`
+   already exists holding the old Single Sender address, so this is an
+   edit rather than an add:
+
+       Name:   HOPS_EMAIL_FROM
+       Value:  Hops <no-reply@hopsapp.me>
+
+       Name:   HOPS_APPEALS_EMAIL
+       Value:  <a mailbox you actually read>
+
+   Keep the `Hops <...>` wrapper — it is the display name recipients see,
+   and parseFromAddress() splits it into SendGrid's separate name/email
+   fields.
+3. **Get the running instances to pick up the new secret.** Usually this
+   needs nothing: the value is captured at instance cold-start, and
+   Supabase recycles idle instances, so after roughly five minutes the
+   next send uses the new sender. Set the secret, wait, then check the
+   From address on a test email.
+
+   If it still shows the old address, the instance is still warm and a
+   redeploy forces the issue:
    ```
    supabase functions deploy send-password-reset-otp
    supabase functions deploy send-verification-email
    supabase functions deploy send-moderation-email
    ```
    `send_email.ts` captures the secret in a **top-level `const`**, which
-   runs once when a function instance cold-starts — not per request. A
-   warm instance therefore keeps serving the old address indefinitely
-   after a secret change. Redeploying forces fresh instances.
+   runs once when a function instance cold-starts — not per request. That
+   is why a secret change is not necessarily immediate, and why checking
+   the From address on a real email is the only way to know it took
+   effect. Without the CLI, the dashboard's function editor can redeploy
+   too: Edge Functions → pick the function → Deploy.
 4. **Test, and check the headers rather than just the arrival.** Trigger
    Forgot Password in the app against an allowlisted address, then in
    Gmail open the message → ⋮ → **Show original**. You want:
