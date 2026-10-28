@@ -254,13 +254,23 @@ The clean fix is Namecheap's free **Email Forwarding**, which keeps the
 address on your own domain:
 
 1. **Domain** tab → `REDIRECT EMAIL` section → `ADD FORWARDER`.
-2. Forward `dmarc@hopsapp.me` to your own inbox.
-3. While there, add `no-reply@hopsapp.me` too — it is the sender address,
-   and mail to an address that hard-bounces is a small deliverability
-   negative. Forwarding it somewhere you ignore is better than it not
-   existing.
+2. The **Alias** field is the part before the `@` only — Namecheap appends
+   the domain, exactly like the Host field above. Type `dmarc`, not
+   `dmarc@hopsapp.me`.
 
-Namecheap adds the needed MX records for forwarding automatically.
+   | Alias | Forwards to |
+   |---|---|
+   | `dmarc` | your own inbox |
+   | `no-reply` | your own inbox |
+
+3. `no-reply` is worth adding as well as `dmarc`: it is the sender
+   address, and mail to an address that hard-bounces counts slightly
+   against deliverability. Forwarding it somewhere you ignore beats it not
+   existing. You will see replies people send to OTP emails — filter them
+   if they get noisy.
+
+Namecheap adds the needed MX records automatically when a forwarder is
+saved. Do not delete those later; they are what makes forwarding work.
 
 ### Checking it worked
 
