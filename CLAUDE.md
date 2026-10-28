@@ -38,6 +38,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `report-rfcomm-wifi-dependency.md` — why the *first* 1:1 chat connection to a contact
     needs Wi-Fi switched on, and why that does not contradict the offline claim. Source of
     record for the in-app hint and for the viva answer.
+  - `action-checklist.md` — the running list of outstanding operational tasks: which
+    migrations are unapplied, domain/DNS steps, two-device testing, and the flags that must be
+    flipped before real users (test-email allowlist, `debugUnlimitedCarrots`, `0009`'s email
+    relaxation). Keep it current as items are done.
   - `deployment-domain-and-backup.md` — DNS/SendGrid setup for the `hopsapp.me` sender, and
     what "a backup of the app" should actually mean (Vercel is the wrong tool for an APK;
     tagged GitHub Releases plus a kept copy of the gitignored `client/.env` are the gap).
