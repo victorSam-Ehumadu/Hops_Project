@@ -135,7 +135,15 @@ begin
      where ds.name = p_vault_name
      limit 1;
   exception
-    when undefined_table or undefined_schema or insufficient_privilege then
+    -- invalid_schema_name (3F000), NOT "undefined_schema" — that is not a
+    -- condition name Postgres recognises, and naming a non-existent one is
+    -- a COMPILE-time error (42704), so the function fails to create rather
+    -- than failing when the branch is reached.
+    --
+    -- These three cover the ways Vault can be unavailable: the schema
+    -- missing entirely (plain Postgres), the view missing, or the view
+    -- present but not readable by this role.
+    when undefined_table or invalid_schema_name or insufficient_privilege then
       v_key := null;
   end;
 
@@ -194,9 +202,21 @@ revoke all on function public.email_blind_index_key() from public;
 -- Without that, Victor@… and victor@… would index differently and a
 -- correct sign-in would miss its own row.
 -- ---------------------------------------------------------------------------
+-- plpgsql, not sql, deliberately. A `language sql` body is parsed and its
+-- function references resolved when the function is CREATED, and that
+-- resolution does not reliably honour the function's own `SET search_path`
+-- — which is how the first version of this failed with "function
+-- pgp_sym_encrypt(text, text) does not exist" even though the search_path
+-- named the extensions schema. A plpgsql body is only syntax-checked at
+-- creation and resolves names at run time, where the SET clause is
+-- unambiguously in effect.
+--
+-- The alternative was hardcoding `extensions.pgp_sym_encrypt(...)`, which
+-- works on Supabase but breaks on any Postgres where pgcrypto lives in
+-- public. This keeps it portable.
 create or replace function public.encrypt_email(p_email text)
 returns bytea
-language sql
+language plpgsql
 stable
 security definer
 -- search_path includes `extensions` because this function calls pgcrypto.
@@ -208,10 +228,14 @@ security definer
 -- where pgcrypto landed in public.
 set search_path = public, extensions
 as $fn$
-  select case
-    when p_email is null then null
-    else pgp_sym_encrypt(lower(trim(p_email)), encode(public.email_encryption_key(), 'hex'))
-  end;
+begin
+  if p_email is null then
+    return null;
+  end if;
+  return pgp_sym_encrypt(
+           lower(trim(p_email)),
+           encode(public.email_encryption_key(), 'hex'));
+end;
 $fn$;
 
 create or replace function public.decrypt_email(p_cipher bytea)
@@ -242,9 +266,10 @@ exception
 end;
 $fn$;
 
+-- Same plpgsql reasoning as encrypt_email above.
 create or replace function public.email_blind_index(p_email text)
 returns text
-language sql
+language plpgsql
 stable
 security definer
 -- search_path includes `extensions` because this function calls pgcrypto.
@@ -256,19 +281,19 @@ security definer
 -- where pgcrypto landed in public.
 set search_path = public, extensions
 as $fn$
-  select case
-    when p_email is null then null
-    -- convert_to(...) because pgcrypto provides hmac(text,text,text) and
-    -- hmac(bytea,bytea,text) but NOT a mixed hmac(text,bytea,text). The
-    -- key function returns bytea, so the data has to be bytea too or the
-    -- function fails to create with "No function matches the given name
-    -- and argument types".
-    else encode(
-      hmac(convert_to(lower(trim(p_email)), 'UTF8'),
-           public.email_blind_index_key(),
-           'sha256'),
-      'hex')
-  end;
+begin
+  if p_email is null then
+    return null;
+  end if;
+  -- convert_to(...) because pgcrypto provides hmac(text,text,text) and
+  -- hmac(bytea,bytea,text) but NOT a mixed hmac(text,bytea,text). The key
+  -- function returns bytea, so the data has to be bytea too.
+  return encode(
+           hmac(convert_to(lower(trim(p_email)), 'UTF8'),
+                public.email_blind_index_key(),
+                'sha256'),
+           'hex');
+end;
 $fn$;
 
 revoke all on function public.encrypt_email(text) from public;
