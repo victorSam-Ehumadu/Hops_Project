@@ -75,7 +75,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **206 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **225 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -128,6 +128,13 @@ What is and isn't covered, so you know what a green run actually proves:
   uses a 36-character non-uuid that a length-only check would have admitted. Another pins
   that partial corruption keeps the valid ids rather than discarding the batch, since one bad
   entry would otherwise block those messages from ever being acknowledged.
+- `test/utils/auth_error_messages_test.dart` (19) — what the user is told when auth fails.
+  Pins that anything the user can *fix* never reports a server fault (the bug it was written
+  for: a mistyped email threw a `TypeError` from the salt lookup and surfaced as "something
+  went wrong on our end"), that a ban is never described as a suspension, and — in the other
+  direction — that "wrong password" and "no such account" stay **identical**. The server
+  collapses those too (0008/0009/0018/0023); splitting them client-side would turn the sign-in
+  form into an account-existence oracle at the last step.
 - `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
 - `test/services/account_standing_test.dart` (18) — moderation verdicts: classifying the
   server's error into ban/suspension, and whether that verdict currently blocks the app.

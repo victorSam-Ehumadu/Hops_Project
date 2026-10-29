@@ -80,10 +80,46 @@ String generatePasswordSalt() {
 /// even for an email with no account, so this step alone can't be used to
 /// probe which emails are registered.
 Future<String> fetchPasswordSaltForEmail(String email) async {
-  final result = await Supabase.instance.client
-      .rpc('get_password_salt_by_email', params: {'p_email': email});
-  return result as String;
+  try {
+    final result = await Supabase.instance.client
+        .rpc('get_password_salt_by_email', params: {'p_email': email});
+    if (result is String && result.isNotEmpty) return result;
+    // Null or an unexpected shape. `result as String` used to be an
+    // unguarded cast here, so this threw a TypeError that no error
+    // message matched — and sign-in reported "something went wrong on our
+    // end" for what is usually just a wrong email address.
+    return _localFallbackSalt(email);
+  } on PostgrestException {
+    // The server-side function itself failed. That genuinely happened:
+    // 0018 created it with `search_path = public` while its no-such-account
+    // branch calls pgcrypto's digest(), which lives in `extensions` on
+    // Supabase — so the branch that handles an unknown email was the one
+    // branch that could not run. Fixed in 0023.
+    //
+    // Falling back locally rather than rethrowing, because what the user
+    // did is still almost certainly "typed the wrong email", and the
+    // honest message for that is bad credentials. A wrong salt produces a
+    // hash that matches nothing, so sign-in fails with exactly that — the
+    // correct outcome, reached without blaming the user for a server bug.
+    //
+    // Deliberately NOT catching everything: a SocketException must
+    // propagate so describeAuthException can say "no internet" instead of
+    // silently reporting bad credentials to someone whose password is
+    // fine.
+    return _localFallbackSalt(email);
+  }
 }
+
+/// A stable, real-looking salt for an address whose real salt could not be
+/// fetched.
+///
+/// Mirrors the server's own fallback (0018/0023) in shape and purpose:
+/// deterministic per address, so repeated attempts behave consistently and
+/// the lookup cannot be used to probe which emails have accounts. The
+/// prefix differs from the server's on purpose — this value must never
+/// coincide with a real stored salt.
+String _localFallbackSalt(String email) =>
+    hashPassword('hops-local-no-salt:${email.trim().toLowerCase()}');
 
 /// Post-authentication salt lookup — for re-confirming the CURRENT
 /// password on an already-signed-in device (change-password,

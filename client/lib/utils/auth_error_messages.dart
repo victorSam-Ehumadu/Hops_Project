@@ -49,6 +49,27 @@ String describeEmailSendFailure(Object? errorCode, {String skipHint = ''}) {
   }
 }
 
+/// WHY "wrong password" AND "no such account" STAY COLLAPSED
+///
+/// Several branches below answer both with the same sentence. That is
+/// deliberate and should not be "improved" into two messages, however much
+/// more helpful two would feel.
+///
+/// Distinguishing them turns the sign-in form into an account-existence
+/// oracle: anyone can type an email and learn from the wording whether
+/// that person has a Hops account. On a campus safety app that is a real
+/// disclosure — it reveals who is using it — and it is cheap to automate.
+///
+/// The server is built the same way on purpose: signin_hops_user_by_email
+/// returns an identical empty result for "no such email" and "wrong
+/// password" (0008/0009), and get_password_salt_by_email returns a
+/// real-looking fake salt for an unknown address (0018/0023) so even the
+/// pre-authentication lookup cannot be used to probe. Splitting the client
+/// message would throw that away at the last step.
+///
+/// Everything that is NOT about credentials is made as specific as
+/// possible, which is where the real complaint lay: a wrong email used to
+/// report a server fault.
 String describeAuthException(Object e) {
   final text = e.toString();
 
@@ -129,6 +150,52 @@ String describeAuthException(Object e) {
   }
   if (text.contains('function') && text.contains('does not exist')) {
     return "Hops' server isn't set up yet — this is a setup issue, not something you did wrong.";
+  }
+
+  // ── Cases that used to fall through to the generic message ──────────
+  //
+  // "Something went wrong on our end" is the right thing to say about an
+  // actual server fault and the wrong thing to say about anything the user
+  // can fix. It tells them to retry something that will keep failing, and
+  // gives no hint that the problem is their input. Each branch below
+  // existed as a real failure that reported itself that way.
+
+  // A TypeError or cast failure from parsing an unexpected response shape.
+  // fetchPasswordSaltForEmail used to throw exactly this when the salt
+  // lookup returned null — on a wrong email, which is the single most
+  // common sign-in mistake there is.
+  if (text.contains('is not a subtype of type') ||
+      text.contains('type \'Null\'')) {
+    return "That email and password don't match any Hops account.";
+  }
+  if (text.contains('invalid_username')) {
+    return "Usernames must be 3–20 characters, letters, numbers and "
+        "underscores only.";
+  }
+  if (text.contains('invalid_email')) {
+    return "That doesn't look like a valid email address.";
+  }
+  if (text.contains('invalid_credentials') ||
+      text.contains('28000') ||
+      text.contains('28P01')) {
+    return "That email and password don't match any Hops account.";
+  }
+  if (text.contains('not_authorized') || text.contains('42501')) {
+    return "You don't have permission to do that.";
+  }
+  if (text.contains('invalid_session')) {
+    return "Your session has expired — please sign in again.";
+  }
+  if (text.contains('rate limit') ||
+      text.contains('429') ||
+      text.contains('too many')) {
+    return "Too many attempts — wait a minute and try again.";
+  }
+  if (text.contains('ClientException') ||
+      text.contains('Connection closed') ||
+      text.contains('Connection reset') ||
+      text.contains('HandshakeException')) {
+    return "The connection dropped — check your signal and try again.";
   }
 
   // Fall back to a generic, still-non-technical message rather than
