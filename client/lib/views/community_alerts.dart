@@ -40,6 +40,7 @@ import 'package:client/utils/report_content.dart';
 // import is unconditional — Dart has no conditional imports on runtime
 // state, and the hub is a lazy singleton that does nothing until started.
 import 'package:client/services/admin_ble_hub.dart';
+import 'package:client/services/community_alert_sync.dart';
 
 class CommunityMessage {
   final String sender;
@@ -239,15 +240,130 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
     super.initState();
     _loadHistory();
     _listenToRadar();
+    // Server catch-up. The fetch itself runs on HopsApp's periodic poll,
+    // not here — this page only exists once its tab has been built, so a
+    // fetch living here would never run for a student who has not opened
+    // it. This just merges whatever that poll collected, including
+    // anything collected while this page did not exist.
+    CommunityAlertSync.instance.pending.addListener(_mergeServerAlerts);
+    _mergeServerAlerts();
     _controller.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
+    CommunityAlertSync.instance.pending.removeListener(_mergeServerAlerts);
     _streamSub?.cancel();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  // ── Server catch-up ───────────────────────────────────────────────────────
+
+  /// Folds alerts fetched from the server into this feed.
+  ///
+  /// Three things make this safe to run repeatedly and in any order
+  /// relative to the BLE path:
+  ///
+  ///   * Deduplicated on (senderTag, msgId) — the same pair the radio
+  ///     receiver keys reassembly on — so an alert that arrives by both
+  ///     routes appears once. An alert whose radio send failed has no tag
+  ///     and falls back to author plus timestamp.
+  ///   * No KeyDirectory lookup. A server row carries the author's real
+  ///     username and could only have been written by an account the
+  ///     server itself confirmed was an admin (post_community_alert checks
+  ///     the role), so there is nothing to verify locally. That is the
+  ///     fragile step this path exists to bypass: a device that has never
+  ///     synced the directory drops every CA: chunk silently, Bluetooth
+  ///     working perfectly.
+  ///   * Tombstones are applied to messages already held, so an alert
+  ///     withdrawn after this device received it over BLE still gets
+  ///     withdrawn here.
+  Future<void> _mergeServerAlerts() async {
+    final incoming = CommunityAlertSync.instance.pending.value;
+    if (incoming.isEmpty) return;
+
+    var changed = false;
+    for (final a in incoming) {
+      final existingIndex = _messages.indexWhere((m) {
+        if (a.senderTag != null && a.msgId != null) {
+          return m.senderTag == a.senderTag && m.msgId == a.msgId;
+        }
+        return m.realUsername == a.authorUsername &&
+            m.timestamp.millisecondsSinceEpoch ==
+                a.createdAt.millisecondsSinceEpoch;
+      });
+
+      if (existingIndex == -1) {
+        if (a.isDeleted) {
+          // Withdrawn before this device ever saw it — nothing to show and
+          // nothing to tombstone. Adding it just to cross it out would
+          // surface a message the admin had already retracted.
+          continue;
+        }
+        _messages.add(CommunityMessage(
+          sender: a.authorUsername,
+          text: a.body,
+          timestamp: a.createdAt,
+          isMe: false,
+          isAdmin: true,
+          realUsername: a.authorUsername,
+          senderTag: a.senderTag,
+          msgId: a.msgId,
+        ));
+        changed = true;
+      } else if (a.isDeleted && !_messages[existingIndex].isDeleted) {
+        _messages[existingIndex] = _messages[existingIndex].copyWith(
+          deletedReason: _tombstoneReason(a.deletedReason),
+        );
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      CommunityAlertSync.instance.clearPending();
+      return;
+    }
+
+    // Chronological: BLE arrivals and a server catch-up interleave by
+    // nature, and appending would show a missed alert from an hour ago
+    // below one that arrived a minute ago.
+    _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    if (mounted) {
+      setState(() {});
+      // Same "is the user actually looking at this" test the BLE path uses
+      // — see _resolveSenderAndAdd. A catch-up fetch is exactly the case
+      // where they are not.
+      final looking = widget.isVisible &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+      if (!looking) {
+        UnreadTracker.instance.mark(UnreadSource.communityAlerts);
+      } else {
+        _scrollToBottom();
+      }
+    }
+    await _persist();
+    CommunityAlertSync.instance.clearPending();
+  }
+
+  /// Server stores the reason as a small int; the wire format and the UI
+  /// use the enum.
+  ///
+  /// Distinct from CommunityMessage._reasonFromIndex, which returns null
+  /// for an unknown value. This one never does, deliberately: it feeds
+  /// copyWith(deletedReason:), which treats null as "leave unchanged", so
+  /// a null here would silently fail to tombstone the message. A slightly
+  /// wrong label still correctly hides withdrawn text, which is the part
+  /// that matters.
+  CommunityDeleteReason _tombstoneReason(int? index) {
+    if (index == null ||
+        index < 0 ||
+        index >= CommunityDeleteReason.values.length) {
+      return CommunityDeleteReason.values.first;
+    }
+    return CommunityDeleteReason.values[index];
   }
 
   // ── Persistence ───────────────────────────────────────────────────────────
@@ -973,6 +1089,21 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
   Future<void> _deleteOwnMessage(CommunityMessage msg) => _deleteMessage(msg, CommunityDeleteReason.removedBySender);
 
   Future<void> _deleteMessage(CommunityMessage msg, CommunityDeleteReason reason) async {
+    // Mirrored to the server as well as broadcast, so a device that only
+    // ever learns about this alert from the catch-up fetch also learns it
+    // was withdrawn. Without this, a student whose Bluetooth was off when
+    // the alert went out would receive it from the server and never see
+    // the retraction — the worst of both paths.
+    //
+    // Fire-and-forget relative to the radio result below: the broadcast is
+    // what the admin is told about, and this failing only costs the
+    // catch-up path.
+    unawaited(CommunityAlertSync.instance.withdraw(
+      senderTag: msg.senderTag ?? '',
+      msgId: msg.msgId ?? -1,
+      reason: reason.index,
+    ));
+
     final ok = await AdminBleHub.instance.broadcastMessageDeletion(
       senderTag: msg.senderTag!,
       msgId: msg.msgId!,

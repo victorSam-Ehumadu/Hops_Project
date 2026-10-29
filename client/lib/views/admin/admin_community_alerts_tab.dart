@@ -12,6 +12,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/services/admin_ble_hub.dart';
+import 'package:client/services/hops_constants.dart';
+import 'package:client/services/community_alert_sync.dart';
 import 'package:client/services/key_directory.dart';
 import 'package:client/views/community_alerts.dart';
 import 'package:client/utils/profanity_filter.dart';
@@ -58,8 +60,31 @@ class _AdminCommunityAlertsTabState extends State<AdminCommunityAlertsTab> {
         // up off a context that may have been disposed mid-broadcast is the
         // crash this lint exists to catch.
         final messenger = ScaffoldMessenger.of(context);
+        final clean = censorProfanity(message);
         final msgId =
-            await AdminBleHub.instance.broadcastAdminChatMessage(censorProfanity(message), username);
+            await AdminBleHub.instance.broadcastAdminChatMessage(clean, username);
+
+        // Also publish to the server, so a student whose Bluetooth was off
+        // — or who has never been online, and therefore has an empty
+        // KeyDirectory and silently drops CA: chunks — still gets this on
+        // their next poll. See community_alert_sync.dart for why this one
+        // feature has a server path when no other peer feature does.
+        //
+        // Awaited but not checked: the BLE send above is the primary
+        // result and the thing the admin is told about. An alert that went
+        // out over the radio reached everyone in range whether or not this
+        // succeeded, and a failure here only costs the catch-up path.
+        //
+        // The BLE msgId and sender tag go with it so a device that hears
+        // the alert over the radio AND later fetches it from the server
+        // recognises the two as one message rather than showing it twice.
+        await CommunityAlertSync.instance.post(
+          body: clean,
+          senderTag: username.length > kCommunityNameSenderTagChars
+              ? username.substring(0, kCommunityNameSenderTagChars)
+              : username,
+          msgId: msgId,
+        );
         // Surfaced rather than swallowed — a failed broadcast still leaves
         // the message in this admin's own list, so without this it looks
         // sent when nothing left the device.

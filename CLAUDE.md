@@ -413,8 +413,30 @@ Emergency Flares and Official Alerts (`services/key_directory.dart` distributes 
 `main.dart` decides `HopsApp` vs `HopsRootGatekeeper` purely by whether `saved_hops_token` exists;
 there's no token validation at startup, only the periodic `_syncIdentityStatus` poll.
 
-`profiles.role`, the moderation tables, and the admin action log are the only other server-side
-state — feature data (messages, tasks, vibes) never leaves the device.
+`profiles.role`, the moderation tables, the admin action log and **Community Alerts** are the
+only other server-side state — all other feature data (chat, tasks, vibes, study tags, games)
+never leaves the device.
+
+**Community Alerts is the one peer-facing feature with a server path, and that is deliberate.**
+It is not a peer feature: admin-to-everyone, read-only for students, and it already depended on
+server state to be trusted at all — the receiver drops any `CA:` chunk whose sender tag does not
+resolve through `KeyDirectory` to a cached account with `role = 'admin'`, and KeyDirectory syncs
+over the internet. So a student who had never been online silently discarded every alert with
+Bluetooth working perfectly. `0024` + `services/community_alert_sync.dart` add an explicit
+server path in place of that implicit, fragile one, and get durability for free:
+
+| Bluetooth | Internet | Delivered by |
+|---|---|---|
+| on | off | BLE, immediately |
+| off | on | the server, on the next 30s poll |
+| off | off | whichever comes back first |
+
+BLE remains primary — an alert still reaches everyone in range with no internet at all. The
+server is the **catch-up** path. Dedup is on `(senderTag, msgId)`, the same pair the BLE
+receiver keys reassembly on, so an alert arriving by both routes lands once. The fetch lives on
+`hops_app.dart`'s poll, **not** in the Community Alerts page: that page only exists once its tab
+has been built, which is the same mistake that stopped Vibe Check and Study Bunny being heard
+unless their page was open.
 
 **This bounds what the admin statistics can ever say.** `0022_admin_statistics.sql` plus
 `services/admin_stats_service.dart` back a filterable, charted view (24h/7d/30d/custom range,

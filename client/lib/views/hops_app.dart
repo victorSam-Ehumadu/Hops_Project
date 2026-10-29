@@ -34,6 +34,7 @@ import 'package:client/views/token_generator.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/services/account_standing.dart';
+import 'package:client/services/community_alert_sync.dart';
 import 'package:client/views/account_management_screen.dart'
     show endSessionForModeration;
 import 'package:client/models/feature_item.dart';
@@ -2103,6 +2104,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // flushPendingReports. Piggybacked on this same periodic "do we have a
     // connection" checkpoint rather than its own separate timer.
     unawaited(flushPendingReports());
+    // Community Alerts catch-up, on the same "do we have a connection"
+    // checkpoint. Deliberately NOT in the Community Alerts page: that page
+    // only exists once the tab has been built, so a fetch living there
+    // would never run for a student who has not opened it — which is the
+    // same mistake that stopped Vibe Check and Study Bunny being heard
+    // unless their page was open. See community_alert_sync.dart.
+    unawaited(CommunityAlertSync.instance.fetch());
     try {
       final response = await Supabase.instance.client
           .rpc('get_my_status', params: {'p_hops_token': token}).maybeSingle();
