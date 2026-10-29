@@ -75,7 +75,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **212 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **206 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -145,12 +145,13 @@ What is and isn't covered, so you know what a green run actually proves:
   bypasses `_releaseRadioToPresenceBeacon()`, or if a guard checks `_isFlareActive` without
   also checking `_ownFlareHoldsRadio`. Added because this bug class had already recurred and
   is otherwise only reachable with two physical devices — see "Concurrent alerts" below.
-- `test/views/contact_seed_exchange_test.dart` (9) — the same source-level technique, for
-  the rotating-seed handshake. Asserts all four relationship-forming advertisements
-  (`FR:`/`FA:`/`WR:`/`WA:`) cycle our own seed and cancel the cycle before reverting the
-  radio, and that both friend receive-branches reassemble the peer's. Added because the
-  friend half was missing and failed *silently* — the contact was added normally, so the
-  only symptom was their Radar dot never showing a name. See "Naming a Radar dot" below.
+- `test/views/contact_seed_exchange_test.dart` (3) — guards the *absence* of
+  seed-over-manufacturer-data, having previously asserted its presence. That mechanism
+  cannot work: manufacturer data and a local name do not fit in one 31-byte scan response,
+  so the radio rejected the whole advertisement and took the handshake down with it. Strips
+  comments before searching, because `hops_app.dart` deliberately names the removed helpers
+  in prose so nobody re-adds them, and a naive search matches that prose. See "Naming a
+  Radar dot" below.
 
 Not covered, and the obvious next target: `database_helper.dart`. It calls
 `getApplicationDocumentsDirectory()`, so testing it needs path_provider channel mocking plus
@@ -217,8 +218,10 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
   (`CX:`), `kDirectMessagePrefix` (`DM:`), `kLostFoundPrefix` (`LNF:`).
 - Manufacturer data (`kCommunityManufacturerId`, `0xFFFF`) is a *second*, parallel channel riding
   the same advertisement, used where the name is already full: signature chunks for flares/alerts
-  (`encodeFlareSigChunk`), rotating-ID seeds (friend *and* watch handshakes — see
-  "Naming a Radar dot"), and the Discoverable name. There is
+  (`encodeFlareSigChunk`), the Study Bunny location, and the Discoverable name — each on an
+  advertisement whose *name* leaves room for it. A name of ~22 characters already fills the
+  scan response on its own, which is why seed chunks alongside a handshake name could never
+  work (see "Naming a Radar dot"). There is
   only **one** manufacturer-data slot per advertisement, so these are mutually exclusive by
   construction — check `_advertisePresenceBeacon` before adding another user of it.
 - Nearby BLE device count (app-bar chip) is a *separate*, unfiltered 3-second scan
@@ -269,40 +272,57 @@ older handsets) don't have: such a device receives everything and transmits noth
 checks `BlePeripheral.isSupported()` at startup, warns once, and refuses to attempt a flare it
 can't send. **Never treat a Dart-side `startAdvertising` success as proof anything left the radio.**
 
-### 1c. Naming a Radar dot (the rotating-seed handshake)
+### 1c. Naming a Radar dot, and why only chat can teach a seed
 
-The idle beacon broadcasts `HPS:<rotating token>`, not a username — deliberate anti-tracking,
-but it means Radar **cannot** name a dot by string comparison. `RadarScreen._resolveToken`
-names one by trying each contact's stored *rotating seed* against the observed token (one HMAC
-per contact per token). That only works if the seed is on file locally, and a seed only ever
-gets there by being transmitted.
+The idle beacon broadcasts `HPS:<rotating token>`, not a username —
+deliberate anti-tracking, but it means Radar **cannot** name a dot by
+string comparison. `RadarScreen._resolveToken` names one by trying each
+contact's stored *rotating seed* against the observed token. That only
+works if the seed is on file locally, and **exactly one route puts it
+there**: the RFCOMM profile exchange on first 1:1 chat
+(`chat_terminal.dart` → `upsertContactRotatingSeed`).
 
-So **every handshake that forms a lasting relationship must carry the seed, in both
-directions.** Three routes write `contact_profiles.rotating_seed`:
+So a contact you have added but never chatted with shows as an anonymous
+dot. That is a real limitation, not a bug to go and fix casually — read
+the rest of this section before trying.
 
-- the RFCOMM profile exchange on first chat (`chat_terminal.dart`);
-- the watch-buddy handshake, `WR:`/`WA:`;
-- the friend handshake, `FR:`/`FA:`.
+**Do not teach the seed over manufacturer data.** It was attempted twice
+and cannot work. Manufacturer data and a local name cannot share one
+31-byte BLE scan response:
 
-All three land in the same `upsertContactRotatingSeed`, so nothing downstream can tell which
-route taught it. Sending is `_cycleOwnSeedChunks` (manufacturer-data chunks cycled alongside
-the handshake name); receiving is `_handleIncomingSeedChunk`. Reassembly runs **outside** the
-request-dedup guard, so a lingering rebroadcast still finishes teaching us a seed.
+```
+name "WR:<user>:<user>"    24 bytes  (2 AD header + 22 chars)
+manufacturer seed chunk    24 bytes  (4 AD header + 20 payload)
+                           ──
+                           48 bytes  → ADVERTISE_FAILED_DATA_TOO_LARGE
+```
 
-The friend half was missing until 20 Oct 2026, which is why "contacts you've added show up
-named on the radar" stopped working when the beacon moved from a plaintext `HPS:<username>` to
-a rotating token (commit `6a7e79e`). **The failure was silent** — the contact was added
-normally, and the dot was merely anonymous, indistinguishable from a stranger's. It appeared
-to fix itself if the pair ever opened a 1:1 chat, via a completely unrelated code path.
-`test/views/contact_seed_exchange_test.dart` now fails the build if any of the four halves is
-dropped. Two caveats worth knowing:
+The radio rejects the **whole advertisement**, so the handshake itself
+never leaves the device either — the seed exchange does not merely fail,
+it takes the watch request or friend request down with it.
 
-- **Contacts added before that fix have no seed on file** and can't be backfilled remotely —
-  nothing retransmits a seed on its own. One 1:1 chat or one watch request with that person
-  fixes it permanently.
-- The wire constants are still named `kWatchSeed*`/`kWatchSeedProtocolMarker` (`0x53`) for the
-  handshake they were written for. The marker byte must not change or it stops interoperating
-  with installed builds, so they kept their names; only the Dart-side helpers were generalised.
+This sat unnoticed in the watch handshake (`WR:`/`WA:`) for a long time
+because the verdict arrives on an async callback that only reported
+*flare* failures. Extending the same pattern to the friend handshake is
+what exposed it: friend requests started visibly failing with "data too
+large" on real hardware. Both are now removed, and
+`test/views/contact_seed_exchange_test.dart` fails the build if either
+helper reappears or if any of the four handshake senders attaches
+manufacturer data.
+
+**If it is worth doing properly**, the viable channel is a dedicated
+chunked *name* payload with its own prefix, the way `CM:`/`DM:` already
+work — 24 bytes of seed is two base64 chunks. That needs a sender tag in
+each chunk so the receiver knows whose seed it is, which is the part that
+makes it real work rather than a two-line addition. Do the byte arithmetic
+first, every time.
+
+Note the wire constants are still named `kWatchSeed*` /
+`kWatchSeedProtocolMarker` (`0x53`) and `encodeWatchSeedChunk` /
+`decodeWatchSeedChunk` still exist in `hops_constants.dart`. They are
+currently unused by any sender. Left in place rather than deleted because
+the marker byte must not be reassigned to something else while any
+installed build might still parse it.
 
 ### 2. Real 1:1 chat: RFCOMM over classic Bluetooth (native channel)
 

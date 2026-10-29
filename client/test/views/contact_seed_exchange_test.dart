@@ -1,50 +1,38 @@
 // test/views/contact_seed_exchange_test.dart
 //
-// A source-level guard, not a behavioural test — same reasoning as
+// A source-level guard, not a behavioural test — same technique as
 // flare_radio_invariant_test.dart next door.
 //
-// The idle presence beacon broadcasts "HPS:<rotating token>", not a
-// username, so Radar cannot name a dot by string comparison. It names one
-// by trying each contact's stored *rotating seed* against the observed
-// token (RadarScreen._resolveToken). That only works if the seed is on
-// file, and a seed only ever gets there by being transmitted.
+// WHAT THIS NOW GUARDS, AND WHY IT IS THE OPPOSITE OF WHAT IT GUARDED
 //
-// So every handshake that creates a lasting relationship has to carry the
-// seed, in BOTH directions. Miss one side and the symptom is remote and
-// confusing: the contact appears in your list perfectly normally, but
-// their Radar dot stays anonymous forever — until the two of you happen
-// to open a 1:1 chat, whose profile exchange backfills the seed by a
-// completely unrelated route. That is precisely the bug the friend
-// handshake shipped with: FR:/FA: added the contact but never sent a
-// seed, so "people you have added show up named on the radar" silently
-// stopped working when the beacon moved from a plaintext username to a
-// rotating token.
+// This file used to assert that the friend and watch handshakes each
+// pushed this device's rotating-ID seed to the peer as manufacturer-data
+// chunks riding alongside the handshake advertisement, so Radar could name
+// a contact's dot without the two ever opening a 1:1 chat.
 //
-// Nothing BLE is reachable from a unit test (see CLAUDE.md), and two
-// physical devices are the only other way this surfaces, so this test
-// asserts the shape of the source instead.
+// That cannot work. Manufacturer data and a local name cannot share one
+// 31-byte BLE scan response:
+//
+//   name "WR:<user>:<user>"    24 bytes (2 AD header + 22 chars)
+//   manufacturer seed chunk    24 bytes (4 AD header + 20 payload)
+//                              --
+//                              48 bytes -> ADVERTISE_FAILED_DATA_TOO_LARGE
+//
+// The radio rejected the whole advertisement, so the handshake itself
+// never went out either. It went unnoticed for as long as it did because
+// that verdict arrives on an async callback that only reported flare
+// failures; once every feature started reporting, friend requests began
+// visibly failing with "data too large" on real hardware.
+//
+// So the mechanism is gone, and this test now guards its absence. The
+// temptation to re-add it is real — "contacts you added show named on the
+// radar" is a reasonable thing to want — so the byte arithmetic is written
+// into the failure message rather than left for someone to rediscover.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
 const String _hopsAppPath = 'lib/views/hops_app.dart';
-
-/// Sends our own seed alongside a transient advertisement.
-const String _cycle = '_cycleOwnSeedChunks';
-
-/// Reassembles a peer's seed off an incoming advertisement.
-const String _reassemble = '_handleIncomingSeedChunk';
-
-/// The four halves of the two relationship-forming handshakes: the method
-/// that broadcasts each one, and whether that side sends, receives, or
-/// both. A request must send (so the recipient can name us) and receive
-/// (so we can name them) — a relationship is mutual, and so is naming.
-const Map<String, String> _senders = {
-  'sendFriendRequest': 'FR:',
-  'acceptFriendRequest': 'FA:',
-  'sendWatchRequest': 'WR:',
-  '_acceptWatchRequestBle': 'WA:',
-};
 
 void main() {
   late String source;
@@ -54,84 +42,90 @@ void main() {
     expect(file.existsSync(), isTrue,
         reason: 'Expected $_hopsAppPath relative to the package root. '
             'If the file moved, update this test rather than deleting it.');
-    source = file.readAsStringSync();
+    // Comments stripped: the file deliberately explains the removed
+    // mechanism BY NAME so nobody re-adds it, and a naive text search
+    // matches that explanation and fails on the very documentation that
+    // exists to prevent the regression.
+    source = file
+        .readAsLinesSync()
+        .map((l) {
+          final i = l.indexOf('//');
+          return i == -1 ? l : l.substring(0, i);
+        })
+        // Space, not a newline: every check here is a substring search or
+        // a brace count, and a space keeps tokens from running together
+        // where a stripped comment ended a line mid-expression.
+        .join(' ');
   });
 
-  /// The body of [name], from its signature to the closing brace of the
-  /// method — located by brace depth so a nested closure doesn't end it
-  /// early.
-  String bodyOf(String name) {
-    // Find the *declaration*, not a call site — three of these four are
-    // called earlier in the file than they are declared, and matching the
-    // call gave a body that started at some unrelated later brace.
-    var start = -1;
-    for (var from = 0;;) {
-      final at = source.indexOf('$name(', from);
-      if (at == -1) break;
-      final close = source.indexOf(')', at);
-      if (close != -1) {
-        final after = source.substring(close + 1).trimLeft();
-        if (after.startsWith('{') || after.startsWith('async {')) {
-          start = at;
-          break;
-        }
-      }
-      from = at + 1;
-    }
-    expect(start, greaterThan(-1),
-        reason: 'No declaration of $name found in $_hopsAppPath.');
-    final open = source.indexOf('{', start);
-    expect(open, greaterThan(-1));
-    var depth = 0;
-    for (var i = open; i < source.length; i++) {
-      if (source[i] == '{') depth++;
-      if (source[i] == '}') {
-        depth--;
-        if (depth == 0) return source.substring(open, i + 1);
-      }
-    }
-    fail('Unbalanced braces reading $name.');
-  }
-
-  for (final entry in _senders.entries) {
-    test('${entry.key} sends our own seed with its ${entry.value} '
-        'advertisement', () {
-      expect(bodyOf(entry.key), contains(_cycle),
-          reason: '${entry.key} broadcasts ${entry.value} but never calls '
-              '$_cycle, so the peer never learns our rotating seed and can '
-              'never put our name on our Radar dot. Cycle the seed '
-              'alongside the advertisement, as the other three do.');
-    });
-
-    test('${entry.key} cancels the seed cycle when it reverts the radio',
-        () {
-      // The cycle re-advertises on a repeating timer. Reverting to the
-      // presence beacon without cancelling it means the next tick
-      // re-advertises the handshake name on top of the beacon.
-      expect(bodyOf(entry.key), contains('_seedCycleTimer?.cancel()'),
-          reason: '${entry.key} starts a seed cycle but does not cancel it '
-              'before handing the radio back, so a pending tick will '
-              're-advertise ${entry.value} over the presence beacon.');
-    });
-  }
-
-  test('both friend-handshake receivers reassemble the peer seed', () {
-    // Guarding the receive side separately because it is the half that
-    // was missing, and it fails silently: the contact is still added, so
-    // everything looks like it worked.
-    for (final prefix in ['FR:', 'FA:']) {
-      final at = source.indexOf('name.startsWith("$prefix")');
-      expect(at, greaterThan(-1),
-          reason: 'No $prefix dispatch branch found in $_hopsAppPath.');
-      // Look only as far as the next prefix dispatch, so a neighbouring
-      // branch's call can't satisfy this.
-      final next = source.indexOf('name.startsWith("', at + 20);
-      final branch =
-          source.substring(at, next == -1 ? source.length : next);
-      expect(branch, contains(_reassemble),
-          reason: 'The $prefix handler does not call $_reassemble, so a '
-              'contact added through it has no rotating seed on file and '
-              'their Radar dot stays anonymous indefinitely.');
+  test('no advertisement sends seed chunks as manufacturer data', () {
+    // The helpers are gone; their absence is the invariant.
+    for (final symbol in ['_cycleOwnSeedChunks', '_handleIncomingSeedChunk']) {
+      expect(source.contains(symbol), isFalse,
+          reason: '$symbol is back. Manufacturer data cannot share a '
+              '31-byte scan response with a local name — a 22-char name '
+              'costs 24 bytes and a seed chunk costs 24 more, so the whole '
+              'advertisement fails with ADVERTISE_FAILED_DATA_TOO_LARGE '
+              'and the handshake never leaves the radio. Use a dedicated '
+              'chunked NAME payload instead, as CM:/DM: do.');
     }
   });
+
+  test('the handshake advertisements carry no manufacturer data at all', () {
+    // Checks each sender's own body rather than the file as a whole, since
+    // other features (Study Bunny location, flare signatures) legitimately
+    // use manufacturer data on advertisements whose names leave room.
+    for (final fn in [
+      'sendFriendRequest',
+      'acceptFriendRequest',
+      'sendWatchRequest',
+      '_acceptWatchRequestBle',
+    ]) {
+      expect(_bodyOf(source, fn), isNot(contains('manufacturerData')),
+          reason: '$fn attaches manufacturer data to an advertisement whose '
+              'name already fills the scan response. Do the byte '
+              'arithmetic before adding this back.');
+    }
+  });
+
+  test('the seed still reaches a peer somehow — via RFCOMM', () {
+    // The one route that does work, and the reason Radar can name a dot
+    // at all. If this disappears, rotating-token resolution has no input
+    // and every contact becomes permanently anonymous.
+    final chat = File('lib/views/chat_terminal.dart').readAsStringSync();
+    expect(chat, contains('upsertContactRotatingSeed'),
+        reason: 'chat_terminal no longer stores a peer rotating seed, so '
+            'nothing anywhere does and Radar can never name a contact.');
+  });
+}
+
+/// The body of [name], located by brace depth. Finds the *declaration*,
+/// not a call site — several of these are called earlier in the file than
+/// they are declared.
+String _bodyOf(String source, String name) {
+  var start = -1;
+  for (var from = 0;;) {
+    final at = source.indexOf('$name(', from);
+    if (at == -1) break;
+    final close = source.indexOf(')', at);
+    if (close != -1) {
+      final after = source.substring(close + 1).trimLeft();
+      if (after.startsWith('{') || after.startsWith('async {')) {
+        start = at;
+        break;
+      }
+    }
+    from = at + 1;
+  }
+  expect(start, greaterThan(-1), reason: 'No declaration of $name found.');
+  final open = source.indexOf('{', start);
+  var depth = 0;
+  for (var i = open; i < source.length; i++) {
+    if (source[i] == '{') depth++;
+    if (source[i] == '}') {
+      depth--;
+      if (depth == 0) return source.substring(open, i + 1);
+    }
+  }
+  fail('Unbalanced braces reading $name.');
 }
