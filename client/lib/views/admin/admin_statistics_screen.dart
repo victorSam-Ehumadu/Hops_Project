@@ -11,6 +11,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -351,17 +352,23 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
               SizedBox(
                 height: 150,
                 child: CustomPaint(
-                  painter: _BarChartPainter(
+                  painter: BarChartPainter(
                     values: values,
                     barColor: colors.primary,
                     axisColor: colors.onSurface.withValues(alpha: 0.18),
+                    textColor: colors.onSurface.withValues(alpha: 0.65),
                   ),
                   child: const SizedBox.expand(),
                 ),
               ),
             const SizedBox(height: 6),
             if (stats.series.isNotEmpty)
-              Row(
+              Padding(
+                // Matches BarChartPainter._axisLabelWidth so the first
+                // bucket caption sits under the first bar, not under the
+                // y-axis numbers.
+                padding: const EdgeInsets.only(left: 26),
+                child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(_axisLabel(stats.series.first.bucket, stats),
@@ -375,6 +382,7 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
                           color:
                               colors.onSurface.withValues(alpha: 0.5))),
                 ],
+                ),
               ),
           ],
         ),
@@ -546,66 +554,133 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
 
 /// A minimal bar chart.
 ///
+/// Public, and named without an underscore, so its edge cases are
+/// reachable from a test: an empty series, an all-zero series, a single
+/// bucket, 30 buckets on a narrow phone, and a canvas too small to hold
+/// the y-axis gutter. Each of those is a division or a negative width
+/// waiting to happen, and none is reachable by pumping the screen (which
+/// needs a live Supabase).
+///
 /// Bars are laid out to fill the width, so the same painter reads correctly
 /// for 24 hourly buckets and 30 daily ones without configuration. Below
 /// roughly 2px per bar the gaps are dropped rather than letting bars
 /// vanish entirely.
-class _BarChartPainter extends CustomPainter {
+class BarChartPainter extends CustomPainter {
   final List<int> values;
   final Color barColor;
   final Color axisColor;
+  final Color textColor;
 
-  const _BarChartPainter({
+  const BarChartPainter({
     required this.values,
     required this.barColor,
     required this.axisColor,
+    required this.textColor,
   });
+
+  /// Width reserved on the left for the y-axis numbers. Fixed rather than
+  /// measured so the plot area does not shift width as the peak value
+  /// gains a digit, which made the bars visibly jump when switching series.
+  static const double _axisLabelWidth = 26;
+
+  TextPainter _label(String text, double size, Color color) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+            fontSize: size, color: color, fontWeight: FontWeight.w600),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    tp.layout();
+    return tp;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     if (values.isEmpty) return;
 
-    final axis = Paint()
-      ..color = axisColor
-      ..strokeWidth = 1;
-    canvas.drawLine(
-        Offset(0, size.height), Offset(size.width, size.height), axis);
-
     // Max of at least 1 so an all-zero series does not divide by zero and
     // does not draw full-height bars for nothing.
     final maxValue = math.max(1, values.reduce(math.max));
 
-    // A faint midline gives the eye a reference for "about half the peak"
-    // without a full grid.
-    canvas.drawLine(
-      Offset(0, size.height / 2),
-      Offset(size.width, size.height / 2),
-      Paint()
-        ..color = axisColor.withValues(alpha: 0.4)
-        ..strokeWidth = 0.5,
-    );
+    // Headroom at the top for the value printed above the tallest bar,
+    // otherwise the peak's own label is clipped off the canvas.
+    const topPad = 13.0;
+    const plotLeft = _axisLabelWidth;
+    final plotWidth = size.width - plotLeft;
+    final plotHeight = size.height - topPad;
+    if (plotWidth <= 0) return;
 
-    final slot = size.width / values.length;
+    final axis = Paint()
+      ..color = axisColor
+      ..strokeWidth = 1;
+    canvas.drawLine(Offset(plotLeft, size.height),
+        Offset(size.width, size.height), axis);
+
+    // Gridlines at the peak and at half, each with its value on the left.
+    // Two lines rather than a full grid: this is a 150px-tall chart on a
+    // phone, and more would be noise rather than information.
+    final faint = Paint()
+      ..color = axisColor.withValues(alpha: 0.4)
+      ..strokeWidth = 0.5;
+
+    void gridline(double fraction, int value) {
+      final y = size.height - (plotHeight * fraction);
+      canvas.drawLine(Offset(plotLeft, y), Offset(size.width, y), faint);
+      final tp = _label('$value', 9, textColor);
+      // Right-aligned against the plot edge so 1 and 100 line up.
+      tp.paint(canvas,
+          Offset(plotLeft - tp.width - 4, y - tp.height / 2));
+    }
+
+    gridline(1.0, maxValue);
+    // Only when it is a distinct whole number — at a peak of 1 a "0" label
+    // halfway up is worse than no label.
+    if (maxValue >= 2) gridline(0.5, maxValue ~/ 2);
+    final zero = _label('0', 9, textColor);
+    zero.paint(canvas,
+        Offset(plotLeft - zero.width - 4, size.height - zero.height / 2 - 1));
+
+    final slot = plotWidth / values.length;
     final gap = slot > 4 ? math.min(3.0, slot * 0.25) : 0.0;
     final barWidth = math.max(1.0, slot - gap);
+
+    // Per-bar values only when they will actually be readable. Below about
+    // 14px of slot the numbers overlap each other, which is worse than the
+    // y-axis alone — the gridlines still give the magnitude.
+    final labelBars = slot >= 14;
 
     final bar = Paint()..color = barColor;
     for (var i = 0; i < values.length; i++) {
       if (values[i] <= 0) continue;
-      final h = (values[i] / maxValue) * (size.height - 4);
-      final left = i * slot + gap / 2;
-      final rect = RRect.fromRectAndCorners(
-        Rect.fromLTWH(left, size.height - h, barWidth, h),
-        topLeft: const Radius.circular(2),
-        topRight: const Radius.circular(2),
+      final h = (values[i] / maxValue) * plotHeight;
+      final left = plotLeft + i * slot + gap / 2;
+      canvas.drawRRect(
+        RRect.fromRectAndCorners(
+          Rect.fromLTWH(left, size.height - h, barWidth, h),
+          topLeft: const Radius.circular(2),
+          topRight: const Radius.circular(2),
+        ),
+        bar,
       );
-      canvas.drawRRect(rect, bar);
+      if (labelBars) {
+        final tp = _label('${values[i]}', 8.5, textColor);
+        if (tp.width <= slot) {
+          tp.paint(
+            canvas,
+            Offset(left + (barWidth - tp.width) / 2,
+                size.height - h - tp.height - 1),
+          );
+        }
+      }
     }
   }
 
   @override
-  bool shouldRepaint(_BarChartPainter old) =>
-      old.values != values ||
+  bool shouldRepaint(BarChartPainter old) =>
+      !listEquals(old.values, values) ||
       old.barColor != barColor ||
-      old.axisColor != axisColor;
+      old.axisColor != axisColor ||
+      old.textColor != textColor;
 }

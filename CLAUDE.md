@@ -75,7 +75,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **225 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **237 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -135,7 +135,14 @@ What is and isn't covered, so you know what a green run actually proves:
   direction — that "wrong password" and "no such account" stay **identical**. The server
   collapses those too (0008/0009/0018/0023); splitting them client-side would turn the sign-in
   form into an account-existence oracle at the last step.
-- `test/widgets/password_strength_bar_test.dart` (10) — the only widget test.
+- `test/widgets/bar_chart_painter_test.dart` (12) — the hand-painted statistics chart.
+  Painters do their own layout arithmetic (a reserved y-axis gutter, top headroom for the peak
+  label, per-bar slot widths), and one that throws takes the whole admin screen down with a red
+  error box. Pins the divisions and negative dimensions: empty series, all-zero, a peak of 1,
+  30 buckets on a 280px phone, and a canvas narrower than the gutter. Also that `shouldRepaint`
+  compares list *contents* — `fetch()` builds a fresh list every poll, so an identity check
+  would repaint on every refresh regardless of whether anything moved.
+- `test/widgets/password_strength_bar_test.dart` (10) — the password strength bar.
 - `test/services/account_standing_test.dart` (18) — moderation verdicts: classifying the
   server's error into ban/suspension, and whether that verdict currently blocks the app.
   Pins that a non-moderation error (i.e. offline) is **never** read as a verdict, that both
@@ -411,7 +418,8 @@ state — feature data (messages, tasks, vibes) never leaves the device.
 
 **This bounds what the admin statistics can ever say.** `0022_admin_statistics.sql` plus
 `services/admin_stats_service.dart` back a filterable, charted view (24h/7d/30d/custom range,
-hand-painted `CustomPainter` charts — no chart dependency, so it inherits the active theme),
+hand-painted `CustomPainter` charts with y-axis and per-bar values — no chart dependency,
+so they inherit the active theme),
 a most-active-users ranking, and CSV export. But the server holds no message, chat or feature
 data, so none of it can be reported on and nothing there pretends to; the screen says so
 explicitly, because a dashboard that silently omits all feature usage invites the conclusion
