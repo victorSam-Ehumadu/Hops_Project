@@ -516,12 +516,17 @@ Invariants worth preserving:
   to re-enter `HopsApp` with and nothing to navigate back to. An earlier attempt held the
   session and covered the app with a barrier screen; that left a live token in place, which is
   not what "their session is terminated" means. Don't reintroduce it.
-- **Ban wipes local data, suspension keeps it.** The only difference between the two paths.
-  `wipeLocalIdentityAndReturnToGatekeeper` deletes the sqlite database — every message, task
-  and vibe record — which is right for something permanent and wrong for a three-day timeout,
-  where it is irreversible collateral damage beyond what the moderator chose. A suspension
-  therefore leaves the database alone and leaves `my_hops_id` behind as the marker of whose
-  data it is.
+- **Neither verdict deletes local data.** Messages, contacts, tasks and vibe records all
+  survive a ban as well as a suspension; only the session token goes. A ban used to trigger the
+  full wipe on the reasoning that it is permanent — which is wrong on its own terms, because
+  `unban_user` exists. An unbanned student would have returned to an empty app with every
+  conversation gone, and a student banned by mistake had no recourse at all. Destroying data
+  irreversibly as a side effect of a reversible decision is not a trade any moderator made or
+  was offered, and the data is the user's own, on the user's own device: moderation removes
+  their access to the network, which the server-side block already does. Only three things
+  wipe — Log Out, Delete Account (both explicit, behind a confirmation naming what is lost) and
+  `discardLocalDataForAccountSwitch`. `my_hops_id` is left behind precisely so that last
+  comparison can be made.
 - **That marker is load-bearing.** Keeping a database across a sign-out is the *only* state in
   which the next person to sign in on that phone could inherit someone else's threads — sign-in
   does no account-switch check of its own, it just overwrites prefs. So

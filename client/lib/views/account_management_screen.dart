@@ -117,18 +117,29 @@ Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async 
 /// covered the app with a barrier screen instead; that left a live token
 /// in place, which is not what "their session is terminated" means.
 ///
-/// Ban and suspension differ in exactly one respect, and only in what is
-/// left on the device:
+/// NEITHER VERDICT DESTROYS LOCAL DATA. Messages, contacts, tasks and vibe
+/// records all survive; only the session goes.
 ///
-///   * A ban is permanent, so there is nothing to come back to and this is
-///     the full teardown — identical to Log Out.
-///   * A suspension expires. Deleting the sqlite database for a three-day
-///     timeout would destroy every message, task and vibe record
-///     irreversibly, which is well beyond what the moderator chose, so the
-///     data stays and only the session goes. `my_hops_id` is deliberately
-///     left behind as the marker that says who that data belongs to —
-///     discardLocalDataForAccountSwitch() below is what stops anyone else
-///     inheriting it.
+/// A ban used to trigger the full teardown on the reasoning that it is
+/// permanent and there would be nothing to come back to. That was wrong on
+/// its own terms: `unban_user` exists, so a ban is reversible, and an
+/// unbanned student would have returned to an empty app with every
+/// conversation gone. Destroying data irreversibly as a side effect of a
+/// reversible decision is not a trade a moderator made or was offered —
+/// and a student banned by mistake had no recourse at all.
+///
+/// The data is also the user's own, sitting on the user's own device.
+/// Moderation removes their access to the network, which is what the
+/// server-side block does; it is not a mandate to erase their phone.
+///
+/// Three things still wipe, all of them deliberate:
+///
+///   * Log Out and Delete Account — an explicit choice, behind a
+///     confirmation that says what will be lost.
+///   * discardLocalDataForAccountSwitch() — a DIFFERENT account signing in
+///     on this device, which is the only state where someone could inherit
+///     another person's threads. `my_hops_id` is left behind precisely so
+///     that comparison can be made.
 Future<void> endSessionForModeration(
   BuildContext context,
   AccountStanding standing,
@@ -136,12 +147,8 @@ Future<void> endSessionForModeration(
   await _silenceIdentityRadio();
   await BluetoothNameGuard.restore();
 
-  if (standing.kind == AccountStandingKind.banned) {
-    if (!context.mounted) return;
-    await wipeLocalIdentityAndReturnToGatekeeper(context);
-    return;
-  }
-
+  // The token, and only the token. my_hops_id stays as the marker of whose
+  // data this is.
   final prefs = await SharedPreferences.getInstance();
   await prefs.remove('saved_hops_token');
 

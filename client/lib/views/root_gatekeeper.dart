@@ -512,15 +512,20 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     final reason =
         standing.reason == null ? "" : " Reason: ${standing.reason}.";
     if (standing.kind == AccountStandingKind.banned) {
+      // Says the data is safe, because the obvious fear on being signed
+      // out is that everything is gone — and it is not. Neither verdict
+      // deletes anything; see endSessionForModeration.
       return "This account has been banned by a Hops admin, so it has been "
-          "signed out on this device.$reason";
+          "signed out on this device. Your messages and contacts are still "
+          "here and will be back if the ban is lifted.$reason";
     }
     final until = standing.until;
     final when = until == null
         ? ""
         : " until ${until.toIso8601String().split('T').first}";
     return "This account is suspended$when, so it has been signed out on "
-        "this device. You can sign back in once the suspension ends.$reason";
+        "this device. Your messages and contacts are still here — sign back "
+        "in once the suspension ends.$reason";
   }
 
   /// Refuses a sign-in we already know the server will refuse.

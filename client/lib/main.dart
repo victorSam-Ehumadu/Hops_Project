@@ -12,8 +12,6 @@ import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/hops_app.dart';
 import 'package:client/views/hops_splash_screen.dart';
 import 'package:client/services/account_standing.dart';
-import 'package:client/views/account_management_screen.dart'
-    show deleteLocalDatabase, clearAccountScopedPrefs;
 import 'package:client/services/notification_service.dart';
 import 'package:client/widgets/alarm_ringing_banner.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -335,16 +333,15 @@ class _HopsRootState extends State<HopsRoot> {
     if (!standing.blocksUse) return standing;
 
     // Blocked: end the session here rather than entering HopsApp and
-    // bouncing straight back out of it. Same split as
-    // endSessionForModeration — a ban takes the local data with it, a
-    // suspension keeps it so the user has their messages back when it
-    // lifts, with my_hops_id left as the marker of whose data it is.
-    if (standing.kind == AccountStandingKind.banned) {
-      await deleteLocalDatabase();
-      await clearAccountScopedPrefs();
-    } else {
-      await prefs.remove('saved_hops_token');
-    }
+    // bouncing straight back out of it.
+    //
+    // The token, and only the token — for a ban as well as a suspension.
+    // See endSessionForModeration for why a ban does not wipe either: it is
+    // reversible (unban_user), so an unbanned student would otherwise come
+    // back to an empty app. my_hops_id stays as the marker of whose data
+    // this is, which is what lets sign-in tell "the same person returning"
+    // from "somebody else on a shared phone".
+    await prefs.remove('saved_hops_token');
     return null;
   }
 }
