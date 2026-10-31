@@ -22,6 +22,7 @@ import 'package:client/utils/mesh_crypto.dart';
 import 'package:client/widgets/password_strength_bar.dart';
 import 'package:client/views/email_verification_screen.dart';
 import 'package:client/services/avatar_path_notifier.dart';
+import 'package:client/services/local_data_notifier.dart';
 import 'package:client/services/account_standing.dart';
 import 'package:client/services/bluetooth_name_guard.dart';
 
@@ -222,6 +223,125 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
     }
   }
 
+  // The other half of Export My Data. An export you cannot restore is not
+  // a backup, it is a souvenir — this is what makes the export mean
+  // something after a reinstall, a new phone, or a Log Out that cleared
+  // the database.
+  //
+  // MERGES rather than replaces, and says so before doing anything.
+  // Replacing would be the more obvious implementation and the wrong one:
+  // someone importing an old backup onto a phone they have kept using
+  // would silently lose everything since. Merging cannot lose anything,
+  // and because every table has a real primary key, importing the same
+  // file twice adds nothing the second time.
+  Future<void> _importMyData() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Import data?"),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Pick a Hops export file to restore messages, tasks, "
+                "vibe reports and contacts."),
+            SizedBox(height: 10),
+            Text("Nothing on this phone is deleted. Anything already here "
+                "is kept as it is, so importing the same file twice "
+                "changes nothing.",
+                style: TextStyle(fontSize: 12.5)),
+            SizedBox(height: 10),
+            // Worth saying plainly: the export format carries no owner, so
+            // the app genuinely cannot tell whose file this is.
+            Text("Only import your own export. A file from someone else's "
+                "account would mix their conversations into yours, and "
+                "Hops cannot tell the difference.",
+                style: TextStyle(fontSize: 12.5)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Choose file")),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Choose your Hops data export',
+        // Deliberately not type: FileType.custom with allowedExtensions —
+        // on several Android file providers that filter hides the file
+        // entirely (a JSON picked from Downloads can arrive with no
+        // extension at all), and a file the user cannot select is worse
+        // than one validated after the fact. importAllData rejects
+        // anything that is not a Hops export anyway.
+        withData: true,
+      );
+      if (picked == null || picked.files.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Import cancelled")),
+          );
+        }
+        return;
+      }
+
+      final bytes = picked.files.first.bytes;
+      if (bytes == null) {
+        throw const FormatException("Couldn't read that file.");
+      }
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('That file is not a Hops data export.');
+      }
+
+      final counts = await DatabaseHelper.instance.importAllData(decoded);
+
+      var added = 0, skipped = 0;
+      for (final table in counts.values) {
+        added += table[DatabaseHelper.importInserted] ?? 0;
+        skipped += table[DatabaseHelper.importSkipped] ?? 0;
+      }
+
+      // Tell the rest of the app. Account Management is a pushed route, so
+      // HopsApp's contact tray is still mounted behind it holding a list
+      // that is now stale — without this the imported conversations do not
+      // appear until something else happens to refresh it.
+      localDataRevision.value++;
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text(added == 0
+              ? (skipped == 0
+                  ? "That export was empty — nothing to restore."
+                  : "Everything in that file was already on this phone.")
+              : "Restored $added item${added == 1 ? '' : 's'}"
+                  "${skipped > 0 ? ' ($skipped already here)' : ''}."),
+        ),
+      );
+    } on FormatException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Couldn't import that file: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _openChangeEmail() async {
     final result = await Navigator.push<bool>(
       context,
@@ -330,6 +450,14 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
               title: "Export My Data",
               subtitle: "Save a backup of your messages, tasks & contacts to a file",
               onTap: _busy ? null : _exportMyData,
+            ),
+            const SizedBox(height: 12),
+            _ManagementTile(
+              icon: Icons.upload_file_outlined,
+              iconColor: colors.primary,
+              title: "Import My Data",
+              subtitle: "Restore from a Hops export — nothing here is deleted",
+              onTap: _busy ? null : _importMyData,
             ),
             const SizedBox(height: 12),
             _ManagementTile(

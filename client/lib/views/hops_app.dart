@@ -35,6 +35,7 @@ import 'package:client/views/profile_screen.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/services/account_standing.dart';
 import 'package:client/services/community_alert_sync.dart';
+import 'package:client/services/local_data_notifier.dart';
 import 'package:client/views/account_management_screen.dart'
     show endSessionForModeration;
 import 'package:client/models/feature_item.dart';
@@ -369,6 +370,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // it off again, not app-restart amnesia.
     _checkPermissionsAndStartBLE();
     _refreshContactsTrayList();
+    // An Import My Data run replaces rows underneath this screen while
+    // it stays mounted — see local_data_notifier.dart.
+    localDataRevision.addListener(_refreshContactsTrayList);
     _maybeShowHelpHint();
 
     // Best-effort, fire-and-forget — see key_directory.dart. This is what
@@ -647,6 +651,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    localDataRevision.removeListener(_refreshContactsTrayList);
     avatarPathRevision.removeListener(_loadCurrentIdentityMetrics);
     nearbyConnectionsSessionCount.removeListener(_onNearbyConnectionsSessionCountChanged);
     chatPingRequest.removeListener(_onChatPingRequested);

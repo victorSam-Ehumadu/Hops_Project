@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -105,6 +106,30 @@ class DatabaseHelper {
     final db = _database;
     _database = null;
     await db?.close();
+  }
+
+  /// Opens a throwaway in-memory database with the real schema.
+  ///
+  /// Test seam. Everything else here reaches the file through
+  /// resolveDatabasePath(), which calls getApplicationDocumentsDirectory()
+  /// — a platform channel, and the reason this class had no tests at all
+  /// (see CLAUDE.md). This bypasses that one call and nothing else: the
+  /// schema comes from the same _onCreate, so a test exercises the real
+  /// tables and constraints rather than a hand-built approximation.
+  ///
+  /// Requires sqflite_common_ffi to be installed as the factory, exactly
+  /// as main.dart already does on desktop.
+  @visibleForTesting
+  Future<Database> openInMemoryForTest() async {
+    _database = await databaseFactory.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: _databaseVersion,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      ),
+    );
+    return _database!;
   }
 
   // Single source of truth for where the db file actually lives —
@@ -384,6 +409,104 @@ class DatabaseHelper {
       tasksTable: await db.query(tasksTable),
       contactProfilesTable: await db.query(contactProfilesTable),
     };
+  }
+
+  /// Result of an import: how many rows went in and how many were skipped,
+  /// per table.
+  ///
+  /// Reported rather than swallowed because "imported successfully" with no
+  /// numbers is indistinguishable from importing nothing — which is exactly
+  /// what happens if the file is from a different app, or every row was
+  /// already present.
+  static const String importInserted = 'inserted';
+  static const String importSkipped = 'skipped';
+
+  /// Restores rows from a file produced by [exportAllData].
+  ///
+  /// MERGES, never replaces. Nothing already on this device is deleted, so
+  /// an import cannot lose data the way a restore-over-the-top would — and
+  /// running the same file twice is a no-op rather than a duplication,
+  /// because every table here has a real primary key and conflicts are
+  /// ignored rather than replaced.
+  ///
+  /// Ignored, not replaced, specifically: a row already on this device may
+  /// carry state the export predates — a read receipt, a delivered flag, a
+  /// contact's newer avatar — and replacing it would quietly roll that
+  /// back. The local copy is the fresher one by definition.
+  ///
+  /// ONLY COLUMNS THE CURRENT SCHEMA HAS are written. An export taken
+  /// before `read_at` existed (schema v10) has no such key, and an export
+  /// from a future version may carry keys this build has never heard of;
+  /// either would make a blind insert throw. The intersection is taken per
+  /// table, read from the live table rather than from a hardcoded list, so
+  /// this keeps working across schema bumps without being touched.
+  ///
+  /// Runs in a single transaction: a malformed row partway through leaves
+  /// the database exactly as it was rather than half-populated.
+  ///
+  /// Throws [FormatException] if the file is not a Hops export.
+  Future<Map<String, Map<String, int>>> importAllData(
+      Map<String, dynamic> data) async {
+    if (data['app'] != 'Hops') {
+      throw const FormatException(
+          'That file is not a Hops data export.');
+    }
+
+    final db = await database;
+    final result = <String, Map<String, int>>{};
+
+    // Only these four. A key in the file that is not one of them is
+    // ignored rather than trusted — the file is user-supplied, and
+    // "whatever table name the JSON claims" is not something to hand to
+    // sqflite.
+    const importable = [table, vibeTable, tasksTable, contactProfilesTable];
+
+    await db.transaction((txn) async {
+      for (final name in importable) {
+        var inserted = 0, skipped = 0;
+        final rows = data[name];
+        if (rows is! List) {
+          result[name] = {importInserted: 0, importSkipped: 0};
+          continue;
+        }
+
+        // The columns this build's table actually has.
+        final info = await txn.rawQuery('PRAGMA table_info($name)');
+        final live = {for (final c in info) c['name'] as String};
+
+        for (final raw in rows) {
+          if (raw is! Map) {
+            skipped++;
+            continue;
+          }
+          final row = <String, Object?>{};
+          raw.forEach((k, v) {
+            if (k is String && live.contains(k)) row[k] = v;
+          });
+          if (row.isEmpty) {
+            skipped++;
+            continue;
+          }
+          try {
+            final id = await txn.insert(name, row,
+                conflictAlgorithm: ConflictAlgorithm.ignore);
+            // insert() returns 0 when the conflict clause dropped the row.
+            if (id == 0) {
+              skipped++;
+            } else {
+              inserted++;
+            }
+          } catch (_) {
+            // One bad row (a missing NOT NULL, a wrong type) must not
+            // abandon the rest of the file.
+            skipped++;
+          }
+        }
+        result[name] = {importInserted: inserted, importSkipped: skipped};
+      }
+    });
+
+    return result;
   }
 
   // ---------- Messages ----------

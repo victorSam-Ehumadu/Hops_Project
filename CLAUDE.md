@@ -75,7 +75,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **237 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **250 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -167,10 +167,21 @@ What is and isn't covered, so you know what a green run actually proves:
   in prose so nobody re-adds them, and a naive search matches that prose. See "Naming a
   Radar dot" below.
 
-Not covered, and the obvious next target: `database_helper.dart`. It calls
-`getApplicationDocumentsDirectory()`, so testing it needs path_provider channel mocking plus
-`sqflite_common_ffi` and a native sqlite3 on Windows. Nothing BLE, RFCOMM or Nearby is covered —
-those need two physical devices, and no test suite will change that.
+- `test/database/import_export_test.dart` (13) — the restore half of Export My Data, and the
+  first tests to touch `database_helper.dart` at all. Every path there reaches the file via
+  `getApplicationDocumentsDirectory()`, a platform channel, which is why it had none;
+  `openInMemoryForTest()` bypasses that one call so these run against the real `_onCreate`
+  schema. Pins that import **merges** (an old backup onto a phone still in use loses nothing),
+  is **idempotent** (same file twice adds nothing — every table has a real primary key and
+  conflicts are ignored), and **never overwrites a local row** (the local copy may carry a read
+  receipt the export predates). Also the two schema-drift cases: an export missing `read_at`
+  (taken at v10) and one carrying a column this build has never heard of must both import
+  rather than throw, which is why columns are intersected against `PRAGMA table_info` rather
+  than a hardcoded list. One test feeds it `sqlite_master` to confirm a table name claimed by
+  a user-supplied file is never handed to sqflite.
+
+Still not covered: the rest of `database_helper.dart` beyond import/export. Nothing BLE, RFCOMM
+or Nearby is covered — those need two physical devices, and no test suite will change that.
 
 `flutter analyze` is still the primary gate for anything radio-related.
 
@@ -585,6 +596,15 @@ one — `admin_settings_screen.dart` needs it to decide whether to offer `openAp
   profile exchange). On Windows/Linux, `main.dart` swaps in `sqflite_common_ffi`. Bump
   `_databaseVersion` and add an `_onUpgrade` branch for schema changes — don't edit `_onCreate`
   alone once the app has shipped.
+**Export has an import.** `exportAllData`/`importAllData` are the two halves of Account
+Management's backup. Import **merges** and never overwrites — an old backup restored onto a
+phone still in use loses nothing, and the same file twice is a no-op because every table has a
+real primary key and conflicts are *ignored* rather than replaced (a local row may carry a read
+receipt or delivered flag the export predates). Columns are intersected against the live
+`PRAGMA table_info`, so an export from an older or newer schema imports rather than throwing.
+`localDataRevision` is what tells the still-mounted `HopsApp` to re-query its contacts tray
+afterwards — without it a restore appears to do nothing until something unrelated refreshes.
+
 - `SharedPreferences` for small local state: auth token/username/avatar path, enabled feature IDs,
   watch-buddy state, theme index, carrot balance, cosmetics, Wordle progress/streaks, and one-time
   flags (`terms_accepted`, `walkthrough_seen`).
