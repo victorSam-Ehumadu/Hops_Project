@@ -32,8 +32,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     hand; keep them transparent-background and light-ink or they will sit in a pale box.
   - `Project_Hops_-_Group_18_Engineering_Deck_v2.pptx` — the **5-minute** deck, a separate
     deliverable from the 38-slide one above and **not** produced by `docs/generators/`:
-    it exists only as the `.pptx`, so edit it there. Six slides, one per thing the brief asks
-    for: cover, what it is, why we built it, tech stack, the live demo, questions. It was ten,
+    it exists only as the `.pptx`, so edit it there. Seven slides: cover, what it is, why we
+    built it, tech stack, how the live demo is set up (three phones — two students, one admin —
+    starting from `hopsapp.me`), questions, and a full-bleed outro video. It was ten,
     and four of those were one idea told four times — the "what it is" statement lines, a
     "Hops in One Breath" card trio and a combined what-and-why slide all made the same claim and
     two of them closed on the same three pills. **Don't re-add a slide that restates slide 2**;
@@ -47,10 +48,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     per-slide in this deck and has to be copied from a neighbour. Transitions and the
     click-reveal timings are raw OOXML (`<p:transition>`, `<p:timing>`), which python-pptx cannot
     express; every `spid` in a timing tree **must** name a shape that exists on that slide, or
-    PowerPoint silently repairs the file and drops all of its animation. The cover is the one
-    slide deliberately off `HOPS_DARK` — it carries the full-colour logo instead of the
-    watermark. Speaker notes carry a per-slide time budget summing to exactly 5:00, with the
-    live demo outside it; re-time the rest if any one slide changes.
+    PowerPoint silently repairs the file and drops all of its animation. Two traps when writing
+    that XML: **python-pptx renumbers slide parts on save**, so the partname a slide reports in
+    memory is not the name its XML ends up under — do every python-pptx save *first*, the raw-XML
+    pass *last*, and find the target part by searching its XML for the title text rather than
+    trusting a partname (writing to "the part python-pptx just called slide5" landed a slide's
+    animation on its neighbour). And the outro video's timing is **not** an entrance: it holds
+    `playFrom(0.0)`, a `togglePause` interactive sequence and a `<p:video>` media node, so a
+    blanket `re.sub` over `<p:timing>` stops the video playing at all. The cover and the outro
+    are the two slides deliberately off `HOPS_DARK` — the cover carries the full-colour logo
+    instead of the watermark, and the outro is full-bleed with no chrome over it. Speaker notes
+    carry a per-slide time budget summing to exactly 5:00, with the live demo and Q&A outside it;
+    re-time the rest if any one slide changes.
   - `Group 18 Presentation Practice Pack.docx` — the companion: running order, per-member pages,
     question bank, pre-flight checklist, demo-failure wording, and the table of figures anyone is
     allowed to quote on stage.
