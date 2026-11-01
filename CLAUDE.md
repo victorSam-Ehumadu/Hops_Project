@@ -30,6 +30,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     text), because a near-white slide in a darkened room is painful and wrecks night vision for
     the live demo. Eight images — seven diagrams plus the logo — are generated, not drawn by
     hand; keep them transparent-background and light-ink or they will sit in a pale box.
+  - `Project_Hops_-_Group_18_Engineering_Deck_v2.pptx` — the **5-minute** deck (10 slides), a
+    separate deliverable from the 38-slide one above and **not** produced by `docs/generators/`:
+    it exists only as the `.pptx`, so edit it there. House tokens, if you add a slide: background
+    inherited from the `HOPS_DARK` layout, accent `#2FD6A3`, body `#FFFFFF`/muted `#A9B8CC`,
+    cards `#1B2E47` on a `#3B5273` edge, titles Cambria 45.33pt bold, eyebrows Calibri 16pt bold
+    `spc="400"`. The footer and the corner watermark live on the **layout**, not on the slides,
+    so a new slide gets both free by using `HOPS_DARK` — but the slide-number placeholder is
+    per-slide in this deck and has to be copied from a neighbour. Transitions and the
+    click-reveal timings are raw OOXML (`<p:transition>`, `<p:timing>`), which python-pptx cannot
+    express; every `spid` in a timing tree **must** name a shape that exists on that slide, or
+    PowerPoint silently repairs the file and drops all of its animation. The cover is the one
+    slide deliberately off `HOPS_DARK` — it carries the full-colour logo instead of the
+    watermark. Speaker notes carry a per-slide time budget summing to exactly 5:00, with the
+    live demo outside it; re-time the rest if any one slide changes.
   - `Group 18 Presentation Practice Pack.docx` — the companion: running order, per-member pages,
     question bank, pre-flight checklist, demo-failure wording, and the table of figures anyone is
     allowed to quote on stage.
