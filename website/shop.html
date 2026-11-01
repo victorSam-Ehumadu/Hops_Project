@@ -4,32 +4,78 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Support Hops</title>
-  <meta name="description" content="Support Hops development — one-time contributions via Stripe.">
+  <meta name="description" content="Support Hops development with a one-off contribution.">
+  <link rel="icon" type="image/png" href="assets/hops_logo.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Hops">
+  <meta property="og:title" content="Support Hops">
+  <meta property="og:description" content="Support Hops development with a one-off contribution.">
+  <meta property="og:image" content="assets/hops_logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="theme-color" content="#10606f">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
+  <!--
+    ══════════════════════════════════════════════════════════════════
+    DEMO MODE — READ BEFORE CHANGING ANYTHING ON THIS PAGE
+    ══════════════════════════════════════════════════════════════════
+
+    This page SIMULATES a donation. No money moves, no card details are
+    collected, and nothing is sent anywhere. It exists so the flow can be
+    demonstrated and reviewed before a real payment provider is connected.
+
+    Two rules, both deliberate:
+
+      1. The red banner below must stay until a real provider is wired up,
+         and it must not be dismissible. A payment flow that looks real but
+         isn't is how people end up believing they've donated when they
+         haven't. If you remove the banner, you must have removed the
+         simulation in the same change.
+
+      2. This page asks for NO card number, expiry or CVC — not even a fake
+         one. A form that collects card details and does nothing with them
+         is a phishing page by shape, regardless of intent. When a real
+         provider is added, the card fields live on THEIR hosted page, not
+         on this one.
+
+    To go live, see website/README.md — "Switching the donation page to a
+    real provider". It is a small change: delete the banner, delete
+    simulatePayment(), and point the confirm button at the provider's
+    hosted checkout URL.
+  -->
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="demo-banner" role="status">
+    <strong>Demo mode — this is not a real payment.</strong>
+    Nothing is charged, no card details are asked for or stored, and no money moves.
+    This page is here to show how donating will work once a payment provider is connected.
+  </div>
+
   <nav class="site-nav">
     <a class="brand" href="index.html">
-      <img src="assets/hops_bunny.png" alt="Hops mascot">
+      <img src="assets/hops_logo.png" alt="Hops mascot">
       <p class="logo-word">Hops</p>
     </a>
     <ul class="links">
       <li><a href="index.html">Home</a></li>
       <li><a href="about.html">About &amp; FAQ</a></li>
-      <li><a href="download.html">Download</a></li>
       <li><a href="shop.html" class="active">Support Hops</a></li>
+      <li><a href="download.html" class="nav-cta">Download</a></li>
     </ul>
   </nav>
+
+  <main id="main">
 
   <header class="hero" style="padding-bottom: 24px;">
     <div class="container">
       <h1>Support Hops</h1>
       <p class="tagline">
-        Hops is free and works with no account required for its safety features. If you'd like
-        to help fund development, you can chip in below.
+        Hops is free, and it stays free. If you&rsquo;d like to help cover what it costs to keep
+        building it, you can chip in here.
       </p>
     </div>
   </header>
@@ -38,66 +84,252 @@
     <div class="container">
 
       <!--
-        Important, read before this page goes live: this is NOT the same
-        thing as in-app carrots. In-app carrots (spent in the Hops Shop
-        inside the app) are earned only by playing Hops Hopper and Hops
-        Wordle — there is no server connecting a purchase here to anything
-        in the app. That was a deliberate choice (see the app's
-        CarrotWallet — a real payment-to-app sync would need a backend
-        holding a Stripe secret key, which this project chose not to
-        build). Don't reword this section to imply a purchase here unlocks
-        anything in-app unless that backend actually gets built first.
+        This note is load-bearing, not decoration: in-app carrots are earned
+        only by playing Hops Hopper and Hops Wordle, and there is no backend
+        connecting a donation here to anything inside the app. Don't reword
+        this to imply otherwise unless that backend actually gets built.
       -->
-      <div class="note-box" style="margin-bottom: 40px; text-align: center;">
-        Supporting Hops here funds development directly — it doesn't unlock anything inside
-        the app. In-app carrots (spent on exclusive themes in the Hops Shop) are earned for
-        free by playing Hops Hopper and Hops Wordle.
+      <div class="note-box" style="margin-bottom: 32px; text-align: center;">
+        A donation here funds development &mdash; <strong>it doesn&rsquo;t unlock anything inside the
+        app</strong>. In-app carrots are earned for free by playing Hops Hopper and Hops Wordle,
+        and they only buy cosmetics. Nothing you can buy, anywhere, affects a safety feature.
       </div>
 
-      <div class="tier-grid">
-        <div class="tier">
-          <div class="badge">🥕</div>
-          <div class="amount">$2</div>
-          <div class="desc">A quick thank-you — every bit helps keep Hops going.</div>
-          <!--
-            TODO: replace href with a real Stripe Payment Link (Stripe
-            Dashboard → Payment links → create one in TEST mode first).
-            No code needed beyond pasting the URL here — Stripe hosts the
-            actual checkout page.
-          -->
-          <a class="btn btn-primary" href="#" aria-disabled="true">Support — $2</a>
+      <div class="donate-card">
+
+        <!-- ── Step 1: amount ──────────────────────────────────────── -->
+        <div class="donate-step active" id="step-amount">
+          <h3>Choose an amount</h3>
+          <p class="step-hint">One-off contribution. Pick a tier or enter your own.</p>
+
+          <div class="amount-grid">
+            <button type="button" class="amount-opt" data-amount="20" aria-pressed="false">R20</button>
+            <button type="button" class="amount-opt" data-amount="50" aria-pressed="true">R50</button>
+            <button type="button" class="amount-opt" data-amount="100" aria-pressed="false">R100</button>
+          </div>
+
+          <label for="custom-amount">Or another amount (ZAR)</label>
+          <input id="custom-amount" type="number" min="10" max="10000" step="1" placeholder="e.g. 250"
+                 inputmode="numeric" autocomplete="off">
+          <p class="field-error" id="amount-error" role="alert"></p>
+
+          <div class="donate-actions">
+            <button type="button" class="btn btn-primary" id="to-details">Continue</button>
+          </div>
         </div>
-        <div class="tier featured">
-          <div class="badge">🥕🥕</div>
-          <div class="amount">$5</div>
-          <div class="desc">The most popular tier — genuinely appreciated.</div>
-          <a class="btn btn-primary" href="#" aria-disabled="true">Support — $5</a>
+
+        <!-- ── Step 2: who's donating ──────────────────────────────── -->
+        <div class="donate-step" id="step-details">
+          <h3>Who&rsquo;s this from?</h3>
+          <p class="step-hint">
+            Only so we can say thank you. Leave the name blank to give anonymously.
+          </p>
+
+          <label for="donor-name">Name <span style="font-weight:400;">(optional)</span></label>
+          <input id="donor-name" type="text" placeholder="Your name" autocomplete="name">
+
+          <label for="donor-email">Email</label>
+          <input id="donor-email" type="email" placeholder="you@example.com" autocomplete="email">
+          <p class="field-error" id="email-error" role="alert"></p>
+
+          <div class="donate-actions">
+            <button type="button" class="btn btn-secondary" data-back="step-amount">Back</button>
+            <button type="button" class="btn btn-primary" id="to-review">Continue</button>
+          </div>
         </div>
-        <div class="tier">
-          <div class="badge">🥕🥕🥕</div>
-          <div class="amount">$10</div>
-          <div class="desc">Big help toward keeping Hops free for everyone on campus.</div>
-          <a class="btn btn-primary" href="#" aria-disabled="true">Support — $10</a>
+
+        <!-- ── Step 3: review ──────────────────────────────────────── -->
+        <div class="donate-step" id="step-review">
+          <h3>Check this over</h3>
+          <p class="step-hint">
+            In demo mode the next step is simulated. Nothing is charged and no card details are
+            requested at any point.
+          </p>
+
+          <div class="summary-row"><span class="k">Amount</span><span class="v" id="sum-amount">R50</span></div>
+          <div class="summary-row"><span class="k">From</span><span class="v" id="sum-name">Anonymous</span></div>
+          <div class="summary-row"><span class="k">Email</span><span class="v" id="sum-email">&mdash;</span></div>
+          <div class="summary-row"><span class="k">Type</span><span class="v">One-off</span></div>
+
+          <div class="donate-actions">
+            <button type="button" class="btn btn-secondary" data-back="step-details">Back</button>
+            <button type="button" class="btn btn-primary" id="do-pay">Simulate donation</button>
+          </div>
         </div>
+
+        <!-- ── Step 4: processing ──────────────────────────────────── -->
+        <div class="donate-step" id="step-processing" aria-live="polite">
+          <div class="spinner" role="presentation"></div>
+          <h3 style="text-align:center;">Simulating&hellip;</h3>
+          <p class="step-hint" style="text-align:center;">
+            A real provider would be showing their secure checkout here.
+          </p>
+        </div>
+
+        <!-- ── Step 5: receipt ─────────────────────────────────────── -->
+        <div class="donate-step" id="step-done" aria-live="polite">
+          <div class="receipt-tick">&#127881;</div>
+          <h3 style="text-align:center;">Thank you &mdash; in principle!</h3>
+          <p class="step-hint" style="text-align:center;">
+            This was a simulated donation, so <strong>you have not been charged</strong> and no
+            money has moved. Here&rsquo;s what a real receipt would have shown.
+          </p>
+
+          <div class="summary-row"><span class="k">Amount</span><span class="v" id="done-amount">R50</span></div>
+          <div class="summary-row"><span class="k">From</span><span class="v" id="done-name">Anonymous</span></div>
+          <div class="summary-row"><span class="k">Reference</span><span class="v"><span class="receipt-ref" id="done-ref">&mdash;</span></span></div>
+          <div class="summary-row"><span class="k">Status</span><span class="v" style="color:#a3301a;">Simulated &mdash; not charged</span></div>
+
+          <div class="donate-actions">
+            <button type="button" class="btn btn-secondary" id="start-over">Run it again</button>
+            <a class="btn btn-primary" href="index.html">Back to Hops</a>
+          </div>
+        </div>
+
       </div>
 
-      <div class="note-box" style="text-align: center;">
-        Checkout is handled entirely by Stripe — Hops never sees or stores your card details.
-        <br>
-        <strong>Payment links aren't set up yet — buttons above are placeholders.</strong>
+      <div class="note-box" style="text-align: center; margin-top: 32px;">
+        <strong>When this is live:</strong> the payment itself will be handled entirely by the
+        payment provider on their own secure page. Hops will never see, handle or store your card
+        details &mdash; which is also why this demo doesn&rsquo;t ask for them.
       </div>
 
     </div>
   </section>
 
+  </main>
+
   <footer class="site-footer">
     <p>
-      <a href="about.html#contact">Contact</a> ·
-      <a href="about.html#faq">FAQ</a> ·
+      <a href="about.html#contact">Contact</a> &middot;
+      <a href="about.html#faq">FAQ</a> &middot;
+      <a href="download.html">Download</a> &middot;
       <a href="shop.html">Support Hops</a>
     </p>
     <p>&copy; 2026 Hops. Built for campus, built to work offline.</p>
   </footer>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ── State ────────────────────────────────────────────────────────
+    var state = { amount: 50, name: '', email: '' };
+
+    var $ = function (id) { return document.getElementById(id); };
+
+    function show(stepId) {
+      var steps = document.querySelectorAll('.donate-step');
+      for (var i = 0; i < steps.length; i++) {
+        steps[i].classList.toggle('active', steps[i].id === stepId);
+      }
+      // Move focus to the new step's heading so keyboard and screen-reader
+      // users aren't left at the bottom of a panel that just disappeared.
+      var h = document.querySelector('#' + stepId + ' h3');
+      if (h) { h.setAttribute('tabindex', '-1'); h.focus(); }
+    }
+
+    // ── Step 1: amount ───────────────────────────────────────────────
+    var opts = document.querySelectorAll('.amount-opt');
+    var custom = $('custom-amount');
+
+    function selectTier(btn) {
+      for (var i = 0; i < opts.length; i++) {
+        opts[i].setAttribute('aria-pressed', String(opts[i] === btn));
+      }
+      state.amount = Number(btn.getAttribute('data-amount'));
+      custom.value = '';
+      $('amount-error').textContent = '';
+    }
+
+    for (var i = 0; i < opts.length; i++) {
+      opts[i].addEventListener('click', function () { selectTier(this); });
+    }
+
+    // Typing a custom amount clears the tier selection — two sources of
+    // truth for one value is how you end up charging the wrong number.
+    custom.addEventListener('input', function () {
+      for (var j = 0; j < opts.length; j++) { opts[j].setAttribute('aria-pressed', 'false'); }
+      $('amount-error').textContent = '';
+    });
+
+    $('to-details').addEventListener('click', function () {
+      if (custom.value.trim() !== '') {
+        var v = Number(custom.value);
+        if (!isFinite(v) || v < 10 || v > 10000) {
+          $('amount-error').textContent = 'Enter an amount between R10 and R10 000.';
+          custom.focus();
+          return;
+        }
+        state.amount = Math.round(v);
+      }
+      if (!state.amount) {
+        $('amount-error').textContent = 'Pick an amount to continue.';
+        return;
+      }
+      show('step-details');
+    });
+
+    // ── Step 2: details ──────────────────────────────────────────────
+    $('to-review').addEventListener('click', function () {
+      var email = $('donor-email').value.trim();
+      // Deliberately permissive: the only thing worth rejecting here is an
+      // obvious typo. Real validation is "did the receipt arrive".
+      if (email === '' || email.indexOf('@') < 1 || email.lastIndexOf('.') < email.indexOf('@')) {
+        $('email-error').textContent = 'Enter an email address so we can send a receipt.';
+        $('donor-email').focus();
+        return;
+      }
+      $('email-error').textContent = '';
+      state.name = $('donor-name').value.trim();
+      state.email = email;
+
+      $('sum-amount').textContent = 'R' + state.amount;
+      $('sum-name').textContent = state.name || 'Anonymous';
+      $('sum-email').textContent = state.email;
+      show('step-review');
+    });
+
+    // ── Back buttons ─────────────────────────────────────────────────
+    var backs = document.querySelectorAll('[data-back]');
+    for (var b = 0; b < backs.length; b++) {
+      backs[b].addEventListener('click', function () {
+        show(this.getAttribute('data-back'));
+      });
+    }
+
+    // ── Step 3 → 4 → 5: the simulation ───────────────────────────────
+    //
+    // THIS IS THE ONLY SIMULATED PART. Replacing it with a real provider
+    // means deleting this function and sending the visitor to the
+    // provider's hosted checkout instead — see README.md.
+    function simulatePayment() {
+      show('step-processing');
+      window.setTimeout(function () {
+        $('done-amount').textContent = 'R' + state.amount;
+        $('done-name').textContent = state.name || 'Anonymous';
+        // Prefixed DEMO- so a reference can never be mistaken for a real
+        // transaction id if someone screenshots this.
+        $('done-ref').textContent =
+          'DEMO-' + Date.now().toString(36).toUpperCase().slice(-6);
+        show('step-done');
+      }, 1400);
+    }
+
+    $('do-pay').addEventListener('click', simulatePayment);
+
+    $('start-over').addEventListener('click', function () {
+      state = { amount: 5, name: '', email: '' };
+      custom.value = '';
+      $('donor-name').value = '';
+      $('donor-email').value = '';
+      for (var k = 0; k < opts.length; k++) {
+        opts[k].setAttribute('aria-pressed', String(opts[k].getAttribute('data-amount') === '5'));
+      }
+      show('step-amount');
+    });
+  })();
+  </script>
 
 </body>
 </html>
