@@ -30,9 +30,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     text), because a near-white slide in a darkened room is painful and wrecks night vision for
     the live demo. Eight images — seven diagrams plus the logo — are generated, not drawn by
     hand; keep them transparent-background and light-ink or they will sit in a pale box.
-  - `Project_Hops_-_Group_18_Engineering_Deck_v2.pptx` — the **5-minute** deck (10 slides), a
-    separate deliverable from the 38-slide one above and **not** produced by `docs/generators/`:
-    it exists only as the `.pptx`, so edit it there. House tokens, if you add a slide: background
+  - `Project_Hops_-_Group_18_Engineering_Deck_v2.pptx` — the **5-minute** deck, a separate
+    deliverable from the 38-slide one above and **not** produced by `docs/generators/`:
+    it exists only as the `.pptx`, so edit it there. Six slides, one per thing the brief asks
+    for: cover, what it is, why we built it, tech stack, the live demo, questions. It was ten,
+    and four of those were one idea told four times — the "what it is" statement lines, a
+    "Hops in One Breath" card trio and a combined what-and-why slide all made the same claim and
+    two of them closed on the same three pills. **Don't re-add a slide that restates slide 2**;
+    if something needs saying twice it belongs in the speaker notes, which is where the cut
+    material went (the three Bluetooth mechanisms are held in slide 4's notes for questions).
+    House tokens, if you add a slide: background
     inherited from the `HOPS_DARK` layout, accent `#2FD6A3`, body `#FFFFFF`/muted `#A9B8CC`,
     cards `#1B2E47` on a `#3B5273` edge, titles Cambria 45.33pt bold, eyebrows Calibri 16pt bold
     `spc="400"`. The footer and the corner watermark live on the **layout**, not on the slides,
