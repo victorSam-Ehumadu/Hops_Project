@@ -1,70 +1,172 @@
 /* website/styles.css
  *
  * Shared styles for every page on the Hops marketing site. Plain CSS, no
- * build step, no framework — the site is four static HTML files, so a
- * preprocessor or bundler would be pure overhead. Palette below is lifted
- * directly from the app's "Hops Default" theme (client/lib/theme/app_theme.dart)
- * so the website and the app read as the same product rather than a
- * generic landing page bolted on afterward.
+ * build step, no framework — the site is five static HTML files, so a
+ * preprocessor or bundler would be pure overhead.
+ *
+ * The palette still comes from the app's "Hops Default" theme
+ * (client/lib/theme/app_theme.dart) so the site and the app read as one
+ * product, with one addition: the green from the logo's ECG line is now a
+ * real accent token rather than something only the mascot image uses.
+ *
+ * Structure:
+ *   1. Tokens (light + dark)       5. Cards and grids
+ *   2. Base and layout             6. Page-specific blocks
+ *   3. Navigation                  7. Footer
+ *   4. Hero                        8. Accessibility, motion, small screens
+ *
+ * Two things worth knowing before editing:
+ *
+ *   * EVERY CLASS NAME HERE IS LOAD-BEARING ON MULTIPLE PAGES. The five
+ *     HTML files share this one stylesheet and there is no build step to
+ *     catch a rename, so a class dropped here fails silently on a page you
+ *     did not open. Grep before renaming.
+ *   * Dark mode is defined by overriding TOKENS ONLY, never by restating
+ *     component rules. If a component hardcodes a colour instead of using
+ *     a token it will look correct in light mode and wrong in dark, and
+ *     nothing will warn you.
  */
 
+/* ── 1. Tokens ─────────────────────────────────────────────────────── */
+
 :root {
-  --primary: #165c6f;
+  /* Brand */
+  --primary: #10606f;
+  --primary-strong: #0b4653;
   --primary-container: #367588;
   --accent: #417676;
   --on-accent: #c4fbfa;
-  --bg: #e2fffe;
-  --surface: #d2f5f4;
+  /* The green from the logo's pulse line. Used for emphasis and "live"
+   * markers, never for body text — it fails contrast at small sizes. */
+  --lime: #1d9e6a;
+  --lime-soft: #d6f7e8;
+
+  /* Surfaces */
+  --bg: #e9fcfb;
+  --bg-tint: #d7f5f4;
+  --surface: #ffffff;
+  --surface-2: #f2fbfb;
+  --line: #c3e7e6;
+
+  /* Text */
   --text: #002020;
-  --text-soft: #002020b3; /* text @ 70% */
+  --text-soft: #28565a;
+  --text-faint: #5b8084;
+  --on-primary: #ffffff;
   --white: #ffffff;
-  --radius: 20px;
+
+  /* Shape */
+  --radius: 18px;
+  --radius-lg: 26px;
   --radius-sm: 12px;
-  --shadow: 0 8px 24px rgba(0, 32, 32, 0.12);
+  --radius-pill: 999px;
+
+  /* Elevation. Tinted with the brand hue rather than neutral grey, which
+   * is what keeps a white card from looking like a cut-out on the mint. */
+  --shadow-sm: 0 1px 2px rgba(0, 40, 44, .06), 0 2px 6px rgba(0, 40, 44, .05);
+  --shadow: 0 2px 4px rgba(0, 40, 44, .05), 0 10px 24px rgba(0, 40, 44, .08);
+  --shadow-lg: 0 4px 8px rgba(0, 40, 44, .06), 0 20px 48px rgba(0, 40, 44, .14);
+  --ring: 0 0 0 3px rgba(16, 96, 111, .28);
+
+  /* Rhythm */
+  --gap: 20px;
+  --section-y: clamp(56px, 8vw, 96px);
+  --container: 1160px;
 }
 
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #5fd9e4;
+    --primary-strong: #8ce9f1;
+    --primary-container: #11454f;
+    --accent: #6fc9c6;
+    --lime: #4fd79b;
+    --lime-soft: #0d3b2c;
+
+    --bg: #041a1e;
+    --bg-tint: #072429;
+    --surface: #0b2b31;
+    --surface-2: #0f353c;
+    --line: #17474f;
+
+    --text: #e3fbfa;
+    --text-soft: #a8ccce;
+    --text-faint: #7da6a9;
+    --on-primary: #00282f;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow: 0 2px 4px rgba(0, 0, 0, .35), 0 12px 28px rgba(0, 0, 0, .45);
+    --shadow-lg: 0 4px 10px rgba(0, 0, 0, .4), 0 24px 60px rgba(0, 0, 0, .55);
+    --ring: 0 0 0 3px rgba(95, 217, 228, .35);
+  }
 }
+
+/* ── 2. Base and layout ────────────────────────────────────────────── */
+
+* { box-sizing: border-box; }
 
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
-  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+               sans-serif;
   background: var(--bg);
   color: var(--text);
-  line-height: 1.6;
+  line-height: 1.65;
+  font-size: 16px;
+  /* A single soft wash behind the whole page. Flat mint over 2000px of
+   * scroll reads as unfinished; this gives the fold some depth without
+   * costing an image request. */
+  background-image:
+    radial-gradient(42rem 28rem at 12% -8%, rgba(16, 96, 111, .10), transparent 60%),
+    radial-gradient(34rem 24rem at 88% 2%, rgba(29, 158, 106, .10), transparent 62%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
-h1, h2, h3, .logo-word {
+h1, h2, h3, h4, .logo-word {
   font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
   font-weight: 800;
-  margin: 0 0 0.5em;
+  line-height: 1.18;
+  letter-spacing: -0.015em;
+  margin: 0 0 .5em;
+  color: var(--text);
 }
 
-p {
-  margin: 0 0 1em;
-}
-
-a {
-  color: var(--primary);
-}
-
-img {
-  max-width: 100%;
-  display: block;
-}
+p { margin: 0 0 1em; }
+a { color: var(--primary); }
+img { max-width: 100%; display: block; }
 
 .container {
-  max-width: 1080px;
+  max-width: var(--container);
   margin: 0 auto;
   padding: 0 24px;
 }
 
-/* ── Nav ─────────────────────────────────────────────────────────────── */
+.container-narrow { max-width: 760px; }
+
+/* A small capitalised label above a heading. Gives each section a handle
+ * and stops every block opening with an unannounced <h2>. */
+.eyebrow {
+  display: inline-block;
+  font-family: 'Poppins', sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--lime);
+  margin: 0 0 10px;
+}
+
+.section .eyebrow { display: block; }
+.section--center { text-align: center; }
+.section--tint { background: var(--bg-tint); }
+
+/* ── 3. Navigation ─────────────────────────────────────────────────── */
 
 .site-nav {
   display: flex;
@@ -72,12 +174,20 @@ img {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 18px 24px;
-  background: var(--white);
-  box-shadow: 0 2px 12px rgba(0, 32, 32, 0.08);
+  padding: 14px 24px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 50;
+}
+
+/* color-mix is recent; without it the bar would be fully transparent and
+ * the page would scroll visibly through the links. */
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  .site-nav { background: var(--bg); }
 }
 
 .site-nav .brand {
@@ -92,20 +202,22 @@ img {
   /* The mark is square (see assets/hops_logo.png) — fixing both width and
    * height to different values stretched it. Keep it square and let
    * object-fit guard against a future asset with another aspect ratio. */
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   object-fit: contain;
 }
 
 .site-nav .brand .logo-word {
-  font-size: 20px;
+  font-size: 21px;
   margin: 0;
   color: var(--primary);
+  letter-spacing: -0.02em;
 }
 
 .site-nav .links {
   display: flex;
-  gap: 22px;
+  align-items: center;
+  gap: 4px;
   flex-wrap: wrap;
   list-style: none;
   margin: 0;
@@ -113,84 +225,118 @@ img {
 }
 
 .site-nav .links a {
+  display: block;
   text-decoration: none;
-  color: var(--text);
+  color: var(--text-soft);
   font-weight: 700;
-  font-size: 14px;
-  padding: 6px 4px;
-  border-bottom: 2px solid transparent;
+  font-size: 14.5px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  transition: background-color .16s ease, color .16s ease;
 }
 
-.site-nav .links a:hover,
+.site-nav .links a:hover { background: var(--bg-tint); color: var(--text); }
+
 .site-nav .links a.active {
-  border-bottom-color: var(--primary);
-  color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
 }
 
-/* ── Buttons ─────────────────────────────────────────────────────────── */
+/* The nav's own call to action, visually separated from the page links. */
+.site-nav .links a.nav-cta {
+  background: var(--lime-soft);
+  color: var(--lime);
+  margin-left: 6px;
+}
+
+.site-nav .links a.nav-cta:hover {
+  background: var(--lime);
+  color: var(--white);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────── */
 
 .btn {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   padding: 14px 28px;
-  border-radius: 100px;
-  font-weight: 800;
+  border-radius: var(--radius-pill);
+  font-family: 'Poppins', sans-serif;
+  font-weight: 700;
   text-decoration: none;
   font-size: 15px;
-  border: none;
+  line-height: 1.2;
+  border: 2px solid transparent;
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition: transform .16s ease, box-shadow .16s ease,
+              background-color .16s ease, color .16s ease;
 }
 
 .btn-primary {
   background: var(--primary);
-  color: var(--white);
-  box-shadow: 0 6px 16px rgba(22, 92, 111, 0.35);
+  color: var(--on-primary);
+  box-shadow: 0 6px 18px rgba(16, 96, 111, .30);
 }
 
 .btn-primary:hover {
+  background: var(--primary-strong);
   transform: translateY(-2px);
-  box-shadow: 0 10px 22px rgba(22, 92, 111, 0.4);
+  box-shadow: 0 12px 26px rgba(16, 96, 111, .38);
 }
 
 .btn-secondary {
-  background: var(--white);
+  background: var(--surface);
   color: var(--primary);
-  border: 2px solid var(--primary);
+  border-color: var(--line);
+  box-shadow: var(--shadow-sm);
 }
 
 .btn-secondary:hover {
-  background: var(--surface);
+  border-color: var(--primary);
+  transform: translateY(-2px);
 }
+
+.btn-lg { padding: 17px 34px; font-size: 16.5px; }
 
 .btn[aria-disabled="true"] {
-  opacity: 0.5;
+  opacity: .45;
   cursor: not-allowed;
+  /* These are anchors, and pointer-events only stops the mouse — they stay
+   * keyboard-reachable unless the markup also carries tabindex="-1". */
   pointer-events: none;
+  box-shadow: none;
+  transform: none;
 }
 
-/* ── Hero ────────────────────────────────────────────────────────────── */
+/* ── 4. Hero ───────────────────────────────────────────────────────── */
 
 .hero {
-  padding: 72px 0 56px;
+  padding: clamp(48px, 7vw, 86px) 0 clamp(40px, 5vw, 64px);
   text-align: center;
 }
 
 .hero img.mascot {
-  width: 132px;
+  width: 124px;
   height: auto;
-  margin: 0 auto 20px;
+  margin: 0 auto 18px;
+  filter: drop-shadow(0 12px 26px rgba(0, 40, 44, .22));
 }
 
 .hero h1 {
-  font-size: clamp(32px, 5vw, 52px);
-  color: var(--primary);
+  font-size: clamp(34px, 5.4vw, 60px);
+  color: var(--text);
+  margin-bottom: .4em;
 }
 
+.hero h1 .hl { color: var(--primary); }
+
 .hero p.tagline {
-  font-size: 18px;
+  font-size: clamp(17px, 1.6vw, 20px);
   color: var(--text-soft);
-  max-width: 560px;
-  margin: 0 auto 28px;
+  max-width: 620px;
+  margin: 0 auto 30px;
 }
 
 .hero .actions {
@@ -200,275 +346,457 @@ img {
   flex-wrap: wrap;
 }
 
-/* ── Cards / grids ───────────────────────────────────────────────────── */
-
-.section {
-  padding: 56px 0;
+/* Asymmetric variant: copy on the left, mascot on the right. Opt-in via an
+ * extra class so the other pages keep the centred hero unchanged. */
+.hero-split .container {
+  display: grid;
+  grid-template-columns: 1.15fr .85fr;
+  align-items: center;
+  gap: clamp(24px, 4vw, 56px);
+  text-align: left;
 }
 
+.hero-split .hero-copy .actions { justify-content: flex-start; }
+.hero-split p.tagline { margin-left: 0; margin-right: 0; }
+
+.hero-split .hero-art {
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+.hero-split .hero-art img {
+  width: min(100%, 320px);
+  filter: drop-shadow(0 20px 40px rgba(0, 40, 44, .25));
+}
+
+/* A soft glow and two thin rings behind the mascot — the same "one phone
+ * reaching out" idea the app's radar uses.
+ *
+ * The glow must FADE OUT rather than stop at a radius. A colour stop with
+ * a hard edge (…16%, transparent) 0 38%, transparent 39%) renders as a flat
+ * grey disc sitting behind the logo, not as light coming off it. */
+.hero-split .hero-art::before {
+  content: '';
+  position: absolute;
+  /* A square box, centred — NOT inset on a rectangular parent. Inset made
+   * the element wider than tall, so the ring gradients drew as ellipses
+   * and the outer one was cut off at the top and bottom edges. */
+  top: 50%;
+  left: 50%;
+  width: min(96%, 420px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%,
+      color-mix(in srgb, var(--primary) 15%, transparent) 0%,
+      color-mix(in srgb, var(--primary) 7%, transparent) 36%,
+      transparent 64%),
+    radial-gradient(circle, transparent 0 63%,
+      color-mix(in srgb, var(--primary) 22%, transparent) 63.4% 64.2%,
+      transparent 64.6%),
+    radial-gradient(circle, transparent 0 80%,
+      color-mix(in srgb, var(--lime) 30%, transparent) 80.4% 81.2%,
+      transparent 81.6%);
+}
+
+@media (max-width: 900px) {
+  .hero-split .container {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+  .hero-split .hero-copy .actions { justify-content: center; }
+  .hero-split p.tagline { margin-left: auto; margin-right: auto; }
+  .hero-split .hero-art { order: -1; }
+  .hero-split .hero-art img { width: min(62%, 210px); }
+}
+
+/* Small reassurance chips under the hero buttons. */
+.chip-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+  justify-content: inherit;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-soft);
+  box-shadow: var(--shadow-sm);
+}
+
+.chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lime);
+}
+
+/* ── 5. Cards and grids ────────────────────────────────────────────── */
+
+.section { padding: var(--section-y) 0; }
+
 .section h2 {
-  color: var(--primary);
-  font-size: 28px;
-  text-align: center;
+  color: var(--text);
+  font-size: clamp(25px, 3.2vw, 36px);
   margin-bottom: 12px;
 }
 
+.section--center h2,
+.section--center .eyebrow,
+.section--center .lede { text-align: center; }
+
 .section .lede {
-  text-align: center;
   color: var(--text-soft);
-  max-width: 620px;
-  margin: 0 auto 40px;
+  max-width: 660px;
+  margin: 0 0 42px;
+  font-size: 17px;
 }
 
+.section--center .lede { margin-left: auto; margin-right: auto; }
+
+/* Three across on a wide screen, two on a tablet, one on a phone. The old
+ * auto-fit/220px rule produced four ~190px columns inside a 1080px
+ * container, so six short paragraphs became six tall thin ones. */
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--gap);
+}
+
+.card-grid--2 { grid-template-columns: repeat(2, 1fr); }
+.card-grid--4 { grid-template-columns: repeat(4, 1fr); }
+
+@media (max-width: 1000px) {
+  .card-grid,
+  .card-grid--4 { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 620px) {
+  .card-grid,
+  .card-grid--2,
+  .card-grid--4 { grid-template-columns: 1fr; }
 }
 
 .card {
-  background: var(--white);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 26px;
-  box-shadow: var(--shadow);
+  padding: 26px 24px;
+  box-shadow: var(--shadow-sm);
+  transition: transform .18s ease, box-shadow .18s ease,
+              border-color .18s ease;
 }
 
+.card-grid .card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lg);
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
+}
+
+/* The emoji used to sit loose at 32px with nothing holding it. In a
+ * tinted tile it reads as an icon and gives every card the same optical
+ * start point regardless of which glyph a platform substitutes. */
 .card .icon {
-  font-size: 32px;
-  margin-bottom: 10px;
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  background: var(--bg-tint);
+  font-size: 25px;
+  line-height: 1;
+  margin-bottom: 16px;
 }
 
 .card h3 {
-  font-size: 17px;
-  color: var(--primary);
-  margin-bottom: 6px;
+  font-size: 18px;
+  color: var(--text);
+  margin-bottom: 8px;
 }
 
 .card p {
-  font-size: 14px;
+  font-size: 14.5px;
   color: var(--text-soft);
-  margin: 0;
+  margin: 0 0 .8em;
 }
 
-/* ── FAQ (native <details>, no JS needed) ───────────────────────────── */
+.card p:last-child { margin-bottom: 0; }
 
-.faq-item {
-  background: var(--white);
-  border-radius: var(--radius-sm);
-  padding: 4px 20px;
-  margin-bottom: 12px;
+/* Pushes a button to the bottom so buttons line up across a row even when
+ * the cards above them hold different amounts of text. */
+.card .card-foot { margin-top: auto; padding-top: 18px; }
+
+.card--feature {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
   box-shadow: var(--shadow);
+}
+
+.card--muted { opacity: .72; }
+
+.card--wide { grid-column: 1 / -1; }
+
+/* A standalone call-to-action band.
+ *
+ * Deliberately NOT token-driven: it keeps the deep-teal gradient and white
+ * text in both colour schemes. Built from tokens it inverted in dark mode
+ * into a light-to-dark gradient, which no single text colour can sit on
+ * legibly — the heading stayed readable and the paragraph disappeared into
+ * the far end of the ramp. One fixed, self-contained block is correct here. */
+.cta-band {
+  background: linear-gradient(135deg, #0b4653 0%, #10606f 52%, #19798a 100%);
+  border-radius: var(--radius-lg);
+  padding: clamp(32px, 5vw, 56px);
+  text-align: center;
+  color: #ffffff;
+  box-shadow: var(--shadow-lg);
+}
+
+.cta-band h2 { color: #ffffff; }
+.cta-band .eyebrow { color: #7ff0c2; }
+.cta-band p { color: rgba(255, 255, 255, .88); max-width: 640px;
+              margin-left: auto; margin-right: auto; }
+
+.cta-band .btn-primary {
+  background: #ffffff;
+  color: #0b4653;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .25);
+}
+
+.cta-band .btn-primary:hover { background: #eafbfa; color: #0b4653; }
+
+/* Numbered "how it works" steps. */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--gap);
+  counter-reset: step;
+}
+
+@media (max-width: 820px) { .steps { grid-template-columns: 1fr; } }
+
+.step {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 26px 24px 24px;
+  box-shadow: var(--shadow-sm);
+}
+
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-family: 'Poppins', sans-serif;
+  font-weight: 800;
+  font-size: 16px;
+  margin-bottom: 14px;
+}
+
+.step h3 { font-size: 17px; margin-bottom: 6px; }
+.step p { font-size: 14.5px; color: var(--text-soft); margin: 0; }
+
+/* ── 6. Page-specific blocks ───────────────────────────────────────── */
+
+/* FAQ (native <details>, no JS needed) */
+.faq-item {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px 20px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-sm);
 }
 
 .faq-item summary {
   cursor: pointer;
-  font-weight: 800;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 700;
   padding: 16px 0;
-  color: var(--primary);
+  color: var(--text);
   list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
 }
 
-.faq-item summary::-webkit-details-marker {
-  display: none;
-}
+.faq-item summary::-webkit-details-marker { display: none; }
 
 .faq-item summary::before {
   content: '+';
-  display: inline-block;
-  width: 20px;
-  font-size: 18px;
+  flex: 0 0 22px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  border-radius: 7px;
+  background: var(--bg-tint);
+  color: var(--primary);
+  font-size: 15px;
+  line-height: 1;
 }
 
 .faq-item[open] summary::before {
   content: '\2212'; /* minus sign */
+  background: var(--primary);
+  color: var(--on-primary);
 }
 
 .faq-item .answer {
-  padding: 0 0 16px 20px;
+  padding: 0 0 16px 34px;
   color: var(--text-soft);
-  font-size: 14px;
+  font-size: 14.5px;
 }
 
-/* ── Shop tiers ──────────────────────────────────────────────────────── */
-
+/* Shop tiers */
 .tier-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--gap);
   margin-bottom: 32px;
 }
 
+@media (max-width: 820px) { .tier-grid { grid-template-columns: 1fr; } }
+
 .tier {
-  background: var(--white);
+  background: var(--surface);
   border-radius: var(--radius);
   padding: 30px 24px;
   text-align: center;
-  box-shadow: var(--shadow);
-  border: 2px solid transparent;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--line);
 }
 
 .tier.featured {
   border-color: var(--primary);
+  box-shadow: var(--shadow);
 }
 
-.tier .badge {
-  font-size: 34px;
-  margin-bottom: 8px;
-}
+.tier .badge { font-size: 34px; margin-bottom: 8px; }
 
 .tier .amount {
-  font-size: 26px;
+  font-family: 'Poppins', sans-serif;
+  font-size: 28px;
   font-weight: 800;
   color: var(--primary);
   margin-bottom: 4px;
 }
 
 .tier .desc {
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--text-soft);
   margin-bottom: 18px;
   min-height: 40px;
 }
 
 .note-box {
-  background: var(--surface);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 18px 22px;
-  font-size: 14px;
+  padding: 20px 24px;
+  font-size: 14.5px;
   color: var(--text-soft);
-  max-width: 700px;
+  max-width: 760px;
   margin: 0 auto;
 }
 
-/* ── Contact form (mailto-based, no backend) ────────────────────────── */
-
+/* Contact form (mailto-based, no backend) */
 .contact-form {
-  max-width: 520px;
+  max-width: 560px;
   margin: 0 auto;
-  background: var(--white);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 30px;
   box-shadow: var(--shadow);
 }
 
-.contact-form label {
+.contact-form label,
+.donate-card label {
   display: block;
+  font-family: 'Poppins', sans-serif;
   font-weight: 700;
   font-size: 13px;
   margin: 14px 0 6px;
-  color: var(--primary);
-}
-
-.contact-form input,
-.contact-form textarea {
-  width: 100%;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  border: 2px solid var(--surface);
-  font-family: inherit;
-  font-size: 14px;
-  background: var(--bg);
   color: var(--text);
 }
 
+.contact-form input,
+.contact-form textarea,
+.donate-card input[type="text"],
+.donate-card input[type="email"],
+.donate-card input[type="number"] {
+  width: 100%;
+  padding: 13px 15px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--line);
+  font-family: inherit;
+  font-size: 15px;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
 .contact-form input:focus,
-.contact-form textarea:focus {
+.contact-form textarea:focus,
+.donate-card input:focus {
   outline: none;
   border-color: var(--primary);
+  box-shadow: var(--ring);
 }
 
-.contact-form button {
-  margin-top: 18px;
-  width: 100%;
-}
+.contact-form button { margin-top: 18px; width: 100%; }
 
-/* ── Footer ──────────────────────────────────────────────────────────── */
-
-.site-footer {
-  padding: 32px 24px;
-  text-align: center;
-  color: var(--text-soft);
-  font-size: 13px;
-}
-
-.site-footer a {
-  color: var(--primary);
-  text-decoration: none;
-  font-weight: 700;
-}
-
-/* ── Sub-nav (About page's About/FAQ/Contact jump links) ───────────── */
-
+/* Sub-nav (About page's About/FAQ/Contact jump links) */
 .subnav {
   display: flex;
   justify-content: center;
-  gap: 24px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 24px 0 8px;
+  padding: 20px 0 4px;
 }
 
 .subnav a {
   text-decoration: none;
-  font-weight: 800;
-  color: var(--primary-container);
+  font-family: 'Poppins', sans-serif;
+  font-weight: 700;
+  color: var(--text-soft);
   font-size: 14px;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--line);
 }
 
-/* ── Accessibility & motion ──────────────────────────────────────────
- *
- * Added in the Oct 2026 review. Three gaps the original stylesheet had:
- * no visible keyboard focus anywhere, `scroll-behavior: smooth` applied
- * unconditionally (which is exactly what prefers-reduced-motion exists to
- * suppress), and no small-screen tightening on a site whose audience is
- * students on phones.
- */
+.subnav a:hover { color: var(--primary); border-color: var(--primary); }
 
-:focus-visible {
-  outline: 3px solid var(--primary);
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-
-/* The disabled-looking buttons are anchors, and `pointer-events: none`
- * only stops the mouse — they stayed keyboard-reachable and activatable.
- * Pair this with tabindex="-1" in the markup. */
-.btn[aria-disabled="true"] {
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-  .btn:hover { transform: none; }
-}
-
-@media (max-width: 640px) {
-  .site-nav { padding: 14px 16px; }
-  .site-nav .links { gap: 14px; width: 100%; }
-  .site-nav .links a { font-size: 13px; }
-  .container { padding: 0 16px; }
-  .hero { padding: 44px 0 36px; }
-  .section { padding: 40px 0; }
-  .btn { padding: 13px 22px; width: 100%; text-align: center; }
-  .hero .actions { flex-direction: column; align-items: stretch; }
-}
-
-/* ── Donation flow (shop.html) ───────────────────────────────────────
+/* Donation flow (shop.html)
  *
  * DEMO MODE. The banner below is deliberately loud and deliberately not
  * dismissible: this flow simulates a payment and moves no money, and a
  * visitor must never be able to mistake it for a real checkout. When a
  * real payment provider is connected, the whole `.demo-banner` and the
- * simulated step go away together — see README.
- */
-
+ * simulated step go away together — see README. */
 .demo-banner {
   background: #7a2d12;
   color: #ffe9e1;
@@ -482,25 +810,22 @@ img {
 .demo-banner strong { color: #ffffff; }
 
 .donate-card {
-  background: var(--white);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 30px;
-  max-width: 540px;
+  padding: 32px;
+  max-width: 560px;
   margin: 0 auto;
 }
 
 .donate-step { display: none; }
 .donate-step.active { display: block; }
 
-.donate-card h3 {
-  font-size: 19px;
-  color: var(--primary);
-  margin-bottom: 4px;
-}
+.donate-card h3 { font-size: 20px; color: var(--text); margin-bottom: 4px; }
 
 .donate-card .step-hint {
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--text-soft);
   margin-bottom: 20px;
 }
@@ -513,94 +838,142 @@ img {
 }
 
 .amount-opt {
-  padding: 16px 8px;
+  padding: 17px 8px;
   border-radius: var(--radius-sm);
-  border: 2px solid var(--surface);
-  background: var(--bg);
-  font-family: inherit;
+  border: 1.5px solid var(--line);
+  background: var(--surface-2);
+  font-family: 'Poppins', sans-serif;
   font-size: 17px;
   font-weight: 800;
-  color: var(--primary);
+  color: var(--text);
   cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
 }
+
+.amount-opt:hover { border-color: var(--primary); }
 
 .amount-opt[aria-pressed="true"] {
   border-color: var(--primary);
-  background: var(--surface);
+  background: var(--primary);
+  color: var(--on-primary);
 }
-
-.donate-card label {
-  display: block;
-  font-weight: 700;
-  font-size: 13px;
-  margin: 14px 0 6px;
-  color: var(--primary);
-}
-
-.donate-card input[type="text"],
-.donate-card input[type="email"],
-.donate-card input[type="number"] {
-  width: 100%;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  border: 2px solid var(--surface);
-  font-family: inherit;
-  font-size: 14px;
-  background: var(--bg);
-  color: var(--text);
-}
-
-.donate-card input:focus { outline: none; border-color: var(--primary); }
 
 .field-error {
-  color: #a3301a;
+  color: #c0392b;
   font-size: 13px;
   font-weight: 700;
   margin: 6px 0 0;
   min-height: 1em;
 }
 
+@media (prefers-color-scheme: dark) {
+  .field-error { color: #ff9b8a; }
+}
+
 .summary-row {
   display: flex;
   justify-content: space-between;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--surface);
-  font-size: 14px;
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14.5px;
 }
 
 .summary-row:last-of-type { border-bottom: none; }
 .summary-row .k { color: var(--text-soft); }
 .summary-row .v { font-weight: 700; }
 
-.donate-actions { display: flex; gap: 10px; margin-top: 22px; }
+.donate-actions { display: flex; gap: 10px; margin-top: 24px; }
 .donate-actions .btn { flex: 1; }
 
 .spinner {
   width: 34px;
   height: 34px;
   margin: 10px auto 16px;
-  border: 4px solid var(--surface);
+  border: 4px solid var(--line);
   border-top-color: var(--primary);
   border-radius: 50%;
-  animation: spin 0.9s linear infinite;
+  animation: spin .9s linear infinite;
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-@media (prefers-reduced-motion: reduce) {
-  .spinner { animation: none; border-top-color: var(--surface); }
-}
-
-.receipt-tick {
-  font-size: 46px;
-  text-align: center;
-  margin-bottom: 6px;
-}
+.receipt-tick { font-size: 46px; text-align: center; margin-bottom: 6px; }
 
 .receipt-ref {
   font-family: ui-monospace, Consolas, monospace;
-  background: var(--surface);
-  padding: 2px 8px;
+  background: var(--bg-tint);
+  padding: 3px 9px;
   border-radius: 6px;
   font-size: 13px;
+}
+
+/* ── 7. Footer ─────────────────────────────────────────────────────── */
+
+.site-footer {
+  border-top: 1px solid var(--line);
+  margin-top: 40px;
+  padding: 40px 24px 32px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 13.5px;
+}
+
+.site-footer a {
+  color: var(--text-soft);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.site-footer a:hover { color: var(--primary); }
+
+/* ── 8. Accessibility, motion, small screens ───────────────────────── */
+
+:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  background: var(--primary);
+  color: var(--on-primary);
+  padding: 12px 20px;
+  border-radius: 0 0 var(--radius-sm) 0;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.skip-link:focus { left: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn:hover,
+  .card-grid .card:hover { transform: none; }
+  .spinner { animation: none; border-top-color: var(--line); }
+}
+
+@media (max-width: 640px) {
+  .site-nav { padding: 12px 16px; }
+  .site-nav .links { gap: 2px; width: 100%; justify-content: center; }
+  .site-nav .links a { font-size: 13px; padding: 7px 11px; }
+  .container { padding: 0 18px; }
+  .btn { width: 100%; }
+  .hero .actions { flex-direction: column; align-items: stretch; }
+  .chip-row { justify-content: center; }
+  .donate-card, .contact-form { padding: 24px 20px; }
+  .amount-grid { grid-template-columns: 1fr; }
+  .donate-actions { flex-direction: column; }
 }

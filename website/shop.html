@@ -12,7 +12,7 @@
   <meta property="og:description" content="Support Hops development with a one-off contribution.">
   <meta property="og:image" content="assets/hops_logo.png">
   <meta name="twitter:card" content="summary">
-  <meta name="theme-color" content="#165c6f">
+  <meta name="theme-color" content="#10606f">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
@@ -47,6 +47,8 @@
     simulatePayment(), and point the confirm button at the provider's
     hosted checkout URL.
   -->
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <div class="demo-banner" role="status">
     <strong>Demo mode — this is not a real payment.</strong>
     Nothing is charged, no card details are asked for or stored, and no money moves.
@@ -61,10 +63,12 @@
     <ul class="links">
       <li><a href="index.html">Home</a></li>
       <li><a href="about.html">About &amp; FAQ</a></li>
-      <li><a href="download.html">Download</a></li>
       <li><a href="shop.html" class="active">Support Hops</a></li>
+      <li><a href="download.html" class="nav-cta">Download</a></li>
     </ul>
   </nav>
+
+  <main id="main">
 
   <header class="hero" style="padding-bottom: 24px;">
     <div class="container">
@@ -99,13 +103,13 @@
           <p class="step-hint">One-off contribution. Pick a tier or enter your own.</p>
 
           <div class="amount-grid">
-            <button type="button" class="amount-opt" data-amount="2" aria-pressed="false">$2</button>
-            <button type="button" class="amount-opt" data-amount="5" aria-pressed="true">$5</button>
-            <button type="button" class="amount-opt" data-amount="10" aria-pressed="false">$10</button>
+            <button type="button" class="amount-opt" data-amount="20" aria-pressed="false">R20</button>
+            <button type="button" class="amount-opt" data-amount="50" aria-pressed="true">R50</button>
+            <button type="button" class="amount-opt" data-amount="100" aria-pressed="false">R100</button>
           </div>
 
-          <label for="custom-amount">Or another amount (USD)</label>
-          <input id="custom-amount" type="number" min="1" max="1000" step="1" placeholder="e.g. 25"
+          <label for="custom-amount">Or another amount (ZAR)</label>
+          <input id="custom-amount" type="number" min="10" max="10000" step="1" placeholder="e.g. 250"
                  inputmode="numeric" autocomplete="off">
           <p class="field-error" id="amount-error" role="alert"></p>
 
@@ -142,7 +146,7 @@
             requested at any point.
           </p>
 
-          <div class="summary-row"><span class="k">Amount</span><span class="v" id="sum-amount">$5</span></div>
+          <div class="summary-row"><span class="k">Amount</span><span class="v" id="sum-amount">R50</span></div>
           <div class="summary-row"><span class="k">From</span><span class="v" id="sum-name">Anonymous</span></div>
           <div class="summary-row"><span class="k">Email</span><span class="v" id="sum-email">&mdash;</span></div>
           <div class="summary-row"><span class="k">Type</span><span class="v">One-off</span></div>
@@ -171,7 +175,7 @@
             money has moved. Here&rsquo;s what a real receipt would have shown.
           </p>
 
-          <div class="summary-row"><span class="k">Amount</span><span class="v" id="done-amount">$5</span></div>
+          <div class="summary-row"><span class="k">Amount</span><span class="v" id="done-amount">R50</span></div>
           <div class="summary-row"><span class="k">From</span><span class="v" id="done-name">Anonymous</span></div>
           <div class="summary-row"><span class="k">Reference</span><span class="v"><span class="receipt-ref" id="done-ref">&mdash;</span></span></div>
           <div class="summary-row"><span class="k">Status</span><span class="v" style="color:#a3301a;">Simulated &mdash; not charged</span></div>
@@ -193,10 +197,13 @@
     </div>
   </section>
 
+  </main>
+
   <footer class="site-footer">
     <p>
       <a href="about.html#contact">Contact</a> &middot;
       <a href="about.html#faq">FAQ</a> &middot;
+      <a href="download.html">Download</a> &middot;
       <a href="shop.html">Support Hops</a>
     </p>
     <p>&copy; 2026 Hops. Built for campus, built to work offline.</p>
@@ -207,7 +214,7 @@
     'use strict';
 
     // ── State ────────────────────────────────────────────────────────
-    var state = { amount: 5, name: '', email: '' };
+    var state = { amount: 50, name: '', email: '' };
 
     var $ = function (id) { return document.getElementById(id); };
 
@@ -249,8 +256,8 @@
     $('to-details').addEventListener('click', function () {
       if (custom.value.trim() !== '') {
         var v = Number(custom.value);
-        if (!isFinite(v) || v < 1 || v > 1000) {
-          $('amount-error').textContent = 'Enter an amount between $1 and $1000.';
+        if (!isFinite(v) || v < 10 || v > 10000) {
+          $('amount-error').textContent = 'Enter an amount between R10 and R10 000.';
           custom.focus();
           return;
         }
@@ -277,7 +284,7 @@
       state.name = $('donor-name').value.trim();
       state.email = email;
 
-      $('sum-amount').textContent = '$' + state.amount;
+      $('sum-amount').textContent = 'R' + state.amount;
       $('sum-name').textContent = state.name || 'Anonymous';
       $('sum-email').textContent = state.email;
       show('step-review');
@@ -299,7 +306,7 @@
     function simulatePayment() {
       show('step-processing');
       window.setTimeout(function () {
-        $('done-amount').textContent = '$' + state.amount;
+        $('done-amount').textContent = 'R' + state.amount;
         $('done-name').textContent = state.name || 'Anonymous';
         // Prefixed DEMO- so a reference can never be mistaken for a real
         // transaction id if someone screenshots this.

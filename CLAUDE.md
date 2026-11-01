@@ -11,8 +11,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   the SQL editor, so nothing records what went in; `check-applied-migrations.sql` is a read-only
   probe that reports which ones are actually live. Run it before trusting any server-side
   feature — a missing migration has already been mistaken for an app bug more than once.
-- `website/` — a static marketing/download site (plain HTML/CSS). No build step, unrelated to the
-  app.
+- `website/` — the static marketing/download site at `hopsapp.me` (plain HTML/CSS, no build step,
+  unrelated to the app's code). Five pages share the single `styles.css`, so **a class renamed
+  there fails silently on whichever page you didn't open** — grep before renaming. Three things
+  that are easy to break:
+  - **Dark mode is token-only.** `:root` and the `prefers-color-scheme: dark` block define
+    colours; components must reference tokens and never hardcode one, or they look right in light
+    and wrong in dark with nothing to warn you. The one deliberate exception is `.cta-band`, which
+    pins its own gradient and white text — built from tokens it inverted into a light-to-dark ramp
+    that no single text colour sits on legibly.
+  - **`assets/hops_logo.png` must keep its alpha.** The site's copy had been flattened onto a
+    white disc, invisible on the old light theme and an obvious white blob the moment a dark
+    background existed. It is now the transparent original from `docs/generators/assets/`.
+  - **`shop.html` is DEMO MODE.** It simulates a donation, collects no card details, and its red
+    banner must stay until a real provider is wired up — see the comment block at the top of the
+    file and `website/README.md`. Amounts are in **rands** (R20/R50/R100, R10–R10 000).
 - `scripts/` — PowerShell operational scripts (currently database backup/restore; see "Database
   backups" below). Not part of any build.
 - `docs/` — academic project documentation and presentation material, written against the module
