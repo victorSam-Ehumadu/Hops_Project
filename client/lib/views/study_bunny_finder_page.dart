@@ -160,6 +160,124 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
     return "${minutes ~/ 60}h ago";
   }
 
+  // ── "Where?" ─────────────────────────────────────────────────────────
+
+  Widget _locationButton(ColorScheme colors) {
+    final chosen = studyLocationName(_selectedLocationIndex);
+    final isSet = chosen != null;
+    final accent = isSet ? colors.primary : colors.onSurface;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _pickLocation,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: isSet
+                ? colors.primary.withValues(alpha: 0.08)
+                : Colors.transparent,
+            border: Border.all(
+                color: accent.withValues(alpha: isSet ? 0.45 : 0.25)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.place_outlined,
+                  size: 16, color: accent.withValues(alpha: 0.8)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  chosen ?? "Not saying",
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: isSet ? FontWeight.bold : FontWeight.w500,
+                    color: isSet
+                        ? accent
+                        : accent.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+              Icon(Icons.expand_more,
+                  size: 18, color: accent.withValues(alpha: 0.6)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickLocation() async {
+    // Sentinel for "no venue": null is a real, meaningful choice here (the
+    // location is optional on the wire), so it cannot double as "the sheet
+    // was dismissed".
+    const clear = -1;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) {
+        final colors = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.onSurface.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(100),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text("Where are you studying?",
+                  style:
+                      TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              const SizedBox(height: 6),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.not_listed_location_outlined,
+                          size: 20),
+                      title: const Text("Not saying",
+                          style: TextStyle(fontSize: 14)),
+                      trailing: _selectedLocationIndex == null
+                          ? const Icon(Icons.check, size: 20)
+                          : null,
+                      onTap: () => Navigator.pop(ctx, clear),
+                    ),
+                    const Divider(height: 1),
+                    for (var i = 0; i < kStudyLocations.length; i++)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.place_outlined, size: 20),
+                        title: Text(kStudyLocations[i],
+                            style: const TextStyle(fontSize: 14)),
+                        trailing: _selectedLocationIndex == i
+                            ? const Icon(Icons.check, size: 20)
+                            : null,
+                        onTap: () => Navigator.pop(ctx, i),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (picked == null) return; // dismissed
+    setState(() => _selectedLocationIndex = picked == clear ? null : picked);
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<Map<String, StudyReport>>(
@@ -283,26 +401,11 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (var i = 0; i < kStudyLocations.length; i++)
-                        ChoiceChip(
-                          label: Text(
-                            kStudyLocations[i],
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                          selected: _selectedLocationIndex == i,
-                          visualDensity: VisualDensity.compact,
-                          // Tapping the selected chip clears it, so
-                          // "actually, never mind" does not require
-                          // leaving the screen.
-                          onSelected: (chosen) => setState(() =>
-                              _selectedLocationIndex = chosen ? i : null),
-                        ),
-                    ],
-                  ),
+                  // One button, not a Wrap of 17 chips. The venue list
+                  // outgrew chips when it was renamed: the picker took
+                  // more height than everything else on this card
+                  // combined, for something most people set once.
+                  _locationButton(colors),
                 ],
               ),
             const SizedBox(height: 8),
