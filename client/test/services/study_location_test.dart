@@ -67,10 +67,12 @@ void main() {
     test('indices 0..n map to the expected names', () {
       // Pins ORDER, not just membership. A test that only checked the set
       // of names would pass after a reorder, which is the dangerous edit.
-      expect(kStudyLocations[0], 'Library');
-      expect(kStudyLocations[2], 'Computer Lab');
-      expect(kStudyLocations[3], 'Cafeteria');
-      expect(kStudyLocations.last, 'Off campus');
+      expect(kStudyLocations[0], 'Venue 1');
+      expect(kStudyLocations[2], 'Venue 3');
+      expect(kStudyLocations[13], 'Venue 14');
+      expect(kStudyLocations[14], 'Student Pods');
+      expect(kStudyLocations[15], 'Auditorium');
+      expect(kStudyLocations.last, 'Benches');
     });
 
     test('no duplicate names', () {
@@ -86,7 +88,7 @@ void main() {
 
   group('studyLocationName', () {
     test('names a valid index', () {
-      expect(studyLocationName(0), 'Library');
+      expect(studyLocationName(0), 'Venue 1');
     });
 
     test('returns null for null, negative or out-of-range', () {

@@ -860,17 +860,42 @@ const int kStudyLocationProtocolMarker = 0x4C; // ascii 'L'
 /// tag already in flight — a device would report the Library and be shown
 /// as being in a lab. Retire an entry by leaving it in place and hiding it
 /// from the picker.
+///
+/// REPLACED WHOLESALE on 2 Nov 2026, which is exactly the edit the rule
+/// above forbids, so the reasoning is recorded rather than left implied.
+/// The previous list was generic ('Library', 'Computer Lab', 'Cafeteria',
+/// …) and did not match the actual venue names on this campus, so every
+/// label was wrong in practice. Renaming in place is the whole change:
+/// index 0 is still index 0, nothing was inserted or removed mid-list.
+///
+/// What it costs: a device running a build from before this change shows
+/// the OLD name for the same index — index 0 reads 'Library' there and
+/// 'Venue 1' here. There is no version marker on the wire to detect that,
+/// so the only remedy is that every phone runs the same build. The APK
+/// published as v1.0-phase5 predates this, so it needs re-publishing
+/// before anyone pairs an old install against a new one.
+///
+/// From here the append-only rule applies again, and for real: this was a
+/// one-off correction made while the installed base is a handful of test
+/// phones, not a precedent.
 const List<String> kStudyLocations = <String>[
-  'Library',
-  'Library — Quiet Zone',
-  'Computer Lab',
-  'Cafeteria',
-  'Student Centre',
-  'Lecture Hall',
-  'Study Room',
-  'Courtyard',
-  'Residence',
-  'Off campus',
+  'Venue 1',
+  'Venue 2',
+  'Venue 3',
+  'Venue 4',
+  'Venue 5',
+  'Venue 6',
+  'Venue 7',
+  'Venue 8',
+  'Venue 9',
+  'Venue 10',
+  'Venue 11',
+  'Venue 12',
+  'Venue 13',
+  'Venue 14',
+  'Student Pods',
+  'Auditorium',
+  'Benches',
 ];
 
 Uint8List encodeStudyLocation(int locationIndex) {

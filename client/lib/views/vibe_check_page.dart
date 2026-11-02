@@ -291,7 +291,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
                     maxLength: _kLocationMaxLength,
                     style: TextStyle(color: colors.onSurface),  // typed text visible
                     decoration: InputDecoration(
-                      hintText: "e.g., Library, Cafeteria",
+                      hintText: "e.g., Venue 3, Auditorium",
                       hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
                       labelText: "Tag this location",
                       labelStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.7)),

@@ -4,13 +4,19 @@
 // resolution/official-alert/emergency-flare/warning any admin or student
 // has triggered, via list_admin_actions_log (0008_admin_moderation.sql,
 // extended in 0010_notifications_and_logging.sql to also carry personal
-// Emergency Flares and warnings). No filtering UI yet (chronological only);
-// worth adding a by-admin/by-action filter once this list is long enough
-// to need one.
+// Emergency Flares and warnings).
+//
+// Filtered by time window and by kind of action, both client-side. The RPC
+// returns at most 300 rows newest-first, so filtering here costs nothing
+// extra and avoids a migration — but it does mean a window can be clipped
+// by that cap rather than by the window itself, which is why
+// _mayBeClipped() says so out loud instead of quietly showing less.
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:client/services/admin_stats_service.dart';
+import 'package:client/utils/day_grouping.dart';
 
 class AdminActionLogTab extends StatefulWidget {
   const AdminActionLogTab({super.key});
@@ -24,6 +30,20 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
   bool _loading = true;
   String? _error;
   Timer? _autoRefreshTimer;
+
+  // Same window model the Statistics screen uses, rather than a second
+  // one that drifts from it — including its rule that a window ends
+  // "now" and never in the future.
+  StatsWindow _window = StatsWindow.preset(StatsRange.last7d);
+
+  // Empty means "every kind", which is also the default. Holding the
+  // selection as a set of GROUP keys rather than raw action strings keeps
+  // the UI from sprouting a chip per database value — several of them
+  // (promote_admin/demote_admin/delete_user) are one idea to a reader.
+  final Set<String> _kinds = {};
+
+  // The most rows list_admin_actions_log will return (it clamps to 300).
+  static const int _rowLimit = 300;
 
   @override
   void initState() {
@@ -65,7 +85,8 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
     }
     try {
       final rows = await Supabase.instance.client
-          .rpc('list_admin_actions_log', params: {'p_hops_token': token});
+          .rpc('list_admin_actions_log',
+              params: {'p_hops_token': token, 'p_limit': _rowLimit});
       if (mounted) {
         setState(() {
           _entries = (rows as List).cast<Map<String, dynamic>>();
@@ -86,44 +107,315 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
     }
   }
 
+  // ── Filtering ────────────────────────────────────────────────────────
+  //
+  // Grouped into the kinds an admin actually thinks in, not one chip per
+  // database value: promote/demote/delete are three action strings but one
+  // idea ("account changes"), and resolve_report is two ideas (resolved vs
+  // dismissed) sharing one string.
+  static const Map<String, String> _kindLabels = {
+    'ban': 'Bans',
+    'suspend': 'Suspensions',
+    'unban': 'Unbans',
+    'unsuspend': 'Unsuspensions',
+    'warn': 'Warnings',
+    'report_resolved': 'Reports resolved',
+    'report_dismissed': 'Reports dismissed',
+    'flare': 'Emergency flares',
+    'alert': 'Official alerts',
+    'account': 'Account changes',
+  };
+
+  /// Which filter group a row belongs to, or null if it matches none.
+  ///
+  /// The resolved/dismissed split reads the reason, because the log row
+  /// records the admin's action label and not the report's status — a
+  /// dismissal is written with the literal label "Dismissed" by
+  /// admin_moderation_tab.dart. If that label ever changes, this follows
+  /// it or the two groups silently merge.
+  static String? _kindOf(Map<String, dynamic> e) {
+    final action = e['action'] as String? ?? '';
+    switch (action) {
+      case 'ban':
+        return 'ban';
+      case 'suspend':
+        return 'suspend';
+      case 'unban':
+        return 'unban';
+      case 'unsuspend':
+        return 'unsuspend';
+      case 'warn_user':
+        return 'warn';
+      case 'emergency_flare':
+        return 'flare';
+      case 'official_alert':
+        return 'alert';
+      case 'delete_user':
+      case 'promote_admin':
+      case 'demote_admin':
+        return 'account';
+      case 'resolve_report':
+        final reason = (e['reason'] as String? ?? '').trim().toLowerCase();
+        return reason == 'dismissed' ? 'report_dismissed' : 'report_resolved';
+      default:
+        return null;
+    }
+  }
+
+  DateTime? _timeOf(Map<String, dynamic> e) =>
+      DateTime.tryParse(e['created_at'] as String? ?? '')?.toLocal();
+
+  List<Map<String, dynamic>> get _visible {
+    final from = _window.from.toLocal();
+    final to = _window.to.toLocal();
+    return _entries.where((e) {
+      final when = _timeOf(e);
+      if (when == null) return false;
+      if (when.isBefore(from) || when.isAfter(to)) return false;
+      if (_kinds.isEmpty) return true;
+      final kind = _kindOf(e);
+      return kind != null && _kinds.contains(kind);
+    }).toList();
+  }
+
+  /// True when the row cap, rather than the chosen window, may be what is
+  /// limiting the list. Worth saying: a 30-day window that silently shows
+  /// only the newest 300 entries looks like a quiet month.
+  bool get _mayBeClipped {
+    if (_entries.length < _rowLimit) return false;
+    final oldest = _timeOf(_entries.last);
+    return oldest != null && oldest.isAfter(_window.from.toLocal());
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 2),
+      lastDate: now,
+      initialDateRange: DateTimeRange(
+          start: now.subtract(const Duration(days: 7)), end: now),
+    );
+    if (picked == null) return;
+    setState(() => _window = StatsWindow.custom(picked.start, picked.end));
+  }
+
+  Future<void> _selectPreset(StatsRange kind) async {
+    if (kind == StatsRange.custom) {
+      await _pickCustomRange();
+      return;
+    }
+    setState(() => _window = StatsWindow.preset(kind));
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final rows = _loading || _error != null ? const [] : _visible;
     return Scaffold(
       appBar: AppBar(
-        title: Text("Action Log", style: TextStyle(color: colors.primary, fontWeight: FontWeight.bold)),
+        title: Text("Action Log",
+            style: TextStyle(
+                color: colors.primary, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.transparent,
         elevation: 0,
         foregroundColor: colors.primary,
-        actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _load, tooltip: "Refresh")],
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _load,
+              tooltip: "Refresh")
+        ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(child: Text(_error!))
-              : _entries.isEmpty
-                  ? Center(
-                      child: Text("No admin actions yet.", style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5))))
-                  : ListView.separated(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: _entries.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, i) {
-                        final e = _entries[i];
-                        final action = e['action'] as String? ?? '';
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(_iconFor(action), color: _colorFor(action)),
-                          title: Text(_describe(e), style: const TextStyle(fontSize: 13)),
-                          subtitle: Text(
-                            _formatTimestamp(e['created_at'] as String?),
-                            style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
-                          ),
-                          trailing: Icon(Icons.chevron_right, size: 18, color: colors.onSurface.withValues(alpha: 0.3)),
-                          onTap: () => _showDetail(e),
-                        );
-                      },
-                    ),
+      body: Column(
+        children: [
+          _filterBar(colors, rows.length),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? Center(child: Text(_error!))
+                    : rows.isEmpty
+                        ? _emptyState(colors)
+                        : _logList(
+                            rows.cast<Map<String, dynamic>>(), colors),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyState(ColorScheme colors) {
+    final filtered = _kinds.isNotEmpty || _entries.isNotEmpty;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Text(
+          filtered
+              ? "Nothing in this window matches those filters."
+              : "No admin actions yet.",
+          textAlign: TextAlign.center,
+          style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
+        ),
+      ),
+    );
+  }
+
+  Widget _filterBar(ColorScheme colors, int shown) {
+    const presets = {
+      StatsRange.last24h: '24 hours',
+      StatsRange.last7d: '7 days',
+      StatsRange.last30d: '30 days',
+      StatsRange.custom: 'Custom',
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final entry in presets.entries)
+                ChoiceChip(
+                  label:
+                      Text(entry.value, style: const TextStyle(fontSize: 12)),
+                  selected: _window.kind == entry.key,
+                  onSelected:
+                      _loading ? null : (_) => _selectPreset(entry.key),
+                  avatar: entry.key == StatsRange.custom
+                      ? Icon(Icons.date_range_rounded,
+                          size: 15,
+                          color: _window.kind == entry.key
+                              ? colors.onPrimary
+                              : colors.onSurface)
+                      : null,
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              FilterChip(
+                label: const Text('All', style: TextStyle(fontSize: 11)),
+                selected: _kinds.isEmpty,
+                onSelected: (_) => setState(_kinds.clear),
+              ),
+              for (final entry in _kindLabels.entries)
+                FilterChip(
+                  label:
+                      Text(entry.value, style: const TextStyle(fontSize: 11)),
+                  selected: _kinds.contains(entry.key),
+                  onSelected: (on) => setState(() {
+                    if (on) {
+                      _kinds.add(entry.key);
+                    } else {
+                      _kinds.remove(entry.key);
+                    }
+                  }),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            shown == 1 ? "1 entry" : "$shown entries",
+            style: TextStyle(
+                fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
+          ),
+          if (_mayBeClipped) ...[
+            const SizedBox(height: 4),
+            Text(
+              "Showing the most recent $_rowLimit actions — older ones in "
+              "this range aren't loaded.",
+              style: TextStyle(
+                  fontSize: 11,
+                  fontStyle: FontStyle.italic,
+                  color: colors.onSurface.withValues(alpha: 0.5)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// The list, with a separator wherever the calendar day changes.
+  ///
+  /// Built as a flat item list rather than nested lists so the whole thing
+  /// stays lazily built — a day with 200 entries shouldn't cost anything
+  /// until it is scrolled to.
+  Widget _logList(List<Map<String, dynamic>> rows, ColorScheme colors) {
+    final items = <Widget>[];
+    DateTime? previous;
+    for (final e in rows) {
+      final when = _timeOf(e);
+      if (when != null && (previous == null || !isSameDay(previous, when))) {
+        items.add(DaySeparator.forDate(when));
+        previous = when;
+      }
+      items.add(_logCard(e, colors));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      itemCount: items.length,
+      itemBuilder: (context, i) => items[i],
+    );
+  }
+
+  Widget _logCard(Map<String, dynamic> e, ColorScheme colors) {
+    final action = e['action'] as String? ?? '';
+    final accent = _colorFor(action);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => _showDetail(e),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              // Same shape as the Dashboard's stat cards: a tint of the
+              // action's own colour inside a matching border, so the kind
+              // of action is readable before the text is.
+              color: accent.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: accent.withValues(alpha: 0.28)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(_iconFor(action), color: accent, size: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_describe(e),
+                          style: const TextStyle(
+                              fontSize: 13, height: 1.35)),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatTimestamp(e['created_at'] as String?),
+                        style: TextStyle(
+                            fontSize: 11,
+                            color:
+                                colors.onSurface.withValues(alpha: 0.55)),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right,
+                    size: 18,
+                    color: colors.onSurface.withValues(alpha: 0.3)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -142,6 +434,10 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
     final base = switch (action) {
       'ban' => "$actor banned $target",
       'unban' => "$actor unbanned $target",
+      // Logged by the server since 0015/0020 but never described here, so
+      // a suspension read as the catch-all "performed suspend".
+      'suspend' => "$actor suspended $target",
+      'unsuspend' => "$actor lifted $target's suspension",
       'delete_user' => "$actor deleted $target's account",
       'promote_admin' => "$actor promoted $target to admin",
       'demote_admin' => "$actor demoted $target",
@@ -159,6 +455,8 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
   IconData _iconFor(String action) => switch (action) {
         'ban' => Icons.block,
         'unban' => Icons.check_circle_outline,
+        'suspend' => Icons.pause_circle_outline,
+        'unsuspend' => Icons.play_circle_outline,
         'delete_user' => Icons.person_remove,
         'promote_admin' => Icons.arrow_upward,
         'demote_admin' => Icons.arrow_downward,
@@ -171,6 +469,8 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
 
   Color _colorFor(String action) => switch (action) {
         'ban' || 'delete_user' => Colors.redAccent,
+        'suspend' => Colors.deepOrange,
+        'unsuspend' => Colors.teal,
         'official_alert' => Colors.red.shade900,
         'emergency_flare' => Colors.orange.shade800,
         'warn_user' => Colors.amber.shade800,
@@ -303,6 +603,8 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
   String _actionLabel(String action) => switch (action) {
         'ban' => "Ban",
         'unban' => "Unban",
+        'suspend' => "Suspension",
+        'unsuspend' => "Suspension lifted",
         'delete_user' => "Account deleted",
         'promote_admin' => "Promoted to admin",
         'demote_admin' => "Demoted",

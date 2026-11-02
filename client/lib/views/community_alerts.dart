@@ -27,6 +27,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:client/utils/day_grouping.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/services/hops_constants.dart';
@@ -747,8 +748,23 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
                 final showHeader = i == 0 ||
                     _messages[i - 1].sender != msg.sender ||
                     _messages[i - 1].isMe != msg.isMe;
-                return _buildBubble(msg, colors,
+                final bubble = _buildBubble(msg, colors,
                     showHeader: showHeader);
+                // A separator wherever the calendar day changes, and above
+                // the first message so the oldest day on screen is named
+                // too rather than being the one unlabelled block.
+                final previous = i == 0 ? null : _messages[i - 1].timestamp;
+                if (previous != null &&
+                    isSameDay(previous, msg.timestamp)) {
+                  return bubble;
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    DaySeparator.forDate(msg.timestamp),
+                    bubble,
+                  ],
+                );
               },
             ),
           ),

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:client/utils/day_grouping.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -805,7 +806,20 @@ class _IndividualChatTerminalViewState
                     final readByPeer =
                         msg[DatabaseHelper.columnReadAt] != null;
                     final ts = msg[DatabaseHelper.columnTimestamp] as int;
-                    return Align(
+                    final when =
+                        DateTime.fromMillisecondsSinceEpoch(ts);
+                    // Same rule the Action Log and Community Alerts use —
+                    // one helper so the three never disagree about where a
+                    // day starts.
+                    final previousTs = index == 0
+                        ? null
+                        : messageThreadsList[index - 1]
+                            [DatabaseHelper.columnTimestamp] as int?;
+                    final startsNewDay = previousTs == null ||
+                        !isSameDay(
+                            DateTime.fromMillisecondsSinceEpoch(previousTs),
+                            when);
+                    final bubbleRow = Align(
                       alignment: isMe
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
@@ -913,6 +927,14 @@ class _IndividualChatTerminalViewState
                           ),
                         ],
                       ),
+                    );
+                    if (!startsNewDay) return bubbleRow;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        DaySeparator.forDate(when),
+                        bubbleRow,
+                      ],
                     );
                   },
                 );
