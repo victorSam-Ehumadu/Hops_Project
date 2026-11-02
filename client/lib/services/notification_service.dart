@@ -532,7 +532,23 @@ class NotificationService {
 
     await _plugin.show(
       id,
-      '🔴 OFFICIAL ALERT — ${adminTitle ?? sender} (unverified)',
+      // "(verifying…)", not "(unverified)" and not "admin".
+      //
+      // "Unverified" read as an accusation against the admin's own alert
+      // and was the reported confusion. But the opposite — labelling it
+      // "admin" — would assert something this device has NOT checked yet:
+      // the ADM: prefix is just text in an advertisement name, and the
+      // only thing separating a real Official Alert from anyone
+      // broadcasting the same string is the RSA signature that arrives
+      // afterwards in manufacturer data. Claiming officialdom before that
+      // check is precisely the forgery this design exists to refuse, which
+      // is why an alert that FAILS verification is cancelled outright
+      // rather than downgraded.
+      //
+      // So the pending state says what is actually happening, and
+      // relabelOfficialAlertNotification rewrites it the moment the
+      // signature lands.
+      '🔴 OFFICIAL ALERT — ${adminTitle ?? sender} (verifying…)',
       reason.isNotEmpty ? reason : 'Official campus alert',
       payload: alertKey,
       NotificationDetails(

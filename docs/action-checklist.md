@@ -20,8 +20,17 @@ identical to a bug from the outside.
 
 ## 1. Database — do this first, nothing else depends on itself
 
-Three migrations are written and committed but **not applied**. Until they
-are, the features they back silently do nothing.
+Migrations written and committed but **not applied** are listed below.
+Until they are, the features they back silently do nothing.
+
+**Still outstanding: `0023`, `0024`, `0025`.**
+
+- [ ] **Apply `0025_manual_reporter_flag.sql`** — adds `admin_flag_reporter`
+      and lets the log accept the new `flag_reporter` action. Without it,
+      the "Flag for wrongful reporting" entry now on both Take Action
+      sheets fails with "not authorized"-shaped errors, because the
+      function does not exist. The flag column itself has been there since
+      `0015`; only a manual way to SET it was missing.
 
 - [x] **Run the probe first.** Supabase dashboard → your project → **SQL
       Editor** → New query. Paste `supabase/check-applied-migrations.sql`.

@@ -10,6 +10,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:client/views/admin/admin_user_detail_screen.dart';
 
 /// Turns a failed moderation RPC into something that actually says what
 /// went wrong. Every action in this file used to report the same
@@ -125,6 +126,76 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
       }
     } finally {
       if (mounted) setState(() => _actingOn.remove(reportId));
+    }
+  }
+
+  /// Resolves a username to an account id.
+  ///
+  /// Reports store the username only (see 0008_admin_moderation.sql's
+  /// content_reports shape), so anything that needs an id has to look it
+  /// up. Factored out of _banSender, which had this inline, so the new
+  /// Take Action button cannot drift from it.
+  Future<String?> _lookUpUserId(String username) async {
+    final token = await _token();
+    if (token == null) return null;
+    final rows = await Supabase.instance.client.rpc('admin_search_users',
+        params: {'p_hops_token': token, 'p_query': username});
+    final match = (rows as List).cast<Map<String, dynamic>>().firstWhere(
+          (u) => u['username'] == username,
+          orElse: () => {},
+        );
+    return match.isEmpty ? null : match['id'] as String?;
+  }
+
+  /// Opens the account screen's own Take Action sheet for the REPORTED
+  /// user, with its flag entry pointed at the REPORTER.
+  ///
+  /// Deliberately the real screen rather than a second sheet built here.
+  /// The sheet's contents depend on the target's loaded state — banned,
+  /// suspended, already an admin — so a copy would need this tab to fetch
+  /// and track all of that too, and would be one more place to forget when
+  /// an action is added.
+  Future<void> _takeActionOnReport(Map<String, dynamic> report) async {
+    final reported = report['target_username'] as String?;
+    if (reported == null) return;
+    final reporter = report['reporter_username'] as String?;
+
+    setState(() => _actingOn.add(report['id'] as String));
+    try {
+      final reportedId = await _lookUpUserId(reported);
+      if (reportedId == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('Couldn\'t find an account named "$reported" — '
+                  'it may have already been deleted.')));
+        }
+        return;
+      }
+      // Best-effort: a missing reporter only costs the flag entry its
+      // separate target, and the sheet still opens for the reported user.
+      final reporterId =
+          reporter == null ? null : await _lookUpUserId(reporter);
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => AdminUserDetailScreen(
+          userId: reportedId,
+          username: reported,
+          autoOpenActions: true,
+          flagTargetUserId: reporterId,
+          flagTargetUsername: reporterId == null ? null : reporter,
+        ),
+      ));
+      // Moderating from here can ban or delete the reported account, which
+      // changes what the open reports should say.
+      if (mounted) _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(describeModerationError(e)),
+            duration: const Duration(seconds: 8)));
+      }
+    } finally {
+      if (mounted) setState(() => _actingOn.remove(report['id'] as String));
     }
   }
 
@@ -418,6 +489,17 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
                                           onPressed: () => _banSender(r),
                                           style: TextButton.styleFrom(foregroundColor: Colors.red.shade900),
                                           child: const Text("Ban sender"),
+                                        ),
+                                        // Everything else on this row is a
+                                        // single decision. This opens the
+                                        // full sheet for the reported user
+                                        // — suspend, promote, delete, flag
+                                        // the reporter — without leaving
+                                        // the queue to find them.
+                                        TextButton.icon(
+                                          onPressed: () => _takeActionOnReport(r),
+                                          icon: const Icon(Icons.more_horiz, size: 18),
+                                          label: const Text("Take action"),
                                         ),
                                       ] else
                                         TextButton(

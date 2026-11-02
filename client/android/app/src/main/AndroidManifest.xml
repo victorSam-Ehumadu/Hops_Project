@@ -19,6 +19,10 @@
     <!-- Emergency Flare / Foreground Service permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Required from Android 14 (API 34) for a foreground service that
+         touches Bluetooth. Without it the connectedDevice type below is
+         refused and the service cannot keep scanning. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -47,10 +51,25 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service for continuous BLE scanning -->
+        <!-- Foreground service for continuous BLE scanning.
+
+             The type is "connectedDevice|dataSync", not "dataSync" alone.
+             This service exists to keep scanning for Emergency Flares while
+             the app is backgrounded and the screen is off, and from Android
+             14 (API 34) a foreground service that uses Bluetooth MUST
+             declare connectedDevice — scanning from a dataSync-only service
+             is not a permitted use of that type. The symptom of getting it
+             wrong is exactly what was reported: alerts ring while the app
+             is open and silently do not when the phone is idle.
+
+             dataSync is kept alongside it because the service also carries
+             the Supabase identity/moderation poll. It matters that it is
+             not alone: on Android 15 (API 35) a dataSync service is capped
+             at roughly 6 hours a day and then stopped by the system, which
+             would take flare monitoring down with it. -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="connectedDevice|dataSync"
             android:exported="false" />
 
         <!-- Silent SOS Quick Settings tile — see HopsSosTileService.kt.

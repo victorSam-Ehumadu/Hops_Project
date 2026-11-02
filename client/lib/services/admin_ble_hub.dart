@@ -92,6 +92,40 @@ class AdminBleHub {
   final Map<String, _SigBuffer> _sigBuffers = {}; // keyed by advName
   final Set<String> _sigHandled = {};
 
+  // ── Why an alert is only ever announced once ───────────────────────────
+  //
+  // liveAlerts is keyed by SENDER ("EMG:victor"), which is what dedups
+  // repeat sightings while an alert is up. It is not enough to decide
+  // whether to notify, because entries leave that map two ways that have
+  // nothing to do with the alert being over for the admin:
+  //
+  //   * a stand-down (EMG_OFF:) removes it, and
+  //   * _pruneStale drops it after 45s without a sighting.
+  //
+  // Either way the next sighting finds `existing == null` and fires a
+  // fresh notification. A flare is relayed by every phone that hears it,
+  // so those sightings keep arriving for a while AFTER the sender has
+  // stood down — which is the reported "I keep getting spammed with
+  // notifications even after the alert is cancelled".
+  //
+  // Keyed by the full advertisement string, the same identity the
+  // notification registry uses, with a time-based expiry so a genuinely
+  // new emergency from the same person still announces itself.
+  final Map<String, DateTime> _announced = {};
+
+  /// Senders whose alert was explicitly stood down, and when.
+  ///
+  /// Suppresses the tail of relayed sightings that outlive the cancel.
+  /// Keyed by the sender key rather than the advertisement name because a
+  /// relay carries the original name — matching on the name alone would
+  /// let the very packets this exists to ignore through.
+  final Map<String, DateTime> _stoodDown = {};
+
+  /// Long enough to cover a flare's own lifetime plus the relay tail, so
+  /// one emergency is one notification; short enough that a real second
+  /// emergency from the same person is not swallowed.
+  static const Duration _announceMemory = Duration(minutes: 6);
+
   /// Call once, after Bluetooth permissions are granted (see
   /// admin_sign_in_screen.dart) and before anything tries to advertise or
   /// scan. Safe to call repeatedly — every call after the first is a no-op.
@@ -229,17 +263,22 @@ class AdminBleHub {
             rssi: r.rssi,
           );
           changed = true;
-          // Fires once per newly-seen alert, not per scan result for it.
-          // Keyed by the full advertisement string, same as the student app
-          // — the hub's own `key` is sender-only (it's what dedups repeat
-          // sightings of one alert), which is too coarse to identify a
-          // notification.
-          if (isOfficial) {
-            NotificationService.showOfficialAlertNotification(
-                alertKey: name, sender: sender, reason: reason);
-          } else {
-            NotificationService.showEmergencyNotification(
-                alertKey: name, sender: sender, reason: reason);
+          // Fires once per emergency, not once per time it re-enters
+          // liveAlerts — see _announced. Keyed by the full advertisement
+          // string, same as the student app and the notification registry;
+          // the hub's own `key` is sender-only and too coarse to identify
+          // a notification.
+          final standDown = _stoodDown[key];
+          final alreadyAnnounced = _announced.containsKey(name);
+          if (!alreadyAnnounced && standDown == null) {
+            _announced[name] = DateTime.now();
+            if (isOfficial) {
+              NotificationService.showOfficialAlertNotification(
+                  alertKey: name, sender: sender, reason: reason);
+            } else {
+              NotificationService.showEmergencyNotification(
+                  alertKey: name, sender: sender, reason: reason);
+            }
           }
         } else {
           existing.lastSeen = DateTime.now();
@@ -270,6 +309,10 @@ class AdminBleHub {
         final isOfficial = name.startsWith("ADM_OFF:");
         // "EMG_OFF:" and "ADM_OFF:" are both exactly 8 characters.
         final key = "${isOfficial ? 'ADM' : 'EMG'}:${name.substring(8)}";
+        // Recorded whether or not this device currently holds the alert:
+        // the stand-down can arrive after _pruneStale has already dropped
+        // it, and the relayed originals keep coming either way.
+        _stoodDown[key] = DateTime.now();
         if (alerts.remove(key) != null) {
           changed = true;
           // Notifications are per-alert now, so this cancels exactly the
@@ -348,11 +391,19 @@ class AdminBleHub {
   }
 
   void _pruneStale() {
-    final cutoff = DateTime.now().subtract(const Duration(seconds: 45));
+    final now = DateTime.now();
+    final cutoff = now.subtract(const Duration(seconds: 45));
     final alerts = Map<String, LiveAlert>.from(liveAlerts.value);
     final before = alerts.length;
     alerts.removeWhere((_, a) => a.lastSeen.isBefore(cutoff));
     if (alerts.length != before) liveAlerts.value = alerts;
+
+    // Both of these are unbounded without this: the app runs for the whole
+    // admin session and every distinct advertisement string seen would be
+    // remembered forever.
+    final forget = now.subtract(_announceMemory);
+    _announced.removeWhere((_, at) => at.isBefore(forget));
+    _stoodDown.removeWhere((_, at) => at.isBefore(forget));
   }
 
   int _chatMsgCounter = 0;
