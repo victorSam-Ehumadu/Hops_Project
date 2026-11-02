@@ -178,13 +178,37 @@ debugging anything.
   - Staying private? Put the APK at `website/assets/hops.apk` and change
     the link to `/assets/hops.apk`. `vercel.json` already serves it with
     the right content type.
-- [ ] Build and publish, named exactly `hops.apk`:
+      **Confirmed broken as of 2 Nov 2026**: the live link returns 404, and
+      the repo is private, so it has never worked. Decision taken: go
+      public and publish a Release.
+      History was scanned on 2 Nov 2026 — `client/.env` was never
+      committed, no keystore or credentials file is tracked, and no
+      JWT-shaped string appears in any of the 839 blobs in history. The
+      only matches for "service role" are `Deno.env.get(...)` reads in the
+      edge functions, which are env lookups, not secrets.
+- [ ] **A build is already made and waiting** at `client/build/hops.apk`
+      (66 MB, 2 Nov 2026). `client/build/` is gitignored, so it will not
+      be committed by accident — upload it to the Release by hand, named
+      exactly `hops.apk`, or the `releases/latest/download/hops.apk` link
+      will not resolve.
+- [ ] To rebuild it later:
       ```
       cd client
       flutter build apk --release
-      cp build/app/outputs/flutter-apk/app-release.apk hops.apk
-      gh release create v1.0-phase5 hops.apk --title "Phase 5 submission build"
+      cp build/app/outputs/flutter-apk/app-release.apk build/hops.apk
       ```
+      Note `--split-per-abi` is NOT used: one universal APK means nobody
+      has to know which ABI their phone is. About a third of the size is
+      `x86_64`, which only emulators run — `--target-platform
+      android-arm,android-arm64` does **not** remove it (it still ships in
+      the output), so dropping it needs `abiFilters` in `build.gradle.kts`
+      if the size ever matters.
+- [ ] **Know what the signing means.** `android/app/build.gradle.kts` maps
+      the release build to the **debug** keystore. That is fine for
+      sideloading and is why the build needs no secrets — but it is not a
+      stable identity. If a real keystore is ever introduced, every
+      existing install must be uninstalled before it can update, because
+      Android refuses an update signed by a different key.
 - [ ] **Back up `client/.env` off GitHub.** It is gitignored, so it is in
       no backup at all, and the app will not build without it. This is the
       single most likely thing to be missing if anyone rebuilds from a
@@ -265,5 +289,5 @@ work.
 |---|---|
 | Make moderation work | Apply `0020` |
 | Make OTP email arrive | SendGrid Domain Authentication |
-| Make the download link work | Decide public repo, or self-host the APK |
+| Make the download link work | Make the repo public, then publish `client/build/hops.apk` as a Release asset named `hops.apk` |
 | Protect the demo | Re-add demo contacts; tag a release APK |
