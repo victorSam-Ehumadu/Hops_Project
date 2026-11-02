@@ -166,7 +166,10 @@ debugging anything.
 
 ## 3. The APK download
 
-- [ ] **Decide: public or private repo.** The download page links to
+- [x] **DONE 2 Nov 2026 — repo made public, Release published.** The
+      download link now returns 200 and serves 65.9 MB anonymously.
+      Release `v1.0-phase5`, asset `hops.apk`, not a pre-release.
+- [x] **Decide: public or private repo.** The download page links to
       `releases/latest/download/hops.apk`, and **release assets on a
       private repo are not publicly downloadable** — the link 404s.
   - Making it public? First check history for secrets:
@@ -186,7 +189,7 @@ debugging anything.
       JWT-shaped string appears in any of the 839 blobs in history. The
       only matches for "service role" are `Deno.env.get(...)` reads in the
       edge functions, which are env lookups, not secrets.
-- [ ] **A build is already made and waiting** at `client/build/hops.apk`
+- [x] **Uploaded.** The build is at `client/build/hops.apk`
       (66 MB, 2 Nov 2026). `client/build/` is gitignored, so it will not
       be committed by accident — upload it to the Release by hand, named
       exactly `hops.apk`, or the `releases/latest/download/hops.apk` link
@@ -289,5 +292,5 @@ work.
 |---|---|
 | Make moderation work | Apply `0020` |
 | Make OTP email arrive | SendGrid Domain Authentication |
-| Make the download link work | Make the repo public, then publish `client/build/hops.apk` as a Release asset named `hops.apk` |
+| ~~Make the download link work~~ | **Done** — repo public, `v1.0-phase5` published, link returns 200 |
 | Protect the demo | Re-add demo contacts; tag a release APK |
