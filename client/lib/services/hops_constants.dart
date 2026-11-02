@@ -89,11 +89,34 @@ const int kCommunityChunkBudgetBytes = 20;
 // 31 - 2 (the name's AD header) = 29, minus the 3-byte TX Power structure
 // many Android stacks append whether asked to or not = 26.
 //
-// 24, not 26, deliberately: two characters of margin for a handset that
-// adds one more AD structure of its own. This is a broadcast chat in a
-// safety app — a message that arrives beats a longer one that doesn't, and
-// the cost is only that long messages take one more chunk.
-const int kCommunityNameBudget = 24;
+// 22, not 26, deliberately: margin for a handset that adds one more AD
+// structure of its own. This is a broadcast chat in a safety app — a
+// message that arrives beats a longer one that doesn't, and the cost is
+// only that long messages take one more chunk.
+//
+// Lowered from 24 to 22 on 2 Nov 2026, and the evidence is worth keeping
+// because this is the SECOND time this number has been too high:
+//
+//   An admin reported that an alert of about ten characters sent fine and
+//   anything longer never arrived. That is not a chunk-count problem — the
+//   chunking round-trips correctly at every length (see
+//   community_alert_roundtrip_test.dart). It is a chunk-SIZE problem. A
+//   chunk's name is kCommunityNameOverhead + text = 13 + text, so a
+//   10-character message produced a 23-byte name and an 11-character one
+//   produced the first FULL chunk at 24 bytes. The cutoff sat exactly on
+//   the point where a chunk fills up, which puts that handset's real
+//   ceiling at 23 bytes — below the 26 this file computes.
+//
+// So 26 is the theoretical limit, not a limit every radio honours. The
+// margin exists because the cost of being wrong here is silent: an
+// over-long name is rejected on an async callback, so the send looks
+// successful and the message simply never exists for anyone else.
+//
+// NOT device-verified — it is inferred from that report, and confirming it
+// needs two physical phones. If an alert still fails to send, the admin
+// app now says so out loud (AdminBleHub.lastAdvertisingError) instead of
+// failing silently, which is what made this take so long to find.
+const int kCommunityNameBudget = 22;
 
 /// Hard ceiling for ANY advertisement local name, in UTF-8 bytes.
 ///

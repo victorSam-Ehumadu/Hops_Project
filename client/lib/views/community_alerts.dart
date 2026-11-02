@@ -169,6 +169,16 @@ class CommunityAlerts extends StatefulWidget {
   /// deletion removed the message from every device except the one that
   /// posted it, which is the device whose author most needs to see it go.
   final Future<int?> Function(String message)? onSendMessage;
+
+  /// Why the last [onSendMessage] returned null, in words an admin can act
+  /// on — e.g. "the alert was too long for this phone to broadcast".
+  ///
+  /// Supplied by the admin app, which is the only side that can know: the
+  /// radio's verdict arrives on an asynchronous callback owned by
+  /// AdminBleHub. Without it the failure snackbar could only guess, and it
+  /// guessed "check Bluetooth is on" — actively misleading when Bluetooth
+  /// was on and the real problem was the length of the message.
+  final String? Function()? describeSendFailure;
   final String myUsername;
 
   // True when this is the tab currently on screen. Every tab in HopsApp's
@@ -192,6 +202,7 @@ class CommunityAlerts extends StatefulWidget {
     required this.radarStream,
     required this.myUsername,
     this.onSendMessage,
+    this.describeSendFailure,
     this.amAdmin = false,
     this.isVisible = true,
   });
@@ -569,10 +580,12 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
     // which is exactly how a message that reached nobody passed for a
     // delivered one.
     if (msgId == null && mounted) {
+      final why = widget.describeSendFailure?.call();
+      final reason = why ?? 'check Bluetooth is on';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(_sendingTotal > 1
-            ? "Part $_sendingIndex of $_sendingTotal couldn't broadcast — check Bluetooth is on."
-            : "Couldn't broadcast — check Bluetooth is on, then try again."),
+            ? "Part $_sendingIndex of $_sendingTotal couldn't broadcast — $reason."
+            : "Couldn't broadcast — $reason."),
         duration: const Duration(seconds: 5),
       ));
     }

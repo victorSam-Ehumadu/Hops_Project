@@ -102,6 +102,10 @@ class AdminBleHub {
     // since — best-effort, same as everywhere else.
     KeyDirectory.sync();
     await BlePeripheral.initialize();
+    // Registered before the first advertisement so nothing can fail
+    // unobserved in the gap — the same ordering hops_app.dart uses.
+    BlePeripheral.setAdvertisingStatusUpdateCallback(
+        _handleAdvertisingStatusUpdate);
     await FlutterBluePlus.startScan(
       androidUsesFineLocation: true,
       continuousUpdates: true,
@@ -121,6 +125,59 @@ class AdminBleHub {
 
   StreamSubscription<List<ScanResult>>? _scanSub;
   Timer? _pruneTimer;
+
+  // ── Did the radio actually accept the last advertisement? ──────────────
+  //
+  // BlePeripheral.startAdvertising() posts to an Android Handler and
+  // returns immediately, so awaiting it proves NOTHING about whether the
+  // advertisement went out. The real verdict arrives asynchronously on
+  // AdvertiseCallback.onStartFailure, surfaced only through
+  // setAdvertisingStatusUpdateCallback.
+  //
+  // The admin app never registered that callback, so a rejected
+  // advertisement was indistinguishable from a sent one: the await
+  // succeeded, broadcastAdminChatMessage returned a msgId, the alert
+  // appeared in the admin's own list looking delivered, and nothing had
+  // left the radio. That is the single worst shape a bug can take in this
+  // app, and it is exactly the failure reported as "the alert doesn't
+  // send" with no error anywhere.
+  //
+  // Reported through a notifier rather than a callback so the UI can show
+  // it wherever it makes sense without this service knowing about widgets.
+  final ValueNotifier<String?> lastAdvertisingError = ValueNotifier(null);
+
+  /// Set while a broadcast is in flight, so an asynchronous failure can be
+  /// attributed to it rather than to some unrelated later advertisement.
+  bool _broadcastInFlight = false;
+  bool _broadcastFailed = false;
+
+  void _handleAdvertisingStatusUpdate(bool advertising, String? error) {
+    if (error == null) return;
+    debugPrint('Admin BLE advertising failed: $error');
+    if (_broadcastInFlight) _broadcastFailed = true;
+    lastAdvertisingError.value = _describeAdvertisingError(error);
+  }
+
+  /// Turns the plugin's raw error into something an admin can act on.
+  static String _describeAdvertisingError(String error) {
+    final e = error.toUpperCase();
+    if (e.contains('DATA_TOO_LARGE')) {
+      // The one that silently ate long alerts. Worth naming precisely,
+      // because the admin's only visible symptom is a message that never
+      // arrives and the instinct is to blame the receiving phone.
+      return 'the alert was too long for this phone to broadcast';
+    }
+    if (e.contains('TOO_MANY_ADVERTISERS')) {
+      return 'the Bluetooth radio is busy — try again in a moment';
+    }
+    if (e.contains('NOT_SUPPORTED') || e.contains('FEATURE_UNSUPPORTED')) {
+      return 'this phone cannot broadcast over Bluetooth, only receive';
+    }
+    if (e.contains('INTERNAL_ERROR')) {
+      return 'the Bluetooth radio reported an internal error';
+    }
+    return 'Bluetooth refused to broadcast it ($error)';
+  }
 
   /// Genuinely stops and restarts the scan. For the "my device has stopped
   /// hearing anything" case, where the radio is in a bad state and the only
@@ -394,16 +451,26 @@ class AdminBleHub {
     final totalCycles = chunks.length <= 3 ? 3 : 4;
 
     Future<void> advertiseChunk(int index) async {
+      final localName = encodeCommunityNameChunk(
+        senderTag: adminUsername,
+        msgId: msgId,
+        chunkIndex: index,
+        totalChunks: chunks.length,
+        chunkText: chunks[index],
+        isAdmin: true,
+      );
+      // Refused here rather than handed to a radio that will reject it on
+      // a callback this code used to ignore. Same guard _advertiseWithName
+      // applies in the student app; the admin path never had one, so an
+      // over-long chunk failed silently and the alert simply never arrived.
+      if (!advertisementNameFits(localName)) {
+        throw StateError('chunk $index is '
+            '${utf8.encode(localName).length} bytes, over the '
+            '$kAdvertisementNameMaxBytes-byte advertisement ceiling');
+      }
       await BlePeripheral.stopAdvertising();
       await BlePeripheral.startAdvertising(
-        localName: encodeCommunityNameChunk(
-          senderTag: adminUsername,
-          msgId: msgId,
-          chunkIndex: index,
-          totalChunks: chunks.length,
-          chunkText: chunks[index],
-          isAdmin: true,
-        ),
+        localName: localName,
         services: [HOPS_SERVICE_UUID],
       );
     }
@@ -421,6 +488,7 @@ class AdminBleHub {
         } else {
           // Cycling is genuinely done — safe for the next queued call (the
           // next part of a split alert, most commonly) to start its own.
+          _broadcastInFlight = false;
           BlePeripheral.stopAdvertising();
           finishTurn();
         }
@@ -429,9 +497,27 @@ class AdminBleHub {
 
     // First chunk awaited and checked — if advertising can't start at all,
     // say so now rather than spinning through a full cycle pretending.
+    _broadcastFailed = false;
+    _broadcastInFlight = true;
     try {
       await advertiseChunk(0);
     } catch (e) {
+      _broadcastInFlight = false;
+      lastAdvertisingError.value = e is StateError
+          ? 'the alert was too long for this phone to broadcast'
+          : 'Bluetooth refused to broadcast it';
+      finishTurn();
+      return null;
+    }
+
+    // The await above proves only that the call was accepted for posting.
+    // Give onStartFailure a moment to land before claiming success —
+    // otherwise a rejected advertisement still returns a msgId and the
+    // alert shows as sent. This is the whole reason the callback exists.
+    await Future.delayed(const Duration(milliseconds: 250));
+    if (_broadcastFailed) {
+      _broadcastInFlight = false;
+      await BlePeripheral.stopAdvertising();
       finishTurn();
       return null;
     }

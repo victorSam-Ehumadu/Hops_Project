@@ -55,6 +55,11 @@ class _AdminCommunityAlertsTabState extends State<AdminCommunityAlertsTab> {
       radarStream: AdminBleHub.instance.scanStream,
       myUsername: username,
       amAdmin: true,
+      // The radio's verdict lands on an asynchronous callback the hub
+      // owns, so the hub is the only thing that can say why a broadcast
+      // failed. Read at display time rather than captured, so it reflects
+      // the attempt that just failed.
+      describeSendFailure: () => AdminBleHub.instance.lastAdvertisingError.value,
       onSendMessage: (message) async {
         // Resolved before the await, not after: looking an inherited widget
         // up off a context that may have been disposed mid-broadcast is the
