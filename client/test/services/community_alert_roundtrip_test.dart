@@ -47,6 +47,8 @@ List<String> encodeAll(String message, String adminUsername) {
 }
 
 void main() {
+  _tagTests();
+
   group('a Community Alert survives the round trip', () {
     // The reported message. 15 characters — two chunks.
     const reported = 'fire in block 2';
@@ -111,6 +113,59 @@ void main() {
           reason: '15 characters is well inside one part');
       expect(split.parts.first, reported,
           reason: 'a short alert must not be altered by part-splitting');
+    });
+  });
+}
+
+// ── The sender tag, which the BLE and server copies are deduped on ──────
+//
+// A Community Alert can arrive twice: once over BLE and once from the
+// server catch-up. The two are matched on (senderTag, msgId), so the two
+// paths MUST derive the tag identically. They did not — the server post
+// truncated without padding, so every alert from an admin with a short
+// username was stored as "victor" on the server and "victor__" on the
+// air, never matched, and showed up twice.
+void _tagTests() {
+  group('the sender tag is one derivation', () {
+    test('a short username is padded, not left short', () {
+      expect(communitySenderTag('victor'), 'victor__');
+      expect(communitySenderTag('victor').length,
+          kCommunityNameSenderTagChars);
+    });
+
+    test('a long username is truncated', () {
+      expect(communitySenderTag('victorsamehumadu'), 'victorsa');
+    });
+
+    test('an exactly-length username is unchanged', () {
+      expect(communitySenderTag('abcdefgh'), 'abcdefgh');
+    });
+
+    test('it always produces exactly the tag width', () {
+      for (final name in ['a', 'ab', 'abcdefg', 'abcdefgh', 'abcdefghijkl']) {
+        expect(communitySenderTag(name).length, kCommunityNameSenderTagChars,
+            reason: '"$name" must produce a fixed-width tag — the decoder '
+                'reads it at fixed offsets');
+      }
+    });
+
+    test('the tag on the wire matches the one derived for the server', () {
+      // The actual regression: encode a chunk the way BLE does, decode the
+      // tag back out, and compare it with what the server post sends.
+      for (final name in ['vic', 'victor', 'abcdefgh', 'verylongusername']) {
+        final encoded = encodeCommunityNameChunk(
+          senderTag: name,
+          msgId: 3,
+          chunkIndex: 0,
+          totalChunks: 1,
+          chunkText: 'hi',
+          isAdmin: true,
+        );
+        final onTheWire = decodeCommunityNameChunk(encoded)!.senderTag;
+        expect(onTheWire, communitySenderTag(name),
+            reason: 'BLE and the server would disagree for "$name", and the '
+                'alert would arrive twice');
+      }
     });
   });
 }

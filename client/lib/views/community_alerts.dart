@@ -525,9 +525,7 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
 
         // Skip our own broadcasts (admin composing) — the tag is the
         // sender's truncated username.
-        final myTag = widget.myUsername.length > kCommunityNameSenderTagChars
-            ? widget.myUsername.substring(0, kCommunityNameSenderTagChars)
-            : widget.myUsername.padRight(kCommunityNameSenderTagChars, '_');
+        final myTag = communitySenderTag(widget.myUsername);
         if (decoded.senderTag == myTag) continue;
 
         final msgKey = '${decoded.senderTag}:${decoded.msgId}';
@@ -574,7 +572,7 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
   /// starts. Shared by both the single-part and split-alert paths in
   /// _send() below — the only difference between them is how many times
   /// this gets called and awaited.
-  Future<void> _sendOnePart(String text, int index) async {
+  Future<void> _sendOnePart(String text, CommunityMessage pending) async {
     final msgId = await widget.onSendMessage!(text);
     // Null means the broadcast never started. Said out loud, because the
     // message is already sitting in this device's own list looking sent —
@@ -593,12 +591,19 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
     // Backfill the wire identity so an admin deletion can find this copy
     // too. Guarded on the index still holding the same message: received
     // messages can land in the list while the broadcast is starting.
-    if (msgId != null && index < _messages.length) {
+    //
+    // Found by IDENTITY, not by the index it was added at. The list is
+    // re-sorted by _mergeServerAlerts and inserted into by BLE arrivals,
+    // so a position captured before the broadcast is not reliably the same
+    // message several seconds later — and a multi-part alert spends
+    // seconds per part. When this missed, the message kept a null
+    // senderTag, the server copy then failed the (senderTag, msgId) dedup,
+    // and the alert appeared twice.
+    final index = _messages.indexWhere((m) => identical(m, pending));
+    if (msgId != null && index != -1) {
       final mine = _messages[index];
-      if (mine.isMe && mine.text == text && mine.senderTag == null) {
-        final tag = widget.myUsername.length > kCommunityNameSenderTagChars
-            ? widget.myUsername.substring(0, kCommunityNameSenderTagChars)
-            : widget.myUsername.padRight(kCommunityNameSenderTagChars, '_');
+      if (mine.isMe && mine.senderTag == null) {
+        final tag = communitySenderTag(widget.myUsername);
         _messages[index] = CommunityMessage(
           sender: mine.sender,
           text: mine.text,
@@ -651,17 +656,20 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
     // onSendMessage returns, and waiting on a Bluetooth round trip before
     // the sender even sees their own alert would feel broken), just applied
     // to each part.
-    final startIndex = _messages.length;
     final now = DateTime.now();
-    setState(() {
-      _messages.addAll(parts.map((part) => CommunityMessage(
-        sender: widget.myUsername,
-        text: part,
-        timestamp: now,
-        isMe: true,
-        isAdmin: true,
-      )));
-    });
+    // Held by reference so each part can be found again after the list has
+    // been sorted or added to — see _sendOnePart.
+    final pending = [
+      for (final part in parts)
+        CommunityMessage(
+          sender: widget.myUsername,
+          text: part,
+          timestamp: now,
+          isMe: true,
+          isAdmin: true,
+        )
+    ];
+    setState(() => _messages.addAll(pending));
     await _persist();
     _scrollToBottom();
 
@@ -675,7 +683,7 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
       for (var i = 0; i < parts.length; i++) {
         if (!mounted) return;
         setState(() => _sendingIndex = i + 1);
-        await _sendOnePart(parts[i], startIndex + i);
+        await _sendOnePart(parts[i], pending[i]);
       }
     } finally {
       if (mounted) {

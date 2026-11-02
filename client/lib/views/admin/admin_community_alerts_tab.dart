@@ -85,9 +85,10 @@ class _AdminCommunityAlertsTabState extends State<AdminCommunityAlertsTab> {
         // recognises the two as one message rather than showing it twice.
         await CommunityAlertSync.instance.post(
           body: clean,
-          senderTag: username.length > kCommunityNameSenderTagChars
-              ? username.substring(0, kCommunityNameSenderTagChars)
-              : username,
+          // communitySenderTag, not a local copy: this line used to
+          // truncate without padding, which is what made every alert from
+          // a short-username admin arrive twice.
+          senderTag: communitySenderTag(username),
           msgId: msgId,
         );
         // Surfaced rather than swallowed — a failed broadcast still leaves

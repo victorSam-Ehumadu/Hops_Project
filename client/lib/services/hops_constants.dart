@@ -183,6 +183,22 @@ const String kAdminCommunityChatPrefix = 'CA:';
 // 8 characters matches the sender-tag width EMG:/ADM: already use, so
 // KeyDirectory.candidatesForTruncatedUsername resolves these for free.
 const int kCommunityNameSenderTagChars = 8;
+
+/// The on-the-wire sender tag for [username]: truncated to
+/// kCommunityNameSenderTagChars, and PADDED to it when shorter.
+///
+/// One definition because there were five, and one of them — the server
+/// post in admin_community_alerts_tab.dart — truncated without padding.
+/// Every alert from an admin with a short username then carried "victor"
+/// on the server and "victor__" over BLE, so the (senderTag, msgId) pair
+/// the two are deduped on never matched and every alert arrived twice.
+///
+/// The padding is not cosmetic: decodeCommunityNameChunk reads the tag at
+/// FIXED offsets, so a short tag would shift every field after it.
+String communitySenderTag(String username) =>
+    username.length >= kCommunityNameSenderTagChars
+        ? username.substring(0, kCommunityNameSenderTagChars)
+        : username.padRight(kCommunityNameSenderTagChars, '_');
 const int kCommunityNameOverhead = 13;
 const int kCommunityNameTextBudget = kCommunityNameBudget - kCommunityNameOverhead; // 11
 
@@ -211,9 +227,7 @@ String encodeCommunityNameChunk({
   final prefix = isAdmin ? kAdminCommunityChatPrefix : kCommunityChatPrefix;
   // Padded as well as truncated — a short tag would otherwise shift every
   // fixed offset the decoder relies on.
-  final tag = senderTag.length >= kCommunityNameSenderTagChars
-      ? senderTag.substring(0, kCommunityNameSenderTagChars)
-      : senderTag.padRight(kCommunityNameSenderTagChars, '_');
+  final tag = communitySenderTag(senderTag);
   final id = _kNameFieldAlphabet[msgId & 0x3F];
   final info = _kNameFieldAlphabet[
       ((chunkIndex & 0x07) << 3) | ((totalChunks - 1) & 0x07)];
@@ -292,9 +306,7 @@ String encodeCommunityDeletion({
   required int msgId,
   required CommunityDeleteReason reason,
 }) {
-  final tag = senderTag.length > kCommunityNameSenderTagChars
-      ? senderTag.substring(0, kCommunityNameSenderTagChars)
-      : senderTag.padRight(kCommunityNameSenderTagChars, '_');
+  final tag = communitySenderTag(senderTag);
   return '$kCommunityDeletePrefix$tag'
       '${_kNameFieldAlphabet[msgId & 0x3F]}'
       '${_kNameFieldAlphabet[reason.index & 0x3F]}';
