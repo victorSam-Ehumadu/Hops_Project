@@ -356,50 +356,121 @@ img { max-width: 100%; display: block; }
   text-align: left;
 }
 
+/* Grid and flex children default to min-width:auto, which means they
+ * refuse to shrink below their content's intrinsic minimum — so on a
+ * narrow phone the hero column stayed wider than the screen and pushed the
+ * whole page into horizontal overflow (headline, buttons and nav all cut
+ * off at the same edge). min-width: 0 lets them shrink and wrap instead.
+ * This is the fix, not `overflow-x: hidden` on the body, which only hides
+ * the symptom and leaves the content unreachable. */
+.hero-split .container > * { min-width: 0; }
+
 .hero-split .hero-copy .actions { justify-content: flex-start; }
 .hero-split p.tagline { margin-left: 0; margin-right: 0; }
 
+/* The dial and the mascot are stacked in ONE grid cell rather than the
+ * mascot being positioned over an absolutely-placed dial. Absolute
+ * positioning inside this grid stopped `aspect-ratio` resolving, so the
+ * dial painted taller than it was wide and its crosshair ran out of the
+ * circle and down across the eyebrow and headline. As a plain grid item it
+ * is reliably square. */
 .hero-split .hero-art {
   display: grid;
   place-items: center;
-  position: relative;
 }
+
+.hero-split .hero-art > * { grid-area: 1 / 1; }
 
 .hero-split .hero-art img {
   width: min(100%, 320px);
   filter: drop-shadow(0 20px 40px rgba(0, 40, 44, .25));
 }
 
-/* A soft glow and two thin rings behind the mascot — the same "one phone
- * reaching out" idea the app's radar uses.
+/* The radar dial from the app, rebuilt in CSS.
  *
- * The glow must FADE OUT rather than stop at a radius. A colour stop with
- * a hard edge (…16%, transparent) 0 38%, transparent 39%) renders as a flat
- * grey disc sitting behind the logo, not as light coming off it. */
-.hero-split .hero-art::before {
-  content: '';
-  position: absolute;
-  /* A square box, centred — NOT inset on a rectangular parent. Inset made
-   * the element wider than tall, so the ring gradients drew as ellipses
-   * and the outer one was cut off at the top and bottom edges. */
-  top: 50%;
-  left: 50%;
+ * Deliberately faithful to RadarPainter in client/lib/views/radar_screen.dart
+ * rather than "some rings": four static rings at quarter radii drawn at 20%
+ * alpha, a crosshair at 30%, and a sonar ping of TWO rings half a cycle
+ * apart on a 3-second loop, each expanding from the centre to the edge
+ * while fading to nothing. Two rings, not one, is the detail that matters —
+ * it is what stops a visible dead gap between pings, so the dial always has
+ * something mid-expansion and reads as alive.
+ *
+ * The rotating sweep line is left out: on a page it would be a spinner
+ * competing with the headline, and the ping alone carries the idea.
+ *
+ * A square, centred box — NOT inset on a rectangular parent. Inset made the
+ * element wider than tall, so the rings drew as ellipses and the outer one
+ * clipped at the top and bottom. */
+.hero-split .hero-art .radar {
+  position: relative;
   width: min(96%, 420px);
   aspect-ratio: 1;
-  transform: translate(-50%, -50%);
   border-radius: 50%;
+  overflow: hidden;
+  pointer-events: none;
+  /* Every layer is sized and positioned EXPLICITLY rather than relying on
+   * border-radius to clip it.
+   *
+   * Two traps, both of which this hit: a radial-gradient's default sizing
+   * is farthest-CORNER, so "100%" lands out at the square's diagonal, well
+   * outside the dial — hence `closest-side`, which makes a percentage mean
+   * what it looks like it means. And a full-bleed linear-gradient
+   * crosshair spans the whole square, so its arms stick out past the
+   * circle at the diagonals; sizing each arm to 86% and centring it keeps
+   * it inside the outer ring by construction. */
   background:
-    radial-gradient(circle at 50% 50%,
-      color-mix(in srgb, var(--primary) 15%, transparent) 0%,
-      color-mix(in srgb, var(--primary) 7%, transparent) 36%,
-      transparent 64%),
-    radial-gradient(circle, transparent 0 63%,
-      color-mix(in srgb, var(--primary) 22%, transparent) 63.4% 64.2%,
-      transparent 64.6%),
-    radial-gradient(circle, transparent 0 80%,
-      color-mix(in srgb, var(--lime) 30%, transparent) 80.4% 81.2%,
-      transparent 81.6%);
+    /* crosshair arms, 30% — 86% of the box, centred, so they stay inside */
+    linear-gradient(to right,
+      color-mix(in srgb, var(--primary) 30%, transparent),
+      color-mix(in srgb, var(--primary) 30%, transparent)) center / 86% 1px no-repeat,
+    linear-gradient(to bottom,
+      color-mix(in srgb, var(--primary) 30%, transparent),
+      color-mix(in srgb, var(--primary) 30%, transparent)) center / 1px 86% no-repeat,
+    /* four static rings at 25 / 50 / 75 / 100% of the radius, 20% */
+    radial-gradient(circle closest-side, transparent 0 24.2%,
+      color-mix(in srgb, var(--primary) 20%, transparent) 24.2% 25%, transparent 25%),
+    radial-gradient(circle closest-side, transparent 0 49.2%,
+      color-mix(in srgb, var(--primary) 20%, transparent) 49.2% 50%, transparent 50%),
+    radial-gradient(circle closest-side, transparent 0 74.2%,
+      color-mix(in srgb, var(--primary) 20%, transparent) 74.2% 75%, transparent 75%),
+    radial-gradient(circle closest-side, transparent 0 98.8%,
+      color-mix(in srgb, var(--primary) 20%, transparent) 98.8% 100%, transparent 100%),
+    /* soft glow — must FADE OUT rather than stop at a radius, or it
+       renders as a flat disc behind the logo instead of light off it */
+    radial-gradient(circle closest-side,
+      color-mix(in srgb, var(--primary) 14%, transparent) 0%,
+      color-mix(in srgb, var(--primary) 6%, transparent) 54%,
+      transparent 100%);
 }
+
+/* One ping. The second is the same ring started half a cycle later. */
+.hero-split .hero-art .radar-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--primary);
+  opacity: 0;
+  animation: radar-ping 3s linear infinite;
+}
+
+.hero-split .hero-art .radar-pulse:nth-child(2) { animation-delay: 1.5s; }
+
+/* alpha = (1 - progress) * 0.35, matching the painter. */
+@keyframes radar-ping {
+  from { transform: scale(0); opacity: .35; }
+  to   { transform: scale(1); opacity: 0; }
+}
+
+/* The global reduced-motion block freezes animations rather than removing
+ * them, which would leave both pings stuck at scale(0) as two dots in the
+ * middle of the dial. Hide them outright instead; the static rings stay. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-split .hero-art .radar-pulse { display: none; }
+}
+
+/* The mascot sits above the dial. */
+.hero-split .hero-art img { position: relative; z-index: 1; }
 
 @media (max-width: 900px) {
   .hero-split .container {
@@ -409,7 +480,18 @@ img { max-width: 100%; display: block; }
   .hero-split .hero-copy .actions { justify-content: center; }
   .hero-split p.tagline { margin-left: auto; margin-right: auto; }
   .hero-split .hero-art { order: -1; }
-  .hero-split .hero-art img { width: min(62%, 210px); }
+
+  /* The dial is square and sized off the COLUMN, while the mascot shrinks
+   * to a fraction of it. Left alone, the circle is far taller than the art
+   * box and spills down over the eyebrow and headline. Give the box height
+   * to hold the dial, and keep the mascot at the same proportion of it as
+   * on desktop (320/420 ≈ 0.76) so the composition doesn't change shape. */
+  /* Make the art box itself square and bound its height, then size the
+   * dial as a fraction OF THAT BOX. Sizing the dial off the column while
+   * the box was only as tall as the shrunken mascot let the outer ring
+   * escape downwards and cross the eyebrow and headline. */
+  .hero-split .hero-art .radar { width: min(88%, 268px); }
+  .hero-split .hero-art img { width: min(64%, 200px); }
 }
 
 /* Small reassurance chips under the hero buttons. */
@@ -542,6 +624,34 @@ img { max-width: 100%; display: block; }
 .card--feature {
   border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
   box-shadow: var(--shadow);
+}
+
+/* A single full-width card used as the page's primary offer.
+ *
+ * It keeps the container's full width so its edges line up with the grid
+ * beneath it, but its CONTENTS are centred. Left-aligned content in a
+ * 1100px card leaves the right half empty and drops the main button far
+ * off the page's centre line — which is especially wrong here, where the
+ * hero directly above it is centred. Paragraphs are capped separately so
+ * centring does not also hand them a 1100px measure. */
+.card--spotlight {
+  align-items: center;
+  text-align: center;
+  padding: 34px 28px 30px;
+}
+
+.card--spotlight .icon { margin-left: auto; margin-right: auto; }
+
+.card--spotlight p {
+  max-width: 620px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.card--spotlight .card-foot {
+  display: flex;
+  justify-content: center;
+  width: 100%;
 }
 
 .card--muted { opacity: .72; }
