@@ -261,70 +261,83 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
     );
   }
 
+  static const Map<StatsRange, String> _rangeLabels = {
+    StatsRange.last24h: 'Last 24 hours',
+    StatsRange.last7d: 'Last 7 days',
+    StatsRange.last30d: 'Last 30 days',
+    StatsRange.custom: 'Custom range',
+  };
+
+  String get _rangeLabel {
+    if (_window.kind != StatsRange.custom) {
+      return _rangeLabels[_window.kind]!;
+    }
+    final f = _window.from.toLocal();
+    final t = _window.to.toLocal();
+    String d(DateTime x) =>
+        '${x.day}/${x.month.toString().padLeft(2, '0')}';
+    return '${d(f)} – ${d(t)}';
+  }
+
+  String get _kindsLabel {
+    if (_kinds.isEmpty) return 'All actions';
+    if (_kinds.length == 1) return _kindLabels[_kinds.first]!;
+    return '${_kinds.length} action types';
+  }
+
+  /// Two buttons rather than fourteen chips. The labels carry the current
+  /// selection, so nothing is hidden by collapsing them — a glance still
+  /// says "Last 7 days, All actions" without the controls taking the top
+  /// third of a phone screen.
   Widget _filterBar(ColorScheme colors, int shown) {
-    const presets = {
-      StatsRange.last24h: '24 hours',
-      StatsRange.last7d: '7 days',
-      StatsRange.last30d: '30 days',
-      StatsRange.custom: 'Custom',
-    };
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          Row(
             children: [
-              for (final entry in presets.entries)
-                ChoiceChip(
-                  label:
-                      Text(entry.value, style: const TextStyle(fontSize: 12)),
-                  selected: _window.kind == entry.key,
-                  onSelected:
-                      _loading ? null : (_) => _selectPreset(entry.key),
-                  avatar: entry.key == StatsRange.custom
-                      ? Icon(Icons.date_range_rounded,
-                          size: 15,
-                          color: _window.kind == entry.key
-                              ? colors.onPrimary
-                              : colors.onSurface)
-                      : null,
+              Expanded(
+                child: _filterButton(
+                  colors,
+                  icon: Icons.schedule,
+                  label: _rangeLabel,
+                  onTap: _loading ? null : _pickRange,
                 ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              FilterChip(
-                label: const Text('All', style: TextStyle(fontSize: 11)),
-                selected: _kinds.isEmpty,
-                onSelected: (_) => setState(_kinds.clear),
               ),
-              for (final entry in _kindLabels.entries)
-                FilterChip(
-                  label:
-                      Text(entry.value, style: const TextStyle(fontSize: 11)),
-                  selected: _kinds.contains(entry.key),
-                  onSelected: (on) => setState(() {
-                    if (on) {
-                      _kinds.add(entry.key);
-                    } else {
-                      _kinds.remove(entry.key);
-                    }
-                  }),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _filterButton(
+                  colors,
+                  icon: Icons.filter_list,
+                  label: _kindsLabel,
+                  active: _kinds.isNotEmpty,
+                  onTap: _loading ? null : _pickKinds,
                 ),
+              ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            shown == 1 ? "1 entry" : "$shown entries",
-            style: TextStyle(
-                fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(
+                shown == 1 ? "1 entry" : "$shown entries",
+                style: TextStyle(
+                    fontSize: 11,
+                    color: colors.onSurface.withValues(alpha: 0.5)),
+              ),
+              if (_kinds.isNotEmpty) ...[
+                const SizedBox(width: 10),
+                InkWell(
+                  onTap: () => setState(_kinds.clear),
+                  child: Text("Clear filters",
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: colors.primary)),
+                ),
+              ],
+            ],
           ),
           if (_mayBeClipped) ...[
             const SizedBox(height: 4),
@@ -340,6 +353,185 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
         ],
       ),
     );
+  }
+
+  Widget _filterButton(
+    ColorScheme colors, {
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+    bool active = false,
+  }) {
+    final accent = active ? colors.primary : colors.onSurface;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: active
+                ? colors.primary.withValues(alpha: 0.08)
+                : Colors.transparent,
+            border: Border.all(
+                color: accent.withValues(alpha: active ? 0.45 : 0.25)),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 16, color: accent.withValues(alpha: 0.8)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: active ? FontWeight.bold : FontWeight.w500,
+                      color: accent),
+                ),
+              ),
+              Icon(Icons.expand_more,
+                  size: 18, color: accent.withValues(alpha: 0.6)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetHandle(BuildContext ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Theme.of(ctx)
+                  .colorScheme
+                  .onSurface
+                  .withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(100),
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+      );
+
+  Future<void> _pickRange() async {
+    final picked = await showModalBottomSheet<StatsRange>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _sheetHandle(ctx),
+            const Text("Time range",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+            const SizedBox(height: 6),
+            for (final entry in _rangeLabels.entries)
+              ListTile(
+                leading: Icon(entry.key == StatsRange.custom
+                    ? Icons.date_range_rounded
+                    : Icons.schedule),
+                title: Text(entry.value, style: const TextStyle(fontSize: 14)),
+                trailing: _window.kind == entry.key
+                    ? const Icon(Icons.check, size: 20)
+                    : null,
+                onTap: () => Navigator.pop(ctx, entry.key),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    await _selectPreset(picked);
+  }
+
+  Future<void> _pickKinds() async {
+    // A local copy so backing out of the sheet leaves the list alone —
+    // ticking four boxes and then dismissing should not have applied them
+    // one at a time on the way.
+    final working = Set<String>.from(_kinds);
+    final result = await showModalBottomSheet<Set<String>>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _sheetHandle(ctx),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text("Filter by action",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 15)),
+                    ),
+                    TextButton(
+                      onPressed: working.isEmpty
+                          ? null
+                          : () => setSheetState(working.clear),
+                      child: const Text("Clear"),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final entry in _kindLabels.entries)
+                      CheckboxListTile(
+                        dense: true,
+                        value: working.contains(entry.key),
+                        title: Text(entry.value,
+                            style: const TextStyle(fontSize: 14)),
+                        onChanged: (on) => setSheetState(() {
+                          if (on == true) {
+                            working.add(entry.key);
+                          } else {
+                            working.remove(entry.key);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(ctx, working),
+                    child: Text(working.isEmpty
+                        ? "Show all actions"
+                        : "Apply ${working.length} filter"
+                            "${working.length == 1 ? '' : 's'}"),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (result == null) return;
+    setState(() {
+      _kinds
+        ..clear()
+        ..addAll(result);
+    });
   }
 
   /// The list, with a separator wherever the calendar day changes.
