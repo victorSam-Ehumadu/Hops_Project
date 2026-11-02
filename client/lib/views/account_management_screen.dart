@@ -190,21 +190,163 @@ class AccountManagementScreen extends StatefulWidget {
   State<AccountManagementScreen> createState() => _AccountManagementScreenState();
 }
 
+/// Writes a full local backup to a file the user chooses.
+///
+/// Top-level rather than a method, so the two actions that erase this
+/// device — Log Out and Delete Account — can both offer it without keeping
+/// their own copy of the logic.
+///
+/// Returns true ONLY when a file was actually written. A cancelled picker
+/// must never be mistaken for "your data is safe" by a caller that is
+/// about to wipe the device.
+Future<bool> exportMyHopsData(BuildContext context) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString('my_username') ?? 'hops_user';
+
+    final data = await DatabaseHelper.instance.exportAllData();
+    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
+
+    final timestamp = DateTime.now();
+    final stamp = '${timestamp.year}${timestamp.month.toString().padLeft(2, '0')}'
+        '${timestamp.day.toString().padLeft(2, '0')}';
+    final fileName = 'hops_data_export_${username}_$stamp.json';
+
+    final savedPath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save your Hops data export',
+      fileName: fileName,
+      bytes: bytes,
+    );
+
+    messenger.showSnackBar(SnackBar(
+      content: Text(savedPath != null ? "Saved $fileName" : "Export cancelled"),
+    ));
+    return savedPath != null;
+  } catch (e) {
+    messenger.showSnackBar(
+      SnackBar(content: Text("Couldn't export your data: $e")),
+    );
+    return false;
+  }
+}
+
+/// What the user chose when offered an export before something destructive.
+enum _PreWipeChoice { cancel, exportFirst, proceed }
+
 class _AccountManagementScreenState extends State<AccountManagementScreen> {
   bool _busy = false;
 
+  /// Offers an export, then confirms the destructive action itself.
+  ///
+  /// Both halves matter. The export is offered FIRST because once Log Out
+  /// or Delete Account has run, the messages, tasks, vibe records and
+  /// contacts on this device are gone and no server copy exists to restore
+  /// from — Hops keeps that data nowhere else by design.
+  ///
+  /// Returns true if the caller should go ahead.
+  Future<bool> _offerExportThenConfirm({
+    required String title,
+    required String body,
+    required String proceedLabel,
+    required bool destructive,
+  }) async {
+    var exported = false;
+    // Loops so exporting does not count as answering the question: after
+    // the file is written the user is asked again whether to go ahead,
+    // rather than the export silently committing them to it.
+    while (true) {
+      if (!mounted) return false;
+      final choice = await showDialog<_PreWipeChoice>(
+        context: context,
+        builder: (ctx) {
+          final colors = Theme.of(ctx).colorScheme;
+          return AlertDialog(
+            title: Text(title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(body, style: const TextStyle(fontSize: 13.5, height: 1.4)),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: (exported ? Colors.green : colors.primary)
+                        .withValues(alpha: 0.09),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        exported
+                            ? Icons.check_circle_outline
+                            : Icons.download_for_offline_outlined,
+                        size: 20,
+                        color: exported ? Colors.green : colors.primary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          exported
+                              ? "Backup saved. You can restore it later with "
+                                  "Import My Data."
+                              : "Your messages, tasks and contacts live only "
+                                  "on this phone. Save a backup first?",
+                          style: const TextStyle(fontSize: 12, height: 1.35),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actionsOverflowButtonSpacing: 6,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, _PreWipeChoice.cancel),
+                child: const Text("Cancel"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, _PreWipeChoice.proceed),
+                style: TextButton.styleFrom(
+                    foregroundColor:
+                        destructive ? Colors.redAccent : colors.primary),
+                child: Text(exported ? proceedLabel : "$proceedLabel anyway"),
+              ),
+              if (!exported)
+                ElevatedButton.icon(
+                  onPressed: () =>
+                      Navigator.pop(ctx, _PreWipeChoice.exportFirst),
+                  icon: const Icon(Icons.download_for_offline_outlined,
+                      size: 18),
+                  label: const Text("Export my data"),
+                ),
+            ],
+          );
+        },
+      );
+
+      if (choice == null || choice == _PreWipeChoice.cancel) return false;
+      if (choice == _PreWipeChoice.proceed) return true;
+
+      if (!mounted) return false;
+      setState(() => _busy = true);
+      final saved = await exportMyHopsData(context);
+      if (mounted) setState(() => _busy = false);
+      // A cancelled or failed export leaves the prompt exactly as it was,
+      // so the offer is still there rather than having been spent.
+      if (saved) exported = true;
+    }
+  }
+
   Future<void> _confirmLogOut() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Log out?"),
-        content: const Text(
-            "You'll need your username and password to sign back in on this device."),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Log Out")),
-        ],
-      ),
+    final confirmed = await _offerExportThenConfirm(
+      title: "Log out?",
+      body: "Logging out erases everything Hops has stored on this device. "
+          "You'll need your username and password to sign back in.",
+      proceedLabel: "Log out",
+      destructive: false,
     );
     if (confirmed != true || !mounted) return;
     setState(() => _busy = true);
@@ -366,40 +508,27 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
   Future<void> _exportMyData() async {
     setState(() => _busy = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final username = prefs.getString('my_username') ?? 'hops_user';
-
-      final data = await DatabaseHelper.instance.exportAllData();
-      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
-
-      final timestamp = DateTime.now();
-      final stamp = '${timestamp.year}${timestamp.month.toString().padLeft(2, '0')}'
-          '${timestamp.day.toString().padLeft(2, '0')}';
-      final fileName = 'hops_data_export_${username}_$stamp.json';
-
-      final savedPath = await FilePicker.platform.saveFile(
-        dialogTitle: 'Save your Hops data export',
-        fileName: fileName,
-        bytes: bytes,
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(savedPath != null ? "Saved $fileName" : "Export cancelled"),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Couldn't export your data: $e")),
-      );
+      await exportMyHopsData(context);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _openDeleteAccount() async {
+    // Offered here rather than on the delete screen's final button: the
+    // export opens a file picker, and returning from that into a
+    // half-filled password field is a worse moment to interrupt than
+    // before anything has been typed.
+    final goAhead = await _offerExportThenConfirm(
+      title: "Delete your account?",
+      body: "This permanently erases your Hops identity from the server and "
+          "wipes everything stored on this device. It cannot be undone, and "
+          "there is no server copy of your messages to restore from.",
+      proceedLabel: "Continue",
+      destructive: true,
+    );
+    if (goAhead != true || !mounted) return;
+
     final deleted = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const _DeleteAccountScreen()),
@@ -474,7 +603,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
               title: "Delete Account",
               subtitle: "Permanently erase your identity — this can't be undone",
               destructive: true,
-              onTap: _openDeleteAccount,
+              onTap: _busy ? null : _openDeleteAccount,
             ),
             if (_busy) ...[
               const SizedBox(height: 24),
