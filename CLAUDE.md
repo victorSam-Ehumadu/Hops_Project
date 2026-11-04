@@ -811,6 +811,7 @@ that needs backing up. Two PowerShell scripts, run from the repo root:
 powershell -ExecutionPolicy Bypass -File .\scripts\backup-db.ps1           # take a dump
 powershell -ExecutionPolicy Bypass -File .\scripts\backup-db.ps1 -Masked   # same, URI input hidden (projector)
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-backup.ps1       # restore it locally to prove it works
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-backup.ps1 -Keep # same, but leave the restored db to browse
 powershell -ExecutionPolicy Bypass -File .\scripts\reset-local-pg-password.ps1   # ELEVATED; forgot the local postgres password
 ```
 
@@ -818,6 +819,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\reset-local-pg-password.ps1  
 invocation.
 
 Last verified restore: **1 Sep 2026**, 8/8 tables and 67/67 rows into a local scratch database.
+The scratch database (`hops_restore_test`) is dropped in a `finally` block, so nothing survives the run unless `-Keep` is passed — worth knowing before hunting for it afterwards. A kept database holds every row of the cloud database, password hashes and the full moderation log included, so delete it (`dropdb hops_restore_test`) once you are done looking.
+
 `verify-backup.ps1` never contacts the cloud database and needs no network, so it is safe to run
 anywhere — including as a live demonstration (see `docs/backup-demo-runbook.md`).
 
