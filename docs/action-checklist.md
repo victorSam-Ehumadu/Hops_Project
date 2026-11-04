@@ -20,19 +20,32 @@ identical to a bug from the outside.
 
 ## 1. Database — do this first, nothing else depends on itself
 
-Migrations written and committed but **not applied** are listed below.
-Until they are, the features they back silently do nothing.
+**All 25 migrations are applied as of 4 Nov 2026.** Nothing on the
+database is outstanding. Keep the entries below as a record of what each
+one unblocked, and because the verification step is worth repeating
+whenever a server-side feature misbehaves.
 
-**Applied 2 Nov 2026** — verify with `supabase/check-0023-0024-0025.sql`,
-which is a single query so the editor cannot hide half the answer. Every
-row should read PASS.
+- [ ] **Verify the last three took.** Paste
+      `supabase/check-0023-0024-0025.sql` and press Run. It is a *single*
+      query, so the editor's last-result-set-only behaviour cannot hide
+      half the answer. Five rows, every one reading **PASS**:
 
-- [ ] **Apply `0025_manual_reporter_flag.sql`** — adds `admin_flag_reporter`
-      and lets the log accept the new `flag_reporter` action. Without it,
-      the "Flag for wrongful reporting" entry now on both Take Action
-      sheets fails with "not authorized"-shaped errors, because the
-      function does not exist. The flag column itself has been there since
-      `0015`; only a manual way to SET it was missing.
+      | row | what it proves |
+      |---|---|
+      | `0023  get_password_salt_by_email search_path` | the salt lookup can reach pgcrypto, so a mistyped email reports a wrong password instead of a server fault |
+      | `0024  community_alerts table` | the ninth table exists — the Community Alerts catch-up path |
+      | `0024  post / list / delete RPCs` | the three functions behind it |
+      | `0025  admin_flag_reporter exists` | the Flag for wrongful reporting button has a function to call |
+      | `0025  action log accepts flag_reporter` | the log's action CHECK was widened, so the write does not bounce |
+
+      A FAIL means that migration did not apply, and the feature it backs
+      fails at *runtime* rather than at deploy — which is exactly how a
+      missing migration has been mistaken for an app bug here before.
+
+- [x] **Applied `0023`, `0024` and `0025`** — 4 Nov 2026. `0025` adds
+      `admin_flag_reporter` and lets the log accept the new
+      `flag_reporter` action; the flag column itself had been there since
+      `0015`, only a manual way to SET it was missing.
 
 - [x] **Run the probe first.** Supabase dashboard → your project → **SQL
       Editor** → New query. Paste `supabase/check-applied-migrations.sql`.
