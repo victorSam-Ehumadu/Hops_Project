@@ -818,7 +818,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\reset-local-pg-password.ps1  
 `-ExecutionPolicy Bypass` is required — the machine default is Restricted. It scopes to that one
 invocation.
 
-Last verified restore: **1 Sep 2026**, 8/8 tables and 67/67 rows into a local scratch database.
+Last verified restore: **4 Nov 2026**, 9 tables and 140 rows into a local scratch database (was 8 tables / 67 rows on 1 Sep 2026).
 The scratch database (`hops_restore_test`) is dropped in a `finally` block, so nothing survives the run unless `-Keep` is passed — worth knowing before hunting for it afterwards. A kept database holds every row of the cloud database, password hashes and the full moderation log included, so delete it (`dropdb hops_restore_test`) once you are done looking.
 
 `verify-backup.ps1` never contacts the cloud database and needs no network, so it is safe to run
@@ -853,10 +853,12 @@ Things that are non-obvious and cost time to rediscover:
   would also swallow `supabase/migrations/`. A dump holds every row in the cloud database
   including password hashes and the full moderation log.
 
-Current shape of the backend, useful for sanity-checking a dump: 8 tables, all with RLS enabled
+Current shape of the backend, useful for sanity-checking a dump: 9 tables, all with RLS enabled
 and **zero policies** (deny-all by design — everything goes through 65 `SECURITY DEFINER`
 functions), 74 `REVOKE`s, 61 `GRANT EXECUTE`s. If a dump comes back with policies in it, something
-changed. Since `0020` there is also a unique index `profiles_username_unique_ci` on
+changed. The ninth table is `community_alerts`, added by `0024` — so a restore reporting only 8 is itself evidence that `0024` never applied, which is a cheaper check than reading the function list. The `SECURITY DEFINER` count also moves with each migration (`0024` adds three functions, `0025` one), so treat 65 as the figure at `0023` rather than a constant.
+
+Since `0020` there is also a unique index `profiles_username_unique_ci` on
 `lower(username)` — a dump without it means `0020` was never applied, and duplicate usernames are
 possible again.
 
