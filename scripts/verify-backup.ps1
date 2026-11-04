@@ -21,7 +21,13 @@
 
 param(
     [string]$BackupFile,
-    [string]$TestDb = "hops_restore_test"
+    [string]$TestDb = "hops_restore_test",
+    # Leave the restored database in place so it can be opened and browsed.
+    # Off by default: the point of this script is to prove a restore works,
+    # and leaving a copy of every row in the cloud database — password
+    # hashes and the full moderation log included — sitting on a laptop is
+    # not something that should happen unless it was asked for.
+    [switch]$Keep
 )
 
 # Deliberately NOT "Stop". In Windows PowerShell 5.1, redirecting a native
@@ -132,8 +138,16 @@ try {
 finally {
     # --- Always clean up -------------------------------------------------
     Write-Host ""
-    Write-Host "Dropping scratch database ..." -ForegroundColor DarkGray
-    & $dropdb --if-exists $TestDb *>$null
+    if ($Keep) {
+        Write-Host "Keeping scratch database '$TestDb' (-Keep)." -ForegroundColor Yellow
+        Write-Host "  Browse it:  psql -d $TestDb" -ForegroundColor DarkGray
+        Write-Host "  Or in pgAdmin: Servers > PostgreSQL > Databases > $TestDb" -ForegroundColor DarkGray
+        Write-Host "  Delete it when done:  dropdb $TestDb" -ForegroundColor DarkGray
+        Write-Host "  It holds a full copy of the cloud database - do not leave it lying around." -ForegroundColor DarkYellow
+    } else {
+        Write-Host "Dropping scratch database ..." -ForegroundColor DarkGray
+        & $dropdb --if-exists $TestDb *>$null
+    }
     Remove-Item Env:PGOPTIONS  -ErrorAction SilentlyContinue
     Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
     Remove-Item Env:PGHOST     -ErrorAction SilentlyContinue
