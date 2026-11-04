@@ -23,7 +23,9 @@ identical to a bug from the outside.
 Migrations written and committed but **not applied** are listed below.
 Until they are, the features they back silently do nothing.
 
-**Still outstanding: `0023`, `0024`, `0025`.**
+**Applied 2 Nov 2026** — verify with `supabase/check-0023-0024-0025.sql`,
+which is a single query so the editor cannot hide half the answer. Every
+row should read PASS.
 
 - [ ] **Apply `0025_manual_reporter_flag.sql`** — adds `admin_flag_reporter`
       and lets the log accept the new `flag_reporter` action. Without it,
