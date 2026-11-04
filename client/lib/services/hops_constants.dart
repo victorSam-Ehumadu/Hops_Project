@@ -865,6 +865,29 @@ String? decodeDiscoverableName(List<int> bytes) {
 // other, which is why this is additive rather than a format change.
 const int kStudyLocationProtocolMarker = 0x4C; // ascii 'L'
 
+/// Venues a Vibe Check report can be tagged with.
+///
+/// The campus venues plus the four places that only matter for crowding.
+///
+/// IMPORTANT, and the opposite of kStudyLocations: a Vibe Check location
+/// travels as plain TEXT inside "VBT:<location>:<level>", not as an index.
+/// So this list may be reordered, added to or trimmed at any time without
+/// breaking anything already in flight — and a phone on an older build
+/// still displays whatever name it receives. The only constraint is
+/// length: every entry must fit advertisementTextBudget(6), which
+/// vibe_check_location_test.dart checks.
+/// "VBT:" (4) + ":" (1) + one level digit (1) = 6 bytes of framing, so this
+/// is what is left for the venue name itself.
+final int kVibeCheckLocationMaxBytes = advertisementTextBudget(6);
+
+const List<String> kVibeCheckLocations = <String>[
+  ...kStudyLocations,
+  'Lab 1',
+  'Lab 2',
+  'Lab 3',
+  'Reception',
+];
+
 /// The campus study locations a tag can name, in wire order.
 ///
 /// **Append only, and never reorder or remove.** The index is what travels

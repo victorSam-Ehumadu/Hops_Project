@@ -43,6 +43,7 @@ const List<String> kHopsAdvertisementPrefixes = <String>[
   'ADM:', 'ADM_OFF:', // official alert + stand-down
   'FR:', 'FA:', // friend request / accept
   'WR:', 'WA:', // watch-buddy request / accept
+  'WX:', // watch cancelled — sent by either side, see hops_app.dart
   'ACK:', 'HOP:', // manual pairing handshake
   'CHT:', // chat ping
   'VBT:', 'VBX:', // Vibe Check

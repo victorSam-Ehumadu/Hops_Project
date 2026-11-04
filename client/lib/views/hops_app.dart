@@ -304,6 +304,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // Active buddies stream
   late final StreamController<Set<String>> _watchingBuddiesStreamController;
   Stream<Set<String>> get watchingBuddiesStream => _watchingBuddiesStreamController.stream;
+  late final StreamController<Set<String>> _watchedByStreamController;
+  Stream<Set<String>> get watchedByStream => _watchedByStreamController.stream;
 
   // Feature toggles
   Set<int> enabledFeatureIds = {};
@@ -324,6 +326,15 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // Watch Me state
   Set<String> _watchingBuddies = {};
+
+  /// Who has accepted a request to watch ME.
+  ///
+  /// The mirror of _watchingBuddies, held by the other side of the same
+  /// pair. It did not exist before: the watched person got a one-off
+  /// "they accepted" notification and then held nothing, so there was
+  /// nobody for them to stop. A safety feature granted by consent has to
+  /// be withdrawable by the person who granted it.
+  Set<String> _watchedBy = {};
   final Set<String> _addedFriends = {};
   final List<String> pendingWatchRequests = [];
   final Set<String> _processingWatchAccepts = {};
@@ -337,6 +348,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     super.initState();
     _pendingWatchStreamController = StreamController<List<String>>.broadcast(
       onListen: () => _pendingWatchStreamController.add(List<String>.from(pendingWatchRequests)),
+    );
+    _watchedByStreamController = StreamController<Set<String>>.broadcast(
+      onListen: () => _watchedByStreamController.add(Set<String>.from(_watchedBy)),
     );
     _watchingBuddiesStreamController = StreamController<Set<String>>.broadcast(
       onListen: () => _watchingBuddiesStreamController.add(Set<String>.from(_watchingBuddies)),
@@ -673,6 +687,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _radarStreamController.close();
     _pendingWatchStreamController.close();
     _watchingBuddiesStreamController.close();
+    _watchedByStreamController.close();
     _diagTimer?.cancel();
     _scanRestartTimer?.cancel();
     _bleCountTimer?.cancel();
@@ -692,7 +707,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   Future<void> _loadWatchState() async {
     final prefs = await SharedPreferences.getInstance();
     final watching = prefs.getStringList('watchingBuddies') ?? [];
-    setState(() => _watchingBuddies = watching.toSet());
+    final watchedBy = prefs.getStringList('watchedByBuddies') ?? [];
+    setState(() {
+      _watchingBuddies = watching.toSet();
+      _watchedBy = watchedBy.toSet();
+    });
     _notifyWatchingBuddiesChanged();
   }
 
@@ -1533,6 +1552,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   Future<void> _saveWatchState() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('watchingBuddies', _watchingBuddies.toList());
+    // The other half of the pair, so the watched side still knows who to
+    // withdraw from after a restart.
+    await prefs.setStringList('watchedByBuddies', _watchedBy.toList());
   }
 
   void _notifyWatchRequestsChanged() {
@@ -1883,6 +1905,24 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     Future.delayed(const Duration(seconds: 2), () => _processingWatchAccepts.remove(sender));
   }
 
+  /// Applies a WX: from [other] to whichever side of the pair we are on.
+  ///
+  /// Checks both sets rather than assuming a role: the same device can be
+  /// watching one person while being watched by another, and the sender
+  /// tag is truncated, so deciding by role would be guessing.
+  void _applyWatchCancelled(String other) {
+    final wasWatching = _watchingBuddies.remove(other);
+    final wasWatched = _watchedBy.remove(other);
+    if (!wasWatching && !wasWatched) return;
+    _saveWatchState();
+    if (wasWatching) _notifyWatchingBuddiesChanged();
+    if (wasWatched) _notifyWatchedByChanged();
+    if (mounted) setState(() {});
+    _showToastFeedbackAlert(wasWatching
+        ? "$other stopped sharing their location with you"
+        : "$other is no longer watching you");
+  }
+
   void _addRecentWatchSender(String sender) {
     _recentWatchSenders.add(sender);
     _recentWatchTimers[sender]?.cancel();
@@ -1938,6 +1978,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // screen — this is what reaches them anywhere else in the app.
     UnreadTracker.instance.mark(UnreadSource.watchMe);
     NotificationService.showWatchAcceptedNotification(username: buddy);
+    // Remember them, so this side can end the watch too.
+    _watchedBy.add(buddy);
+    _saveWatchState();
+    _notifyWatchedByChanged();
   }
 
   Future<void> sendWatchRequest(String targetUsername) async {
@@ -1960,6 +2004,44 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       _notifyWatchingBuddiesChanged();
     });
     _addRecentWatchSender(buddy);
+    // Tell them too, so the person being watched stops being told they
+    // are. Best-effort like every other broadcast: if it is missed, their
+    // side is corrected the next time either of them acts.
+    _broadcastWatchCancelled(buddy);
+  }
+
+  /// Ends a watch from the WATCHED side: "stop watching me".
+  void stopBeingWatchedBy(String watcher) {
+    setState(() {
+      _watchedBy.remove(watcher);
+      _saveWatchState();
+      _notifyWatchedByChanged();
+    });
+    _addRecentWatchSender(watcher);
+    _broadcastWatchCancelled(watcher);
+  }
+
+  /// "WX:<other>:<me>" — the watch between us is over.
+  ///
+  /// ONE prefix for both directions rather than two, because the message
+  /// is identical whichever side sends it, and the receiver knows which
+  /// of its two sets the sender belongs to without being told.
+  ///
+  /// Budget: 3 + 9 + 1 + 9 = 22 bytes, inside the 26-byte ceiling, and the
+  /// same shape WR:/WA: already use.
+  Future<void> _broadcastWatchCancelled(String other) async {
+    final advName = "WX:${_adUser(other)}:${_adUser(myUsername)}";
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 6), () {
+      _releaseRadioToPresenceBeacon();
+    });
+  }
+
+  void _notifyWatchedByChanged() {
+    if (!_watchedByStreamController.isClosed) {
+      _watchedByStreamController.add(Set<String>.from(_watchedBy));
+    }
   }
 
   // ---------- Permissions & BLE ----------
@@ -2703,6 +2785,22 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         }
 
         // Watch ACK – permanent one‑time snackbar
+        // Watch cancelled, from either side of the pair.
+        if (name.startsWith("WX:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
+            final other = parts[1];
+            // Dedup on the whole advertisement, the same way WA: does —
+            // this name is re-broadcast for several seconds.
+            if (!_handledWatchAcks.contains(name)) {
+              _handledWatchAcks.add(name);
+              Future.delayed(const Duration(seconds: 30),
+                  () => _handledWatchAcks.remove(name));
+              _applyWatchCancelled(other);
+            }
+          }
+        }
+
         if (name.startsWith("WA:")) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
@@ -3242,11 +3340,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             watchingBuddies: _watchingBuddies,
             contactSeeds: _contactSeeds,
             watchingBuddiesStream: watchingBuddiesStream,
+            watchedBy: _watchedBy,
+            watchedByStream: watchedByStream,
             pendingWatchStream: pendingWatchStream,
             onSendWatchRequest: sendWatchRequest,
             onAcceptWatchRequest: acceptWatchRequestFromCard,
             onDeclineWatchRequest: declineWatchRequestFromCard,
             onStopWatching: stopWatchingBuddy,
+            onStopBeingWatched: stopBeingWatchedBy,
             onClearAll: clearAllWatchState,
           ),
         ),

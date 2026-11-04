@@ -18,11 +18,16 @@ class WatchMePage extends StatefulWidget {
   // are: the first time you actually open a chat with them.
   final Map<String, List<int>> contactSeeds;
   final Stream<Set<String>> watchingBuddiesStream;
+  /// Who has accepted a request to watch ME — the other half of the pair.
+  final Set<String> watchedBy;
+  final Stream<Set<String>> watchedByStream;
   final Stream<List<String>> pendingWatchStream;
   final Future<void> Function(String buddy) onSendWatchRequest;
   final void Function(String sender) onAcceptWatchRequest;
   final void Function(String sender) onDeclineWatchRequest;
   final void Function(String buddy) onStopWatching;
+  /// Ends a watch from the WATCHED side: "stop watching me".
+  final void Function(String watcher) onStopBeingWatched;
   final VoidCallback onClearAll;
 
   const WatchMePage({
@@ -32,11 +37,14 @@ class WatchMePage extends StatefulWidget {
     required this.watchingBuddies,
     this.contactSeeds = const {},
     required this.watchingBuddiesStream,
+    this.watchedBy = const {},
+    required this.watchedByStream,
     required this.pendingWatchStream,
     required this.onSendWatchRequest,
     required this.onAcceptWatchRequest,
     required this.onDeclineWatchRequest,
     required this.onStopWatching,
+    required this.onStopBeingWatched,
     required this.onClearAll,
   });
 
@@ -84,12 +92,19 @@ class _WatchMePageState extends State<WatchMePage> {
 
   List<String> _pendingRequests = [];
   late Set<String> _watchingBuddies;
+  late Set<String> _watchedBy;
+  StreamSubscription<Set<String>>? _watchedBySub;
 
   @override
   void initState() {
     super.initState();
     UnreadTracker.instance.clear(UnreadSource.watchMe);
     _watchingBuddies = Set<String>.from(widget.watchingBuddies);
+    _watchedBy = Set<String>.from(widget.watchedBy);
+    _watchedBySub = widget.watchedByStream.listen((who) {
+      if (!mounted) return;
+      setState(() => _watchedBy = who);
+    });
     _pendingSub = widget.pendingWatchStream
         .listen((requests) => setState(() => _pendingRequests = requests));
     _watchingSub = widget.watchingBuddiesStream.listen((buddies) {
@@ -107,6 +122,7 @@ class _WatchMePageState extends State<WatchMePage> {
     _checkTimer?.cancel();
     _pendingSub?.cancel();
     _watchingSub?.cancel();
+    _watchedBySub?.cancel();
     super.dispose();
   }
 
@@ -187,6 +203,30 @@ class _WatchMePageState extends State<WatchMePage> {
         }
       }
     });
+  }
+
+  /// Confirms before withdrawing, because the watcher is not told
+  /// beforehand and may be relying on it.
+  Future<void> _confirmStopBeingWatched(String watcher) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("Stop $watcher watching you?"),
+        content: Text(
+            "$watcher will no longer see how far away you are. They are not "
+            "asked — you can ask them again later if you want to."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Stop")),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    widget.onStopBeingWatched(watcher);
   }
 
   void _stopWatching(String buddy) {
@@ -471,6 +511,61 @@ class _WatchMePageState extends State<WatchMePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Who is watching ME. Shown FIRST and above the people I am
+            // watching, because this is the half the user has consented
+            // to and the half they may want to take back — burying it
+            // under a list of other people would be the wrong emphasis
+            // for a feature that shares your whereabouts.
+            if (_watchedBy.isNotEmpty) ...[
+              Text(
+                _watchedBy.length > 1
+                    ? "${_watchedBy.length} people are watching you"
+                    : "Watching you",
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 14, color: colors.primary),
+              ),
+              const SizedBox(height: 8),
+              ..._watchedBy.map((watcher) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Card(
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.visibility_outlined,
+                                size: 20, color: colors.primary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(watcher,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis),
+                                  Text("can see how far away you are",
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: colors.onSurface
+                                              .withValues(alpha: 0.6))),
+                                ],
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => _confirmStopBeingWatched(watcher),
+                              child: const Text("Stop"),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )),
+              const SizedBox(height: 8),
+            ],
             if (_monitored.isNotEmpty) ...[
               Text(
                 _monitored.length > 1 ? "Watching ${_monitored.length} people" : "Monitoring",

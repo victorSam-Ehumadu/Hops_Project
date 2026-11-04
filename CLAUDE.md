@@ -118,7 +118,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **271 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **281 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -273,7 +273,8 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
 - Prefixes in use: `HPS:` (idle presence beacon, carries a *rotating token*, not a username — see
   below), `EMG:`/`EMG_OFF:` (emergency flare + cancel), `ADM:`/`ADM_OFF:` (admin Official Alert,
   sent only by the admin app via `services/official_alert_service.dart`), `FR:`/`FA:` (friend
-  request/accept), `WR:`/`WA:` (watch-buddy request/accept), `ACK:`/`HOP:` (manual pairing-code
+  request/accept), `WR:`/`WA:`/`WX:` (watch-buddy request/accept/cancel — `WX:` is sent by
+  EITHER side, since the watched person must be able to withdraw too), `ACK:`/`HOP:` (manual pairing-code
   handshake), `CHT:` (chat ping — addressed to a peer by *truncated plaintext username*, not a
   rotating token, since you can't know a contact's token before a chat has ever connected),
   `VBT:`/`VBX:` (Vibe Check tag/expiry), `LNR:` (Lost & Found resolution),
