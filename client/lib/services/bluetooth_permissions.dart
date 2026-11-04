@@ -86,12 +86,27 @@ class BluetoothPermissions {
   ///
   /// [includeNearbyWifi] for Nearby Connections callers (Hops Share).
   static Future<bool> request({bool includeNearbyWifi = false}) async {
-    final required =
-        await _requiredPermissions(includeNearbyWifi: includeNearbyWifi);
-    final statuses = await required.request();
+    final statuses =
+        await requestStatuses(includeNearbyWifi: includeNearbyWifi);
     return statuses.values.every(
       (s) => s == PermissionStatus.granted || s == PermissionStatus.limited,
     );
+  }
+
+  /// Same request, but hands back the raw statuses.
+  ///
+  /// For callers that need to tell an ordinary denial from a permanent one
+  /// — Android stops showing the dialog once something is permanently
+  /// denied, so `request()` returns instantly and the tap looks like it did
+  /// nothing. Only `openAppSettings()` can recover from that, and a caller
+  /// can't know to offer it without seeing the statuses. See
+  /// `admin_settings_screen.dart`'s Bluetooth restart.
+  static Future<Map<Permission, PermissionStatus>> requestStatuses({
+    bool includeNearbyWifi = false,
+  }) async {
+    final required =
+        await _requiredPermissions(includeNearbyWifi: includeNearbyWifi);
+    return required.request();
   }
 
   /// Whether the needed permissions are already held, without prompting.

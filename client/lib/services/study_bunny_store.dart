@@ -16,6 +16,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:client/services/hops_constants.dart';
 
 /// How long a study tag from someone else stays live — a bit longer than
 /// kStudyTagAdvertiseDuration itself (the actual on-air window) so a tag
@@ -36,22 +37,45 @@ class StudyReport {
   // visible to every device that already has this report, not just the
   // poster, so the count reads the same everywhere it's shown.
   final int interestCount;
+  // Index into kStudyLocations, or null when the poster gave no location
+  // (optional by design) or sent one this build does not know. Carried in
+  // manufacturer data rather than the name — see hops_constants.dart's
+  // kStudyLocationProtocolMarker for why.
+  final int? locationIndex;
   const StudyReport({
     required this.id,
     required this.subject,
     required this.timestamp,
     this.interestCount = 0,
+    this.locationIndex,
   });
 
-  StudyReport copyWith({DateTime? timestamp, int? interestCount}) => StudyReport(
+  /// Display name for this tag's location, or null when it has none.
+  String? get locationName => studyLocationName(locationIndex);
+
+  StudyReport copyWith({
+    DateTime? timestamp,
+    int? interestCount,
+    // Nullable field on a copyWith needs a sentinel to tell "leave it
+    // alone" apart from "set it to null"; nothing needs to clear it, so
+    // this only ever sets or preserves.
+    int? locationIndex,
+  }) =>
+      StudyReport(
         id: id,
         subject: subject,
+        locationIndex: locationIndex ?? this.locationIndex,
         timestamp: timestamp ?? this.timestamp,
         interestCount: interestCount ?? this.interestCount,
       );
 
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'subject': subject, 'ts': timestamp.millisecondsSinceEpoch, 'ic': interestCount};
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'subject': subject,
+        'ts': timestamp.millisecondsSinceEpoch,
+        'ic': interestCount,
+        'loc': locationIndex,
+      };
 
   factory StudyReport.fromJson(Map<String, dynamic> j) => StudyReport(
         id: j['id'] as String,
@@ -60,6 +84,8 @@ class StudyReport {
         // Absent in reports persisted before this field existed — default
         // to 0 rather than fail the whole decode.
         interestCount: j['ic'] as int? ?? 0,
+        // Absent on anything persisted before this field existed.
+        locationIndex: j['loc'] as int?,
       );
 }
 
@@ -99,16 +125,32 @@ class StudyBunnyStore {
   /// callers can badge/notify once rather than on every repeat — a tag
   /// re-broadcasts for the whole kStudyTagAdvertiseDuration window and is
   /// therefore heard many times over.
-  bool record({required String id, required String subject}) {
+  bool record({
+    required String id,
+    required String subject,
+    int? locationIndex,
+  }) {
     final isNew = !reports.value.containsKey(id);
+    final existing = reports.value[id];
     // Preserve whatever interest count this tag already has — every
     // re-broadcast of the same SBF: tag calls this again for the whole
     // advertise window, and without this it would reset to 0 on the very
     // next re-hear after someone showed interest.
-    final existingCount = reports.value[id]?.interestCount ?? 0;
+    final existingCount = existing?.interestCount ?? 0;
+    // Same reasoning for the location, with one extra wrinkle: the
+    // location rides manufacturer data in the SCAN RESPONSE, which does
+    // not necessarily arrive on every scan result that carries the name.
+    // A re-hear without it must not wipe a location we already learned,
+    // or it would flicker in and out of the list.
     reports.value = {
       ...reports.value,
-      id: StudyReport(id: id, subject: subject, timestamp: DateTime.now(), interestCount: existingCount),
+      id: StudyReport(
+        id: id,
+        subject: subject,
+        timestamp: DateTime.now(),
+        interestCount: existingCount,
+        locationIndex: locationIndex ?? existing?.locationIndex,
+      ),
     };
     _persist();
     return isNew;

@@ -6,6 +6,7 @@ import 'package:client/services/hops_constants.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/services/unread_tracker.dart';
 import 'package:client/services/accessibility_prefs.dart';
+import 'package:client/services/hops_engine.dart';
 
 class WatchMePage extends StatefulWidget {
   final Stream<List<ScanResult>> radarStream;
@@ -17,11 +18,16 @@ class WatchMePage extends StatefulWidget {
   // are: the first time you actually open a chat with them.
   final Map<String, List<int>> contactSeeds;
   final Stream<Set<String>> watchingBuddiesStream;
+  /// Who has accepted a request to watch ME — the other half of the pair.
+  final Set<String> watchedBy;
+  final Stream<Set<String>> watchedByStream;
   final Stream<List<String>> pendingWatchStream;
   final Future<void> Function(String buddy) onSendWatchRequest;
   final void Function(String sender) onAcceptWatchRequest;
   final void Function(String sender) onDeclineWatchRequest;
   final void Function(String buddy) onStopWatching;
+  /// Ends a watch from the WATCHED side: "stop watching me".
+  final void Function(String watcher) onStopBeingWatched;
   final VoidCallback onClearAll;
 
   const WatchMePage({
@@ -31,11 +37,14 @@ class WatchMePage extends StatefulWidget {
     required this.watchingBuddies,
     this.contactSeeds = const {},
     required this.watchingBuddiesStream,
+    this.watchedBy = const {},
+    required this.watchedByStream,
     required this.pendingWatchStream,
     required this.onSendWatchRequest,
     required this.onAcceptWatchRequest,
     required this.onDeclineWatchRequest,
     required this.onStopWatching,
+    required this.onStopBeingWatched,
     required this.onClearAll,
   });
 
@@ -53,6 +62,17 @@ class _BuddySignal {
   DateTime monitoringStartTime = DateTime.now();
   bool alertActive = false;
   bool alertCooldown = false;
+
+  /// True once we've announced that this buddy has gone away (not found,
+  /// or disappeared). Drives the "they're back" announcement — without it
+  /// there is no recovery edge to fire on, since a sighting only clears
+  /// [alertCooldown] and says nothing. Hearing "Thabo is out of range" and
+  /// then never hearing anything again is worse than not being told at all.
+  ///
+  /// Deliberately not set by the weak-signal alert: a weak signal means
+  /// they are still visible, so there is no clean moment at which they are
+  /// "back" to announce.
+  bool awayAnnounced = false;
 }
 
 class _WatchMePageState extends State<WatchMePage> {
@@ -72,12 +92,19 @@ class _WatchMePageState extends State<WatchMePage> {
 
   List<String> _pendingRequests = [];
   late Set<String> _watchingBuddies;
+  late Set<String> _watchedBy;
+  StreamSubscription<Set<String>>? _watchedBySub;
 
   @override
   void initState() {
     super.initState();
     UnreadTracker.instance.clear(UnreadSource.watchMe);
     _watchingBuddies = Set<String>.from(widget.watchingBuddies);
+    _watchedBy = Set<String>.from(widget.watchedBy);
+    _watchedBySub = widget.watchedByStream.listen((who) {
+      if (!mounted) return;
+      setState(() => _watchedBy = who);
+    });
     _pendingSub = widget.pendingWatchStream
         .listen((requests) => setState(() => _pendingRequests = requests));
     _watchingSub = widget.watchingBuddiesStream.listen((buddies) {
@@ -95,6 +122,7 @@ class _WatchMePageState extends State<WatchMePage> {
     _checkTimer?.cancel();
     _pendingSub?.cancel();
     _watchingSub?.cancel();
+    _watchedBySub?.cancel();
     super.dispose();
   }
 
@@ -127,7 +155,16 @@ class _WatchMePageState extends State<WatchMePage> {
           final seed = widget.contactSeeds[entry.key];
           if (seed == null) continue; // can't recognize their beacon without it — see _buildSignalBar
           if (matchesRotatingToken(seed, token)) {
-            entry.value
+            final sig = entry.value;
+            // Seeing them again closes an "away" alert. Announce it before
+            // clearing the flag, so someone who heard them go out of range
+            // also hears them come back — the reassurance is the whole
+            // reason to be watching.
+            if (sig.awayAnnounced) {
+              sig.awayAnnounced = false;
+              _announce('${entry.key} is back in range.');
+            }
+            sig
               ..lastRssi = r.rssi
               ..lastSeen = DateTime.now()
               ..alertCooldown = false;
@@ -147,19 +184,49 @@ class _WatchMePageState extends State<WatchMePage> {
             now.difference(sig.monitoringStartTime).inSeconds >= 15 &&
             !sig.alertCooldown &&
             !sig.alertActive) {
-          _triggerAlert(buddy, sig, "$buddy not found – may be out of range or Bluetooth off");
+          _triggerAlert(buddy, sig,
+              "$buddy not found – may be out of range or Bluetooth off",
+              spoken: "$buddy isn't showing up. They may be out of range, "
+                  "or their Bluetooth may be off.",
+              isAway: true);
           continue;
         }
         if (sig.lastSeen != null && now.difference(sig.lastSeen!).inSeconds >= 10) {
           if (!sig.alertCooldown && !sig.alertActive) {
-            _triggerAlert(buddy, sig, "$buddy disappeared!");
+            _triggerAlert(buddy, sig, "$buddy disappeared!",
+                spoken: "$buddy has gone out of range.", isAway: true);
           }
         } else if (sig.lastRssi < -80 && !sig.alertActive && !sig.alertCooldown && sig.lastSeen != null) {
           _triggerAlert(buddy, sig,
-              "$buddy's signal is weak — they may be far away, blocked by walls, or on a different floor.");
+              "$buddy's signal is weak — they may be far away, blocked by walls, or on a different floor.",
+              spoken: "$buddy's signal is getting weak.");
         }
       }
     });
+  }
+
+  /// Confirms before withdrawing, because the watcher is not told
+  /// beforehand and may be relying on it.
+  Future<void> _confirmStopBeingWatched(String watcher) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("Stop $watcher watching you?"),
+        content: Text(
+            "$watcher will no longer see how far away you are. They are not "
+            "asked — you can ask them again later if you want to."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Stop")),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    widget.onStopBeingWatched(watcher);
   }
 
   void _stopWatching(String buddy) {
@@ -173,11 +240,39 @@ class _WatchMePageState extends State<WatchMePage> {
     widget.onStopWatching(buddy);
   }
 
-  void _triggerAlert(String buddy, _BuddySignal sig, String message) {
+  /// Speaks [text], if the user asked for that and it is safe to do so.
+  ///
+  /// Two guards, both deliberate:
+  ///
+  ///  * Never over an emergency alarm. A flare siren is engineered to be
+  ///    impossible to ignore; talking across it degrades the one sound in
+  ///    this app that must cut through, and a Watch Me update is never the
+  ///    more urgent of the two.
+  ///  * Fire-and-forget. Speech must not sit in front of the haptic, the
+  ///    notification or the dialog — those are the alert; this is a
+  ///    convenience on top of it.
+  ///
+  /// Reuses HopsEngine's already-initialised engine rather than opening a
+  /// second one, the same way chat_terminal.dart does.
+  void _announce(String text) {
+    if (!AccessibilityPrefs.instance.speakWatchMeAlerts.value) return;
+    if (NotificationService.isAlarmRinging.value) return;
+    unawaited(HopsEngine.instance.bunnyTalk(text));
+  }
+
+  /// [spoken] is a separate, shorter phrasing for text-to-speech. The
+  /// on-screen [message] is written to be read — it uses an en-dash, a
+  /// trailing exclamation mark and a long qualifying clause, all of which
+  /// are clumsy or silent when spoken. [isAway] marks the alerts that have
+  /// a meaningful "they came back" counterpart; see _BuddySignal.
+  void _triggerAlert(String buddy, _BuddySignal sig, String message,
+      {String? spoken, bool isAway = false}) {
     if (sig.alertActive) return;
     sig.alertActive = true;
     sig.alertCooldown = true;
+    if (isAway) sig.awayAnnounced = true;
     HapticFeedback.heavyImpact();
+    _announce(spoken ?? message);
     // Fires regardless of whether this screen is even mounted right now —
     // the in-app dialog below only ever helped if Watch Me happened to be
     // the screen on top, which defeats the point of a *safety* alert. This
@@ -416,6 +511,61 @@ class _WatchMePageState extends State<WatchMePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Who is watching ME. Shown FIRST and above the people I am
+            // watching, because this is the half the user has consented
+            // to and the half they may want to take back — burying it
+            // under a list of other people would be the wrong emphasis
+            // for a feature that shares your whereabouts.
+            if (_watchedBy.isNotEmpty) ...[
+              Text(
+                _watchedBy.length > 1
+                    ? "${_watchedBy.length} people are watching you"
+                    : "Watching you",
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 14, color: colors.primary),
+              ),
+              const SizedBox(height: 8),
+              ..._watchedBy.map((watcher) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Card(
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.visibility_outlined,
+                                size: 20, color: colors.primary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(watcher,
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis),
+                                  Text("can see how far away you are",
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: colors.onSurface
+                                              .withValues(alpha: 0.6))),
+                                ],
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => _confirmStopBeingWatched(watcher),
+                              child: const Text("Stop"),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )),
+              const SizedBox(height: 8),
+            ],
             if (_monitored.isNotEmpty) ...[
               Text(
                 _monitored.length > 1 ? "Watching ${_monitored.length} people" : "Monitoring",

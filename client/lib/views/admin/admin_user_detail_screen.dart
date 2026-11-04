@@ -20,10 +20,33 @@ class AdminUserDetailScreen extends StatefulWidget {
   final String userId;
   final String username;
 
+  /// Opens the Take Action sheet as soon as the detail has loaded.
+  ///
+  /// Used by the Reports tab so "Take action" on a report lands on the
+  /// real sheet rather than a second copy of it. The sheet's contents
+  /// depend on the target's loaded state (banned? suspended? admin?), so
+  /// rebuilding it anywhere else would mean duplicating this screen's
+  /// fetch and then keeping the two in step forever.
+  final bool autoOpenActions;
+
+  /// Who the sheet's "Flag for wrongful reporting" entry acts on, when
+  /// that is NOT the account being viewed.
+  ///
+  /// Reached from a report, every other action on the sheet targets the
+  /// REPORTED user while the flag targets the REPORTER — they are
+  /// different people and the whole point of the entry is to act on the
+  /// one who filed it. Null means the flag targets the viewed account,
+  /// which is the plain case when the sheet is opened from a profile.
+  final String? flagTargetUserId;
+  final String? flagTargetUsername;
+
   const AdminUserDetailScreen({
     super.key,
     required this.userId,
     required this.username,
+    this.autoOpenActions = false,
+    this.flagTargetUserId,
+    this.flagTargetUsername,
   });
 
   @override
@@ -54,6 +77,9 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
     return prefs.getString('saved_hops_token');
   }
 
+  // One-shot: see autoOpenActions.
+  bool _autoOpened = false;
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -82,6 +108,15 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
         _history = (history as List).cast<Map<String, dynamic>>();
         _loading = false;
       });
+      // Opened from a report: show the sheet once, as soon as there is
+      // something to populate it with. Guarded so a later refresh — the
+      // pull-to-refresh, or a reload after an action — doesn't reopen it.
+      if (widget.autoOpenActions && !_autoOpened) {
+        _autoOpened = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showActionSheet();
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -168,15 +203,25 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
       // came back as {ok:false, error:...} exactly the same way, but was
       // silently dropped, so a ban/suspend could "succeed" here while the
       // target was never actually told, with nothing in the UI to say so.
-      // A common real cause for 'send_failed' on this project's setup:
-      // Resend's shared onboarding@resend.dev sender only delivers to the
-      // Resend account's own verified address until a real sending domain
-      // is verified and HOPS_EMAIL_FROM is set — see
-      // supabase/functions/_shared/send_email.ts.
+      //
+      // Every branch leads with "Done, but" deliberately: the moderation
+      // action itself has already succeeded server-side by this point, and
+      // only the courtesy email failed. An admin who reads this as the ban
+      // having failed would go and apply it a second time.
+      //
+      // See supabase/functions/_shared/send_email.ts for where each code
+      // comes from.
       if (mounted && data is Map && data['ok'] == false) {
         final err = data['error'] as String?;
         final message = switch (err) {
           'no_email_on_file' => "No email on file for this account — they won't be emailed about this.",
+          // Resolves on its own, so this one is worth retrying later —
+          // unlike the two configuration faults below.
+          'quota_exceeded' => "Done, but the daily email limit has been "
+              "reached — they haven't been emailed. Resend it later from "
+              "their profile.",
+          'sender_not_verified' => "Done, but the sending domain isn't "
+              "verified with the email provider, so they weren't emailed.",
           'send_failed' => "Done, but the notification email failed to send "
               "(check the Resend sending domain / RESEND_API_KEY).",
           'email_not_configured' => "Done, but no email service is configured "
@@ -425,6 +470,74 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
     if (mounted) Navigator.of(context).pop(true);
   }
 
+  String get _flagUserId => widget.flagTargetUserId ?? widget.userId;
+  String get _flagUsername => widget.flagTargetUsername ?? widget.username;
+
+  Future<void> _flagReporter() async {
+    final note = await _promptForNote(
+      title: "Flag $_flagUsername for wrongful reporting?",
+      body: "Marks their account so other admins can see their reports need "
+          "a closer look. It does not ban, suspend or notify them — use "
+          "Warn for that.",
+      confirmLabel: "Flag",
+      hint: "Why (optional, shown in the action log)",
+    );
+    if (note == null) return;
+    await _run("$_flagUsername flagged",
+        (token) => Supabase.instance.client.rpc('admin_flag_reporter', params: {
+              'p_hops_token': token,
+              'p_target_id': _flagUserId,
+              'p_note': note.isEmpty ? null : note,
+            }));
+  }
+
+  /// A confirm dialog that also collects an optional free-text note.
+  ///
+  /// Returns null if cancelled, so an empty string (confirmed with no
+  /// note) stays distinguishable from backing out.
+  Future<String?> _promptForNote({
+    required String title,
+    required String body,
+    required String confirmLabel,
+    required String hint,
+  }) async {
+    final controller = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title, style: const TextStyle(fontSize: 17)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(body, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              maxLength: 120,
+              decoration: InputDecoration(
+                hintText: hint,
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(confirmLabel)),
+        ],
+      ),
+    );
+    if (ok != true) return null;
+    return controller.text.trim();
+  }
+
   Future<void> _clearReporterFlag() async {
     if (!await _confirm(
       title: "Clear reporting flag?",
@@ -472,11 +585,21 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
             Text("Take action on ${widget.username}",
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
             const SizedBox(height: 8),
-            if (isSelf)
+            if (isSelf && widget.flagTargetUserId == null)
               const Padding(
                 padding: EdgeInsets.all(24),
                 child: Text("This is your own account.", textAlign: TextAlign.center),
               )
+            else if (isSelf)
+              // Own profile, but reached from a report: nothing can be done
+              // to this account, yet the reporter is someone else and
+              // flagging them is still valid.
+              _action(ctx, Icons.flag, "Flag for wrongful reporting",
+                  "Flags $_flagUsername, who filed the report",
+                  Colors.amber.shade900, () {
+                Navigator.pop(ctx);
+                _flagReporter();
+              })
             else ...[
               if (banned)
                 _action(ctx, Icons.lock_open, "Unban", "Restores full access", Colors.green, () {
@@ -526,6 +649,17 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                   Navigator.pop(ctx);
                   _promote();
                 }),
+              // Targets the REPORTER when this sheet was opened from a
+              // report, and the viewed account otherwise — see
+              // widget.flagTargetUserId.
+              _action(ctx, Icons.flag, "Flag for wrongful reporting",
+                  widget.flagTargetUserId != null
+                      ? "Flags $_flagUsername, who filed the report"
+                      : "Marks their reports as needing a closer look",
+                  Colors.amber.shade900, () {
+                Navigator.pop(ctx);
+                _flagReporter();
+              }),
               if ((d['reporter_flagged_at'] as String?) != null)
                 _action(ctx, Icons.flag_outlined, "Clear reporting flag",
                     "Resets their dismissed-report count", Colors.blueGrey, () {

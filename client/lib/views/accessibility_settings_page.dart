@@ -77,6 +77,21 @@ class _AccessibilitySettingsPageState extends State<AccessibilitySettingsPage> {
                   ),
                   Divider(height: 1, color: colors.onSurface.withValues(alpha: 0.08)),
                   ValueListenableBuilder<bool>(
+                    valueListenable: _prefs.speakWatchMeAlerts,
+                    builder: (context, value, _) => SwitchListTile(
+                      secondary: Icon(Icons.hearing_outlined, color: colors.primary),
+                      title: const Text('Speak Watch Me Alerts', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      subtitle: Text(
+                        'Say it out loud when a buddy goes out of range, and again when '
+                        'they come back — so you can keep your eyes up while walking',
+                        style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.65)),
+                      ),
+                      value: value,
+                      onChanged: _prefs.setSpeakWatchMeAlerts,
+                    ),
+                  ),
+                  Divider(height: 1, color: colors.onSurface.withValues(alpha: 0.08)),
+                  ValueListenableBuilder<bool>(
                     valueListenable: _prefs.colorblindMode,
                     builder: (context, value, _) => SwitchListTile(
                       secondary: Icon(Icons.palette_outlined, color: colors.primary),

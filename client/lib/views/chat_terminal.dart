@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:client/utils/day_grouping.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,11 +17,11 @@ import 'package:client/services/unread_tracker.dart';
 import 'package:client/views/contact_profile_screen.dart';
 import 'package:client/main.dart'
     show
-        nearbyConnectionsSessionCount,
-        chatPingRequest,
-        bleDirectMessageOutbox,
-        bleDirectMessageInbox,
-        BleDirectMessage;
+    nearbyConnectionsSessionCount,
+    chatPingRequest,
+    bleDirectMessageOutbox,
+    bleDirectMessageInbox,
+    BleDirectMessage;
 import 'package:client/services/hops_constants.dart' show kDirectMessageMaxPlaintextBytes;
 import 'package:client/services/hops_engine.dart';
 import 'package:client/services/cosmetic_prefs.dart';
@@ -31,17 +32,7 @@ import 'package:client/widgets/hops_bot_avatar.dart';
 
 class IndividualChatTerminalView extends StatefulWidget {
   final String peerName;
-  // Threaded down to ContactProfileScreen when the app-bar avatar is
-  // tapped — the actual contacts state (_addedFriends etc.) lives in
-  // HopsApp, not here, so deletion has to be delegated back up to it.
   final Future<void> Function(String peerUsername) onDeleteContact;
-
-  /// Talking to the built-in assistant rather than another phone. Every
-  /// transport in this file is bypassed: there's no peer, no radio, no
-  /// delivery state — replies come from HopsEngine on this device. Kept as
-  /// a flag on the existing screen rather than a separate widget so the bot
-  /// thread looks and scrolls exactly like a real one, and so its history
-  /// lives in the same `messages` table as everything else.
   final bool isBot;
 
   const IndividualChatTerminalView({
@@ -66,46 +57,36 @@ class _IndividualChatTerminalViewState
 
   RfcommChatService? _chatService;
   ChatConnectionState _connState = ChatConnectionState.connecting;
-  // True once we've confirmed the Bluetooth/location runtime permissions
-  // RFCOMM discovery/connection needs are missing — without these,
-  // classic-Bluetooth discovery silently finds nothing and the chat never
-  // connects.
   bool _missingPermissions = false;
 
-  // The peer's avatar/bio, learned only by direct exchange over this same
-  // connection — see HopsChatService.sendProfile. _peerAvatarPath reflects
-  // whatever's cached from a previous chat until (if) a fresh one arrives.
+  // True until this device has successfully RFCOMM-connected to this
+  // contact at least once — i.e. there is no MAC address on file for them
+  // (see DatabaseHelper's contact_profiles.rfcomm_mac, written by
+  // onMacLearned). Drives the first-connection hint below: the Wi-Fi
+  // requirement only bites on the very first connection, because after
+  // that the two devices connect straight to a known address instead of
+  // going through discovery.
+  bool _firstEverConnection = true;
   String? _peerAvatarPath;
 
-  // Guards _pingPeerToWakeUp so two overlapping pings (e.g. sending a
-  // couple of messages in a row while still not connected) don't step on
-  // each other's pause/resume of the Nearby Connections session.
   bool _pingInFlight = false;
-
-  // Rate limit on top of _pingInFlight. That flag only prevents two pings
-  // overlapping; this stops a run of undelivered messages producing a run
-  // of notifications on the peer's phone.
   DateTime? _lastPingAt;
   static const Duration _kChatPingCooldown = Duration(minutes: 2);
 
   // ── BLE mesh fallback ──────────────────────────────────────────────────
-  // RFCOMM (rfcomm_chat_service.dart) is the primary transport: a real
-  // socket, full-length messages, instant delivery. But it depends on
-  // classic-Bluetooth discovery and, for a never-before-paired contact, a
-  // system discoverability prompt — plenty of ways for it to legitimately
-  // fail. When it does, rather than leaving the chat dead, messages fall
-  // back to the same chunked-advertisement-name channel Community Alerts and
-  // Emergency Flare use (encrypted — see mesh_crypto.dart's
-  // sealDirectMessage and its documented limits, since advertisements are
-  // a public broadcast). Much slower and length-capped, but it works
-  // wherever the rest of the mesh works.
   bool _bleFallbackActive = false;
   Timer? _bleFallbackTimer;
   StreamSubscription<BleDirectMessage>? _bleInboxSub;
-  static const Duration _bleFallbackAfter = Duration(seconds: 35);
+  // Deliberately SHORTER than a full RFCOMM cycle, which is up to ~56s in
+  // the worst case (see rfcomm_chat_service.dart's _connectAttemptInterval).
+  // Offering the mesh early is the right trade because the fallback is
+  // purely additive: RFCOMM keeps retrying underneath it, and the moment it
+  // connects this clears itself and the status flips back to "Connected"
+  // (see onStateChanged). So the cost of being early is that one message
+  // may go the slower way; the cost of being late is a user who cannot send
+  // anything at all while a handshake grinds on. The second is worse.
+  static const Duration _bleFallbackAfter = Duration(seconds: 45);
 
-  // Bot only: true while a reply is being composed, so the thread shows a
-  // "typing" line instead of the answer appearing the instant you hit send.
   bool _botThinking = false;
 
   @override
@@ -113,9 +94,6 @@ class _IndividualChatTerminalViewState
     super.initState();
     CosmeticPrefs.instance.load();
 
-    // The assistant needs none of the machinery below — no radio to pause,
-    // no peer to discover, no fallback transport to arm. Starting any of it
-    // would fight the mesh HopsApp is running underneath for no reason.
     if (widget.isBot) {
       UnreadTracker.instance.clear(UnreadSource.directMessage);
       _connState = ChatConnectionState.connected;
@@ -123,37 +101,23 @@ class _IndividualChatTerminalViewState
       return;
     }
 
-    // Tells HopsApp (still alive underneath this pushed screen) to pause
-    // its own background BLE advertising-refresh/scan-cycle timers for as
-    // long as this chat is open — those otherwise keep firing regardless
-    // of what's on top of HopsApp and fight RFCOMM's own classic-Bluetooth
-    // discovery/connection attempt for the same radio. Named for the
-    // transport this originally guarded (nearby_connections) but the
-    // reasoning — and the need to pause — is identical for RFCOMM. See
-    // hops_app.dart's _pauseBackgroundBleForNearbyConnections.
     nearbyConnectionsSessionCount.value++;
-    // Reading this conversation clears the Contacts-tab dot.
     UnreadTracker.instance.clear(UnreadSource.directMessage);
     _init();
 
-    // Light periodic fallback — the real-time path is _chatService's
-    // onMessageReceived callback below, but this also picks up rows
-    // written by the older pairing-code contact log while the screen
-    // is open.
     _refreshTimer = Timer.periodic(
         const Duration(seconds: 5), (_) => _loadPeerMessageLogs());
 
-    // Incoming BLE-mesh messages (see _bleFallbackActive's comment).
-    // Subscribed unconditionally rather than only once fallback is active:
-    // the peer may drop to fallback before we do, and a message that
-    // arrives that way should show up regardless of which transport this
-    // side currently thinks it's using.
     _bleInboxSub = bleDirectMessageInbox.stream.listen((msg) {
       if (msg.peerUsername != widget.peerName) return;
       _handleIncomingMessage(msg.text);
     });
 
-    // Give RFCOMM a fair window to connect before falling back.
+    _armBleFallbackTimer();
+  }
+
+  void _armBleFallbackTimer() {
+    _bleFallbackTimer?.cancel();
     _bleFallbackTimer = Timer(_bleFallbackAfter, () {
       if (!mounted || _connState == ChatConnectionState.connected) return;
       setState(() => _bleFallbackActive = true);
@@ -167,15 +131,10 @@ class _IndividualChatTerminalViewState
     myPersonalUsernameLabel = prefs.getString('my_username') ?? 'User_Vic';
     await _loadPeerMessageLogs();
 
-    // First ever visit — leave an opening line so the thread isn't an empty
-    // room. Written to the same table as everything else, so it survives
-    // and this only fires once.
     if (messageThreadsList.isEmpty) {
       await _writeBotMessage(HopsEngine.instance.greeting);
     }
 
-    // Warm the engine (asset read + TTS voice lookup) while the user is
-    // still reading, so the first question doesn't wait on it.
     unawaited(HopsEngine.instance.init());
   }
 
@@ -193,15 +152,6 @@ class _IndividualChatTerminalViewState
     await _loadPeerMessageLogs();
   }
 
-  /// Wipes the assistant thread and starts it over from the greeting.
-  ///
-  /// The bot's own entry point for this: every other contact reaches
-  /// "delete" through ContactProfileScreen, which is disabled for the bot
-  /// (no bio, no avatar exchange, and its delete would offer to remove
-  /// something that can't be removed) — leaving the bot with no way to
-  /// clear its history at all. HopsApp._deleteContact already special-cases
-  /// the bot to mean "clear the chat" rather than "remove the contact";
-  /// this is the button that actually gets there.
   Future<void> _clearBotThread() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -209,7 +159,7 @@ class _IndividualChatTerminalViewState
         title: const Text("Clear this chat?"),
         content: Text(
             "Deletes your conversation with ${widget.peerName} from this device. "
-            "Hops stays in your contacts."),
+                "Hops stays in your contacts."),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -226,8 +176,6 @@ class _IndividualChatTerminalViewState
 
     await DatabaseHelper.instance.deleteConversationWithPeer(widget.peerName);
     await _loadPeerMessageLogs();
-    // Straight back to a fresh thread rather than an empty one — an
-    // assistant that greets you is the whole point of the first message.
     await _writeBotMessage(HopsEngine.instance.greeting);
   }
 
@@ -239,8 +187,6 @@ class _IndividualChatTerminalViewState
       DatabaseHelper.columnPeerId: widget.peerName,
       DatabaseHelper.columnIsForMe: 0,
       DatabaseHelper.columnNeedsRelay: 0,
-      // Nothing to deliver it to but this device — never show the
-      // "Not delivered yet" marker on a message that has already arrived.
       DatabaseHelper.columnDelivered: 1,
       DatabaseHelper.columnTimestamp: DateTime.now().millisecondsSinceEpoch,
     });
@@ -248,13 +194,8 @@ class _IndividualChatTerminalViewState
 
     if (mounted) setState(() => _botThinking = true);
     final reply = await HopsEngine.instance.askBunny(text);
-    // A lookup returns in microseconds; replying that fast reads as a form
-    // letter rather than an answer. The pause is the whole reason for the
-    // typing indicator.
     await Future.delayed(const Duration(milliseconds: 450));
     if (mounted) setState(() => _botThinking = false);
-    // Written even if the screen was closed mid-think, so the answer is
-    // waiting in the thread next time rather than lost.
     await _writeBotMessage(reply);
   }
 
@@ -262,13 +203,11 @@ class _IndividualChatTerminalViewState
     final prefs = await SharedPreferences.getInstance();
     myPersonalUsernameLabel = prefs.getString('my_username') ?? 'User_Vic';
 
-    // Show whatever avatar we already cached from a previous chat with
-    // this peer, if any, before a fresh exchange (re)confirms it. Also
-    // doubles as the source for a previously-learned MAC address (see
-    // RfcommChatService.knownMacAddress) — one row, one query, both uses.
-    final cachedProfile = await DatabaseHelper.instance.getContactProfile(widget.peerName);
+    final cachedProfile =
+    await DatabaseHelper.instance.getContactProfile(widget.peerName);
     _peerAvatarPath = cachedProfile?[DatabaseHelper.cpColAvatarPath] as String?;
     final knownMac = cachedProfile?[DatabaseHelper.cpColRfcommMac] as String?;
+    _firstEverConnection = knownMac == null;
     if (mounted) setState(() {});
 
     await _loadPeerMessageLogs();
@@ -277,48 +216,47 @@ class _IndividualChatTerminalViewState
       myUsername: myPersonalUsernameLabel,
       peerUsername: widget.peerName,
       knownMacAddress: knownMac,
-      onMacLearned: (mac) =>
-          DatabaseHelper.instance.upsertContactMacAddress(widget.peerName, mac),
-      onMessageReceived: (id, text) => _handleIncomingMessage(text, id: id),
+      onMacLearned: (mac) {
+        DatabaseHelper.instance.upsertContactMacAddress(widget.peerName, mac);
+        // The hint has served its purpose the instant a connection lands.
+        if (mounted && _firstEverConnection) {
+          setState(() => _firstEverConnection = false);
+        }
+      },
+      onMessageReceived: (id, text) async {
+        await _handleIncomingMessage(text, id: id);
+        // The thread is open, so this message has been seen.
+        await _acknowledgeVisibleMessages();
+      },
       onMessageDeleted: _handleIncomingDelete,
       onProfileReceived: _handlePeerProfileReceived,
       onRotatingSeedReceived: _handlePeerSeedReceived,
+      onReadReceipt: _handleReadReceipt,
       onStateChanged: (state) {
         if (!mounted) return;
         setState(() {
           _connState = state;
-          // RFCOMM gave up entirely — no reason to keep waiting out the
-          // timer above before offering the fallback.
           if (state == ChatConnectionState.failed) _bleFallbackActive = true;
-          // A real socket beats the mesh on every axis; if RFCOMM connects
-          // (even late, via its own retry watchdog), stop using fallback.
-          if (state == ChatConnectionState.connected) _bleFallbackActive = false;
+          if (state == ChatConnectionState.connected) {
+            _bleFallbackActive = false;
+            _bleFallbackTimer?.cancel();
+          }
         });
         if (state == ChatConnectionState.connected) {
-          // Anything sent while the peer wasn't reachable is still sitting
-          // undelivered — now that we're connected, try again instead of
-          // leaving it stranded until the user notices and re-sends by hand.
           _flushUndeliveredMessages();
           _sendMyProfile();
           _sendMyRotatingSeed();
+          // Catches up a backlog: anything read while disconnected gets
+          // acknowledged now, in one line, the moment there is a
+          // connection to say it over.
+          _acknowledgeVisibleMessages();
         }
       },
     );
     await _connectWithPermissions();
   }
 
-  // RFCOMM's classic-Bluetooth discovery/connect needs this set. Skipping
-  // it doesn't throw — discovery just silently finds nothing, which used
-  // to make every 1:1 chat hang on "Connecting…" forever with no
-  // explanation (same failure mode nearby_connections had for the same
-  // reason, before this transport swap — see rfcomm_chat_service.dart).
-  // No Wi-Fi-adjacent permission needed at all now, unlike before.
   Future<void> _connectWithPermissions() async {
-    // Version-aware — see services/bluetooth_permissions.dart. Asking for
-    // BLUETOOTH_SCAN/ADVERTISE/CONNECT unconditionally locked this screen
-    // permanently on anything below Android 12: those permissions do not
-    // exist there, permission_handler reports them denied with no dialog,
-    // and connect() was never reached.
     final granted = await BluetoothPermissions.request();
 
     if (!mounted) return;
@@ -337,12 +275,10 @@ class _IndividualChatTerminalViewState
   Future<void> _sendMyRotatingSeed() async {
     const storage = FlutterSecureStorage();
     final seedB64 = await storage.read(key: 'rotating_id_seed');
-    if (seedB64 == null) return; // pre-rotating-ID account — nothing to send yet
+    if (seedB64 == null) return;
     try {
       await _chatService?.sendRotatingSeed(base64Decode(seedB64));
-    } catch (_) {
-      // Best-effort — chat itself still works without this.
-    }
+    } catch (_) {}
   }
 
   Future<void> _handlePeerSeedReceived(Uint8List seed) async {
@@ -360,27 +296,17 @@ class _IndividualChatTerminalViewState
       try {
         final file = File(avatarPath);
         if (await file.exists()) avatarBytes = await file.readAsBytes();
-      } catch (_) {
-        // No avatar to send — not fatal, bio still goes out below.
-      }
+      } catch (_) {}
     }
-    await _chatService?.sendProfile(bio: bio, thinking: thinking, avatarBytes: avatarBytes);
+    await _chatService?.sendProfile(
+        bio: bio, thinking: thinking, avatarBytes: avatarBytes);
   }
 
-  Future<void> _handlePeerProfileReceived(String bio, String thinking, Uint8List? avatarBytes) async {
+  Future<void> _handlePeerProfileReceived(
+      String bio, String thinking, Uint8List? avatarBytes) async {
     String? savedAvatarPath;
     if (avatarBytes != null && avatarBytes.isNotEmpty) {
       try {
-        // Timestamped filename, not a fixed 'contact_avatar_<peer>.jpg' —
-        // same fix (and same reason) as edit_identity_screen.dart's own
-        // _pickAvatar. A fixed path was the actual bug behind "avatar
-        // doesn't update / old avatar keeps showing": Flutter's global
-        // imageCache keys a decoded FileImage by its path, and never
-        // notices the bytes on disk changed underneath an unchanged path —
-        // so overwriting the same file left every screen showing whatever
-        // was first decoded there, forever, no matter how many times the
-        // peer re-sent a new photo. A fresh path each time is a genuinely
-        // new cache key, so it always paints.
         final previousPath = _peerAvatarPath;
         final dir = await getApplicationDocumentsDirectory();
         final file = File(
@@ -388,22 +314,15 @@ class _IndividualChatTerminalViewState
         await file.writeAsBytes(avatarBytes, flush: true);
         savedAvatarPath = file.path;
 
-        // Clean up the old cached copy now that nothing points at it —
-        // otherwise a peer who changes their photo often leaves an
-        // ever-growing pile of stale avatar files behind on disk.
         if (previousPath != null && previousPath != savedAvatarPath) {
           final oldFile = File(previousPath);
           if (await oldFile.exists()) {
             try {
               await oldFile.delete();
-            } catch (_) {
-              // Best-effort cleanup — not worth surfacing an error for this.
-            }
+            } catch (_) {}
           }
         }
       } catch (_) {
-        // Keep whatever avatar (if any) was already cached rather than
-        // losing it over a failed write.
         savedAvatarPath = _peerAvatarPath;
       }
     }
@@ -416,26 +335,10 @@ class _IndividualChatTerminalViewState
     if (mounted) setState(() => _peerAvatarPath = savedAvatarPath);
   }
 
-  // Lets the peer know a message is waiting for them even though RFCOMM
-  // discovery/connection alone can't reach them — they're not necessarily
-  // running a matching session at all (e.g. they haven't opened this same
-  // chat screen). Briefly steps the RFCOMM attempt aside so a short
-  // BLE-peripheral CHT: ping (broadcast by HopsApp, see chatPingRequest in
-  // main.dart) can use the radio instead, then hands it back. Any Hops
-  // device with the app running — foreground or backgrounded — picks the
-  // ping up via its always-on scan and shows a system notification,
-  // regardless of what screen they're on.
   Future<void> _pingPeerToWakeUp() async {
     if (_pingInFlight) return;
-    if (_connState == ChatConnectionState.connected) return; // already reachable — nothing to ping for
+    if (_connState == ChatConnectionState.connected) return;
 
-    // This fires once per undelivered message, so a few lines typed at an
-    // offline peer used to raise a "Wants to chat" notification on their
-    // phone for each one. The ping carries no per-message information —
-    // it only says "something is waiting" — so repeating it adds nothing
-    // and reads as spam on the receiving end. The receiver enforces its
-    // own cooldown too (hops_app.dart); this one also saves the radio
-    // time, since each ping steps the RFCOMM attempt aside for 3s.
     final last = _lastPingAt;
     if (last != null &&
         DateTime.now().difference(last) < _kChatPingCooldown) {
@@ -456,15 +359,55 @@ class _IndividualChatTerminalViewState
 
   Future<void> _retryConnect() async {
     if (_missingPermissions) {
-      // Permissions may have been granted from the app-settings screen
-      // since the last attempt (openAppSettings() below sends the user
-      // there) — re-check rather than retrying a connect that's doomed
-      // to hang again.
       await _connectWithPermissions();
       return;
     }
-    setState(() => _connState = ChatConnectionState.connecting);
+    setState(() {
+      _connState = ChatConnectionState.connecting;
+      _bleFallbackActive = false;
+    });
+    _armBleFallbackTimer();
     await _chatService?.connect();
+  }
+
+  /// The peer has read messages we sent. Scoped and validated in
+  /// DatabaseHelper (see markMessagesReadByPeer) rather than here, since
+  /// these ids arrive off the wire.
+  Future<void> _handleReadReceipt(List<String> ids) async {
+    final changed = await DatabaseHelper.instance
+        .markMessagesReadByPeer(widget.peerName, ids);
+    // Only rebuild when something actually moved — a peer re-sending the
+    // same receipt is normal and should not repaint the thread.
+    if (changed > 0 && mounted) await _loadPeerMessageLogs();
+  }
+
+  /// Reports that we have read this contact's messages.
+  ///
+  /// Called when the thread is on screen: on open, on every incoming
+  /// message, and on (re)connect. "On screen" is the right trigger rather
+  /// than "received", because a receipt should mean a person saw it, not
+  /// that a radio did.
+  ///
+  /// A message that arrives while this screen is NOT open is never
+  /// acknowledged, because nothing calls this then — the trigger is the
+  /// thread being open, not the message arriving. That is the intended
+  /// behaviour: a notification firing does not mean anyone read anything.
+  /// It does mean the backlog is acknowledged in one batch next time the
+  /// thread is opened with a connection up, which is also the first moment
+  /// the peer could see the result.
+  Future<void> _acknowledgeVisibleMessages() async {
+    if (widget.isBot) return; // the assistant is local; nothing to report
+    final pending = await DatabaseHelper.instance
+        .unacknowledgedIncomingMessageIds(widget.peerName);
+    if (pending.isEmpty) return;
+    final sent = await _chatService?.sendReadReceipt(pending) ?? false;
+    // Only record them as acknowledged if the receipt actually went out.
+    // Marking them locally on a failed send would mean the peer never
+    // learns, and we would never try again.
+    if (sent) {
+      await DatabaseHelper.instance
+          .markIncomingAcknowledged(widget.peerName, pending);
+    }
   }
 
   Future<void> _flushUndeliveredMessages() async {
@@ -476,20 +419,12 @@ class _IndividualChatTerminalViewState
       final id = row[DatabaseHelper.columnId] as String;
       final text = row[DatabaseHelper.columnMessage] as String;
       final delivered = await _chatService?.sendMessage(id, text) ?? false;
-      if (!delivered) break; // stay in order — don't skip ahead on failure
+      if (!delivered) break;
       await DatabaseHelper.instance.markMessageDelivered(id);
     }
     await _loadPeerMessageLogs();
   }
 
-  // [id] is the sender's own row id for this message, threaded through by
-  // RfcommChatService so both sides file it under the same id (see that
-  // file's sendMessage) — required for _handleIncomingDelete below to be
-  // able to find this row later. Left null (and a fresh id minted here
-  // instead) for the BLE-mesh fallback path (_bleInboxSub's listener),
-  // which has no such shared id and, being fire-and-forget broadcast
-  // rather than a live socket, has no delete-for-everyone signal to honor
-  // anyway.
   Future<void> _handleIncomingMessage(String message, {String? id}) async {
     final incomingPayload = {
       DatabaseHelper.columnId: id ?? const Uuid().v4(),
@@ -504,18 +439,10 @@ class _IndividualChatTerminalViewState
     await DatabaseHelper.instance.insertMessage(incomingPayload);
     await _loadPeerMessageLogs();
 
-    // Accessibility: "Read Messages Aloud" (accessibility_settings_page.dart)
-    // — reuses HopsEngine's already-initialized TTS engine (the same one
-    // that reads the assistant's own replies aloud) rather than spinning up
-    // a second flutter_tts instance for this.
     if (AccessibilityPrefs.instance.readMessagesAloud.value) {
       unawaited(HopsEngine.instance.bunnyTalk(message));
     }
 
-    // Only while this exact conversation isn't the thing on screen right
-    // now — otherwise every incoming message would double up as both the
-    // live chat bubble appearing AND a redundant notification banner for
-    // the exact same message you're already looking at.
     if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
       UnreadTracker.instance.mark(UnreadSource.directMessage);
       await NotificationService.showChatMessageNotification(
@@ -526,21 +453,13 @@ class _IndividualChatTerminalViewState
   }
 
   Future<void> _loadPeerMessageLogs() async {
-    final data = await DatabaseHelper.instance.getMessagesForPeer(widget.peerName);
+    final data =
+    await DatabaseHelper.instance.getMessagesForPeer(widget.peerName);
     if (!mounted) return;
     setState(() => messageThreadsList = data);
     _scrollToBottom();
   }
 
-  // "Delete my message" — for everyone, best-effort. If the peer is
-  // connected right now, sendDeleteMessage tells their device to remove
-  // its own copy of this same message too (see RfcommChatService's
-  // sendMessage/onMessageDeleted for how both sides end up filing it under
-  // the same id in the first place). If they're not connected at this
-  // moment, there's no live channel to reach them on — the signal is never
-  // queued or retried, so their copy simply stays. That's an inherent
-  // limit of an often-disconnected P2P transport, not a bug: there's no
-  // server in the middle to hold the request until they're back online.
   Future<void> _confirmDeleteMessage(String id) async {
     final colors = Theme.of(context).colorScheme;
     final canReachPeer = _connState == ChatConnectionState.connected;
@@ -551,14 +470,16 @@ class _IndividualChatTerminalViewState
         content: Text(
           canReachPeer
               ? "This removes it from your conversation. Since you're "
-                "currently connected to ${widget.peerName}, it will be "
-                "removed from their device too."
+              "currently connected to ${widget.peerName}, it will be "
+              "removed from their device too."
               : "This removes it from your own copy of the conversation. "
-                "You're not connected to ${widget.peerName} right now, so "
-                "it can't be removed from their device.",
+              "You're not connected to ${widget.peerName} right now, so "
+              "it can't be removed from their device.",
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('Delete', style: TextStyle(color: colors.error)),
@@ -572,10 +493,6 @@ class _IndividualChatTerminalViewState
     unawaited(_chatService?.sendDeleteMessage(id));
   }
 
-  // The peer told us (live, over RFCOMM) that they deleted one of their
-  // messages — remove our copy of that same message too. See
-  // _confirmDeleteMessage's comment and RfcommChatService's sendMessage
-  // for why both sides share this id.
   Future<void> _handleIncomingDelete(String id) async {
     await DatabaseHelper.instance.deleteMessage(id);
     await _loadPeerMessageLogs();
@@ -599,8 +516,6 @@ class _IndividualChatTerminalViewState
     _msgInputController.clear();
 
     if (widget.isBot) {
-      // Not censored — this is a private query to the first-aid assistant,
-      // not a message another person will ever see.
       await _sendToBot(text);
       return;
     }
@@ -627,31 +542,15 @@ class _IndividualChatTerminalViewState
       return;
     }
 
-    // RFCOMM couldn't take it. Try the BLE mesh before giving up.
     if (_bleFallbackActive && await _sendViaBleFallback(text)) {
-      // "Delivered" here means "successfully broadcast", not "confirmed
-      // received" — the mesh channel is fire-and-forget with no ack of any
-      // kind (same as Emergency Flare). The status line makes that
-      // distinction visible rather than leaving it implied by the tick.
       await DatabaseHelper.instance.markMessageDelivered(id);
       await _loadPeerMessageLogs();
       return;
     }
 
-    // Neither transport could take it — the bubble's own "not delivered
-    // yet" marker (below) carries that locally, and
-    // _flushUndeliveredMessages() will retry once we do connect, but
-    // neither of those helps if the peer isn't running a matching session
-    // at all right now. Ping them so their phone can tell them a message
-    // is waiting, wherever they are in the app (or if it's backgrounded).
     unawaited(_pingPeerToWakeUp());
   }
 
-  // Hands the message to HopsApp's BLE peripheral (see main.dart's
-  // bleDirectMessageOutbox and hops_app.dart's _broadcastDirectMessage).
-  // Returns false if it couldn't be broadcast at all — most commonly
-  // because no rotating-ID seed has ever been exchanged with this contact,
-  // so there's no shared key to encrypt with.
   Future<bool> _sendViaBleFallback(String text) async {
     if (utf8.encode(text).length > kDirectMessageMaxPlaintextBytes) {
       if (mounted) {
@@ -668,22 +567,72 @@ class _IndividualChatTerminalViewState
       text: text,
       sent: completer,
     );
-    // Bounded wait — if HopsApp isn't mounted (shouldn't happen; this
-    // screen is pushed on top of it) nothing would ever complete this.
-    return completer.future
+    final sent = await completer.future
         .timeout(const Duration(seconds: 5), onTimeout: () => false);
+    // HopsApp renames the Bluetooth adapter to broadcast the mesh chunks and
+    // restores the device's default name afterwards. Re-assert our Hops
+    // username so RFCOMM discovery can still find us if it's still retrying.
+    unawaited(_chatService?.restoreRfcommAdapterName());
+    return sent;
+  }
+
+  /// A one-line hint shown only while connecting to a contact for the
+  /// very first time.
+  ///
+  /// Both phones need Wi-Fi switched on for that first connection —
+  /// Android leans on it while discovering nearby devices, and without it
+  /// the two phones often never find each other. Once they have connected
+  /// once, each has the other's address on file and goes straight to it,
+  /// so the requirement disappears along with this hint.
+  ///
+  /// The wording is careful about one thing: this app's whole claim is
+  /// that it works with no internet, and "turn on Wi-Fi" reads like a
+  /// contradiction of that. It is not — the radio being ON is what
+  /// matters, not being joined to a network, and no data is used either
+  /// way. Saying so here is cheaper than letting someone conclude the
+  /// offline promise was untrue.
+  Widget _buildFirstConnectionHint(ColorScheme colors) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      color: colors.primary.withValues(alpha: 0.08),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.wifi_rounded, size: 16, color: colors.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.45,
+                  color: colors.onSurface.withValues(alpha: 0.75),
+                ),
+                children: [
+                  TextSpan(
+                    text: 'First time connecting. ',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700, color: colors.primary),
+                  ),
+                  const TextSpan(
+                    text: 'Switch Wi-Fi on on both phones — it helps them '
+                        'find each other. It does not need to be connected '
+                        'to a network, and no data is used.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   String get _statusLabel {
-    // Not a claim about the radio — the assistant runs on this device, so
-    // it's reachable whether or not anything else is.
     if (widget.isBot) return "Always available · works offline";
     if (_missingPermissions) return "Bluetooth & location permission needed";
     if (_connState == ChatConnectionState.connected) return "Connected";
-    // Fallback wins the label over "Couldn't connect"/"Connecting…" —
-    // messages genuinely can be sent in this state, so reporting it as a
-    // failure would be wrong, but it's also not the fast direct link, so
-    // it shouldn't just say "Connected" either.
     if (_bleFallbackActive) return "Via Bluetooth mesh · slower, no delivery receipt";
     switch (_connState) {
       case ChatConnectionState.connecting:
@@ -720,10 +669,6 @@ class _IndividualChatTerminalViewState
   @override
   void dispose() {
     if (widget.isBot) {
-      // Nothing was started for the bot thread except the controllers —
-      // decrementing the session counter here would drop HopsApp's BLE
-      // pause count below zero and resume scanning for a real chat that's
-      // still open underneath.
       HopsEngine.instance.stopTalking();
       _msgInputController.dispose();
       _scrollController.dispose();
@@ -736,8 +681,6 @@ class _IndividualChatTerminalViewState
     _bleInboxSub?.cancel();
     _msgInputController.dispose();
     _scrollController.dispose();
-    // dispose() can't be awaited here (State.dispose() is synchronous) —
-    // fire-and-forget teardown mirrors the rest of the app's BLE calls.
     _chatService?.dispose();
     super.dispose();
   }
@@ -753,34 +696,30 @@ class _IndividualChatTerminalViewState
       appBar: AppBar(
         title: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          // No profile card for the assistant — there's no peer behind it to
-          // show a bio for, and that screen's delete action would offer to
-          // remove a contact that's meant to always be there.
           onTap: widget.isBot
               ? null
               : () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ContactProfileScreen(
-                        peerUsername: widget.peerName,
-                        onDeleteContact: widget.onDeleteContact,
-                      ),
-                    ),
-                  ),
+            MaterialPageRoute(
+              builder: (_) => ContactProfileScreen(
+                peerUsername: widget.peerName,
+                onDeleteContact: widget.onDeleteContact,
+              ),
+            ),
+          ),
           child: Row(
             children: [
               if (widget.isBot)
-                // Status dot omitted at this size — it'd read as a speck
-                // rather than a signal, and the status line right beside it
-                // already says "Always available".
                 const HopsBotAvatar(radius: 16, showStatusDot: false)
               else
                 CircleAvatar(
                   radius: 16,
                   backgroundColor: colors.primary,
-                  backgroundImage:
-                      _peerAvatarPath != null ? FileImage(File(_peerAvatarPath!)) : null,
+                  backgroundImage: _peerAvatarPath != null
+                      ? FileImage(File(_peerAvatarPath!))
+                      : null,
                   child: _peerAvatarPath == null
-                      ? const Icon(Icons.cruelty_free, size: 18, color: Colors.white)
+                      ? const Icon(Icons.cruelty_free,
+                      size: 18, color: Colors.white)
                       : null,
                 ),
               const SizedBox(width: 10),
@@ -791,17 +730,23 @@ class _IndividualChatTerminalViewState
                   children: [
                     Text(
                       widget.peerName,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16),
                       overflow: TextOverflow.ellipsis,
                     ),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.circle, size: 8, color: _statusColor(colors)),
+                        Icon(Icons.circle,
+                            size: 8, color: _statusColor(colors)),
                         const SizedBox(width: 4),
-                        Text(
-                          _statusLabel,
-                          style: TextStyle(fontSize: 11, color: _statusColor(colors)),
+                        Flexible(
+                          child: Text(
+                            _statusLabel,
+                            style: TextStyle(
+                                fontSize: 11, color: _statusColor(colors)),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -829,121 +774,169 @@ class _IndividualChatTerminalViewState
       ),
       body: Column(
         children: [
+          // Only while it actually applies: a real contact, never yet
+          // connected, and not connected right now. Self-dismisses the
+          // moment a connection lands (see onMacLearned).
+          if (!widget.isBot &&
+              _firstEverConnection &&
+              _connState != ChatConnectionState.connected)
+            _buildFirstConnectionHint(colors),
           Expanded(
             child: messageThreadsList.isEmpty
                 ? Center(
                 child: Text("No messages yet.",
-                    style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5))))
+                    style: TextStyle(
+                        color: colors.onSurface.withValues(alpha: 0.5))))
                 : ValueListenableBuilder<String>(
-              // Only YOUR OWN outgoing bubbles use the selected skin — the
-              // other side's bubbles stay the neutral theme color
-              // regardless, since there's no way to know (or apply) a
-              // skin the other person hasn't shared, and this is a
-              // local-rendering-only cosmetic same as every other one in
-              // theme/ (see cosmetic_prefs.dart's header comment).
               valueListenable: CosmeticPrefs.instance.bubbleSkin,
               builder: (context, bubbleSkinId, _) {
                 final skin = BubbleSkinOptions.byId(bubbleSkinId);
                 return ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(16),
-              itemCount: messageThreadsList.length,
-              itemBuilder: (context, index) {
-                final msg = messageThreadsList[index];
-                bool isMe = msg[DatabaseHelper.columnSenderId] ==
-                    myPersonalUsernameLabel;
-                final delivered =
-                    (msg[DatabaseHelper.columnDelivered] as int? ?? 1) == 1;
-                final ts = msg[DatabaseHelper.columnTimestamp] as int;
-                return Align(
-                  alignment: isMe
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Column(
-                    crossAxisAlignment: isMe
-                        ? CrossAxisAlignment.end
-                        : CrossAxisAlignment.start,
-                    children: [
-                      GestureDetector(
-                        // Tap one of Hops' replies to hear it read aloud —
-                        // the point of the assistant's voice is hands-free
-                        // first aid, where reading a screen is the thing you
-                        // can't do. Only its own messages, and only in the
-                        // bot thread.
-                        onTap: (widget.isBot && !isMe)
-                            ? () => HopsEngine.instance.bunnyTalk(
-                                msg[DatabaseHelper.columnMessage] as String)
-                            : null,
-                        // Long-press your own message to delete it (see
-                        // _confirmDeleteMessage). Not offered on the other
-                        // person's messages, or in the bot thread — there's
-                        // nothing to delete-for-me about a locally
-                        // generated bot reply.
-                        onLongPress: (isMe && !widget.isBot)
-                            ? () => _confirmDeleteMessage(msg[DatabaseHelper.columnId] as String)
-                            : null,
-                        child: Container(
-                        margin: const EdgeInsets.only(top: 4),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
-                        constraints: BoxConstraints(
-                          maxWidth:
-                          MediaQuery.of(context).size.width * 0.75,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isMe
-                              ? (skin.bubbleColor ?? colors.primary)
-                              : colors.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Text(
-                          msg[DatabaseHelper.columnMessage],
-                          // Bot answers run longer than mesh messages, which
-                          // are capped by the advertisement budget. Ten lines
-                          // with an ellipsis would cut first-aid steps off
-                          // mid-instruction.
-                          style: TextStyle(
-                              color: isMe ? (skin.textColor ?? Colors.white) : colors.onSurface),
-                          maxLines: widget.isBot ? null : 10,
-                          overflow: widget.isBot
-                              ? TextOverflow.clip
-                              : TextOverflow.ellipsis,
-                          softWrap: true,
-                        ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2, left: 4, right: 4),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _fmtTime(ts),
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: colors.onSurface.withValues(alpha: 0.4),
+                  controller: _scrollController,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: messageThreadsList.length,
+                  itemBuilder: (context, index) {
+                    final msg = messageThreadsList[index];
+                    bool isMe = msg[DatabaseHelper.columnSenderId] ==
+                        myPersonalUsernameLabel;
+                    final delivered =
+                        (msg[DatabaseHelper.columnDelivered] as int? ??
+                            1) ==
+                            1;
+                    final readByPeer =
+                        msg[DatabaseHelper.columnReadAt] != null;
+                    final ts = msg[DatabaseHelper.columnTimestamp] as int;
+                    final when =
+                        DateTime.fromMillisecondsSinceEpoch(ts);
+                    // Same rule the Action Log and Community Alerts use —
+                    // one helper so the three never disagree about where a
+                    // day starts.
+                    final previousTs = index == 0
+                        ? null
+                        : messageThreadsList[index - 1]
+                            [DatabaseHelper.columnTimestamp] as int?;
+                    final startsNewDay = previousTs == null ||
+                        !isSameDay(
+                            DateTime.fromMillisecondsSinceEpoch(previousTs),
+                            when);
+                    final bubbleRow = Align(
+                      alignment: isMe
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Column(
+                        crossAxisAlignment: isMe
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
+                        children: [
+                          GestureDetector(
+                            onTap: (widget.isBot && !isMe)
+                                ? () => HopsEngine.instance.bunnyTalk(
+                                msg[DatabaseHelper.columnMessage]
+                                as String)
+                                : null,
+                            onLongPress: (isMe && !widget.isBot)
+                                ? () => _confirmDeleteMessage(
+                                msg[DatabaseHelper.columnId]
+                                as String)
+                                : null,
+                            child: Container(
+                              margin: const EdgeInsets.only(top: 4),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 10),
+                              constraints: BoxConstraints(
+                                maxWidth:
+                                MediaQuery.of(context).size.width *
+                                    0.75,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isMe
+                                    ? (skin.bubbleColor ?? colors.primary)
+                                    : colors.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Text(
+                                msg[DatabaseHelper.columnMessage],
+                                style: TextStyle(
+                                    color: isMe
+                                        ? (skin.textColor ?? Colors.white)
+                                        : colors.onSurface),
+                                maxLines: widget.isBot ? null : 10,
+                                overflow: widget.isBot
+                                    ? TextOverflow.clip
+                                    : TextOverflow.ellipsis,
+                                softWrap: true,
                               ),
                             ),
-                            if (isMe && !delivered) ...[
-                              const SizedBox(width: 4),
-                              Icon(Icons.schedule,
-                                  size: 11, color: colors.onSurface.withValues(alpha: 0.4)),
-                              const SizedBox(width: 2),
-                              Text(
-                                "Not delivered yet",
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: colors.onSurface.withValues(alpha: 0.4),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(
+                                top: 2, left: 4, right: 4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _fmtTime(ts),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: colors.onSurface
+                                        .withValues(alpha: 0.4),
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ],
-                        ),
+                                // Three states, outgoing only. Inbound
+                                // rows reuse read_at for our own
+                                // bookkeeping (see DatabaseHelper), so
+                                // showing a tick on them would be
+                                // meaningless.
+                                if (isMe) ...[
+                                  const SizedBox(width: 4),
+                                  if (!delivered) ...[
+                                    Icon(Icons.schedule,
+                                        size: 11,
+                                        color: colors.onSurface
+                                            .withValues(alpha: 0.4)),
+                                    const SizedBox(width: 2),
+                                    Text(
+                                      "Not delivered yet",
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: colors.onSurface
+                                            .withValues(alpha: 0.4),
+                                      ),
+                                    ),
+                                  ] else
+                                    Icon(
+                                      readByPeer
+                                          ? Icons.done_all_rounded
+                                          : Icons.done_rounded,
+                                      size: 13,
+                                      // Colour as well as shape: a single
+                                      // vs. double tick is a small
+                                      // difference to read at this size,
+                                      // and this is the kind of thing
+                                      // people glance at.
+                                      color: readByPeer
+                                          ? colors.primary
+                                          : colors.onSurface
+                                              .withValues(alpha: 0.45),
+                                      semanticLabel:
+                                          readByPeer ? 'Read' : 'Sent',
+                                    ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                );
-              },
+                    );
+                    if (!startsNewDay) return bubbleRow;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        DaySeparator.forDate(when),
+                        bubbleRow,
+                      ],
+                    );
+                  },
                 );
               },
             ),
@@ -960,7 +953,8 @@ class _IndividualChatTerminalViewState
                       width: 12,
                       height: 12,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: colors.primary.withValues(alpha: 0.5)),
+                          strokeWidth: 2,
+                          color: colors.primary.withValues(alpha: 0.5)),
                     ),
                     const SizedBox(width: 8),
                     Text("Hops is thinking…",
@@ -973,8 +967,8 @@ class _IndividualChatTerminalViewState
               ),
             ),
           Container(
-            padding: const EdgeInsets.only(
-                left: 16, right: 8, top: 10, bottom: 24),
+            padding:
+            const EdgeInsets.only(left: 16, right: 8, top: 10, bottom: 24),
             decoration: BoxDecoration(
               color: colors.surface,
               boxShadow: [

@@ -9,8 +9,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:client/services/account_standing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/views/admin/admin_sign_in_screen.dart';
 import 'package:client/views/admin/admin_dashboard_tab.dart';
@@ -18,6 +18,7 @@ import 'package:client/views/admin/admin_moderation_tab.dart';
 import 'package:client/views/admin/admin_users_tab.dart';
 import 'package:client/views/admin/admin_action_log_tab.dart';
 import 'package:client/views/admin/admin_community_alerts_tab.dart';
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/main.dart' show navBarPillHeightNotifier;
 
@@ -92,14 +93,15 @@ class _AdminShellState extends State<AdminShell> {
   // without this the Listening Post and Official Alert/Community Alerts
   // broadcasting could all silently do nothing on such a session.
   // Re-requesting an already-granted permission is a no-op.
+  //
+  // Goes through BluetoothPermissions rather than naming the Android 12
+  // trio directly: below API 31 those three resolve to no manifest entry
+  // and are recorded as DENIED with no dialog shown and nothing in system
+  // settings to switch on, which locks an admin out of the BLE hub
+  // permanently. See that file's header comment.
   Future<void> _ensurePermissionsThenStartBle() async {
     try {
-      await [
-        Permission.location,
-        Permission.bluetoothAdvertise,
-        Permission.bluetoothConnect,
-        Permission.bluetoothScan,
-      ].request();
+      await BluetoothPermissions.request();
     } catch (_) {
       // Fall through and try to start anyway — the failure surfaces at the
       // point of use (see broadcastAdminChatMessage's return value).
@@ -129,9 +131,24 @@ class _AdminShellState extends State<AdminShell> {
             reason: "Admin access for this account was removed.");
       }
     } on PostgrestException catch (e) {
-      if (e.message.contains('account_banned') && mounted) {
+      // Both verdicts, via the shared classifier.
+      //
+      // This branch used to check only 'account_banned', so a SUSPENDED
+      // admin kept the admin app — and with it every moderation power,
+      // including acting on the person who suspended them. It also
+      // described a ban as "suspended", which is the wrong word for
+      // something permanent.
+      //
+      // Recorded as well as acted on, so the suspension is still known
+      // after a restart and the admin sign-in screen can say why.
+      final standing = AccountStandingStore.classify(e);
+      if (standing != null && mounted) {
+        await AccountStandingStore.instance.record(standing);
+        if (!mounted) return;
         await signOutOfAdminApp(context,
-            reason: "This account has been suspended.");
+            reason: standing.kind == AccountStandingKind.banned
+                ? "This account has been banned by a Hops admin."
+                : "This account is suspended, so it has been signed out.");
       }
       // Any other error: offline/unreachable, try again next cycle.
     } catch (_) {

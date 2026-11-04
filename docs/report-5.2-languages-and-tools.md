@@ -8,14 +8,14 @@ language was determined by a hard constraint of the platform the code has to run
 
 | Language | Where it runs | Files | Lines | Share |
 |---|---|---:|---:|---:|
-| **Dart** | The Flutter application (student + admin) | 101 | 36,774 | 83.0% |
-| **SQL (PL/pgSQL)** | PostgreSQL migrations and stored procedures | 19 | 3,785 | 8.5% |
-| **Dart (tests)** | Automated test suite | 5 | 1,080 | 2.4% |
-| **HTML / CSS** | Marketing and download website | 5 | 907 | 2.0% |
-| **Kotlin** | Android native layer | 4 | 683 | 1.5% |
+| **Dart** | The Flutter application (student + admin) | 100 | 35,380 | 80.8% |
+| **SQL (PL/pgSQL)** | PostgreSQL migrations and stored procedures | 19 | 3,785 | 8.6% |
+| **HTML / CSS** | Marketing and download website | 6 | 1,445 | 3.3% |
+| **Dart (tests)** | Automated test suite | 7 | 1,347 | 3.1% |
+| **Kotlin** | Android native layer | 4 | 716 | 1.6% |
 | **TypeScript** | Supabase Edge Functions (email delivery) | 7 | 602 | 1.4% |
 | **PowerShell** | Database backup and recovery scripts | 3 | 486 | 1.1% |
-| **Total** | | **144** | **44,317** | 100% |
+| **Total** | | **146** | **43,761** | 100% |
 
 Measured by line count across the repository. Dart dominates because the application
 itself is the system; everything else exists to support it.
@@ -204,7 +204,7 @@ that carry real architectural weight:
 | Tool | Use |
 |---|---|
 | `flutter analyze` | Static analysis against `flutter_lints`; the primary gate for radio-related changes, which cannot be unit-tested |
-| `flutter_test` | 115 automated tests covering the wire format, credential rules, currency and the Bluetooth name guard |
+| `flutter_test` | 125 automated tests covering the wire format, credential rules, currency, the Bluetooth name guard, the emergency-flare radio invariant, and the accessibility toggles |
 | Git / GitHub | Version control, branch-per-feature |
 | Android Studio | Android toolchain, emulator, device deployment |
 | PostgreSQL 17 client tools | `pg_dump` for backup, `psql` for verified restore (§4.8.5) |

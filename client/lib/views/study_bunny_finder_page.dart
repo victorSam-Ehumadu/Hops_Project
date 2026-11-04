@@ -9,6 +9,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:client/services/hops_constants.dart';
 import 'package:client/widgets/hops_card.dart';
 import 'package:client/utils/report_content.dart';
 import 'package:client/utils/profanity_filter.dart';
@@ -26,7 +27,8 @@ String _generateTagId() {
 
 class StudyBunnyFinderPage extends StatefulWidget {
   final String myUsername;
-  final Future<void> Function(String id, String subject) onAdvertiseStudyTag;
+  final Future<void> Function(String id, String subject,
+      {int? locationIndex}) onAdvertiseStudyTag;
   final Future<void> Function(String id) onSendStudyInterest;
   final Future<void> Function(String id) onDeleteStudyTag;
 
@@ -48,10 +50,21 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
   Timer? _broadcastEndTimer;
   String? _myActiveId;
 
+  // Index into kStudyLocations, or null for "not saying". Optional on
+  // purpose: someone broadcasting that they are studying is not obliged to
+  // say exactly where, and requiring it would make the quick path slower
+  // for no benefit.
+  int? _selectedLocationIndex;
+
   final TextEditingController _subjectController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
 
-  static const int _subjectMaxLength = 20;
+  // Derived from the wire budget rather than guessed. Was 20, which left
+  // no room for this format's framing: "SBF:" (4) + a 4-char id + ":" (1)
+  // costs 9 bytes, so a 20-character subject produced a 29-byte name —
+  // over the 26-byte ceiling, and so rejected by the radio after the send
+  // had already appeared to succeed. Same silent failure Vibe Check had.
+  static final int _subjectMaxLength = advertisementTextBudget(9);
 
   @override
   void initState() {
@@ -92,10 +105,12 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
     // Show our own tag immediately — our own advertisement is filtered out
     // of our own scan results (same reason Vibe Check does this), so
     // without it the session you just started is the one you can't see.
-    _store.record(id: id, subject: subject);
+    _store.record(
+        id: id, subject: subject, locationIndex: _selectedLocationIndex);
     if (mounted) setState(() => _myActiveId = id);
 
-    await widget.onAdvertiseStudyTag(id, subject);
+    await widget.onAdvertiseStudyTag(id, subject,
+        locationIndex: _selectedLocationIndex);
 
     _broadcastEndTimer?.cancel();
     _broadcastEndTimer = Timer(kStudyTagAdvertiseDuration, () {
@@ -108,6 +123,17 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
         SnackBar(content: Text("Broadcasting \"$subject\" for the next ${kStudyTagAdvertiseDuration.inMinutes ~/ 60} hour.")),
       );
     }
+  }
+
+  /// What this device is currently broadcasting, including the location
+  /// when one was chosen — so the poster can see exactly what others see.
+  String _myActiveBroadcastLabel() {
+    final report = _store.reports.value[_myActiveId];
+    if (report == null) return 'Broadcasting:';
+    final where = report.locationName;
+    return where == null
+        ? 'Broadcasting: ${report.subject}'
+        : 'Broadcasting: ${report.subject} · $where';
   }
 
   Future<void> _deleteMyTag() async {
@@ -132,6 +158,124 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
     if (minutes < 1) return "just now";
     if (minutes < 60) return "${minutes}m ago";
     return "${minutes ~/ 60}h ago";
+  }
+
+  // ── "Where?" ─────────────────────────────────────────────────────────
+
+  Widget _locationButton(ColorScheme colors) {
+    final chosen = studyLocationName(_selectedLocationIndex);
+    final isSet = chosen != null;
+    final accent = isSet ? colors.primary : colors.onSurface;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _pickLocation,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: isSet
+                ? colors.primary.withValues(alpha: 0.08)
+                : Colors.transparent,
+            border: Border.all(
+                color: accent.withValues(alpha: isSet ? 0.45 : 0.25)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.place_outlined,
+                  size: 16, color: accent.withValues(alpha: 0.8)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  chosen ?? "Not saying",
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: isSet ? FontWeight.bold : FontWeight.w500,
+                    color: isSet
+                        ? accent
+                        : accent.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+              Icon(Icons.expand_more,
+                  size: 18, color: accent.withValues(alpha: 0.6)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickLocation() async {
+    // Sentinel for "no venue": null is a real, meaningful choice here (the
+    // location is optional on the wire), so it cannot double as "the sheet
+    // was dismissed".
+    const clear = -1;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) {
+        final colors = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.onSurface.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(100),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text("Where are you studying?",
+                  style:
+                      TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              const SizedBox(height: 6),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.not_listed_location_outlined,
+                          size: 20),
+                      title: const Text("Not saying",
+                          style: TextStyle(fontSize: 14)),
+                      trailing: _selectedLocationIndex == null
+                          ? const Icon(Icons.check, size: 20)
+                          : null,
+                      onTap: () => Navigator.pop(ctx, clear),
+                    ),
+                    const Divider(height: 1),
+                    for (var i = 0; i < kStudyLocations.length; i++)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.place_outlined, size: 20),
+                        title: Text(kStudyLocations[i],
+                            style: const TextStyle(fontSize: 14)),
+                        trailing: _selectedLocationIndex == i
+                            ? const Icon(Icons.check, size: 20)
+                            : null,
+                        onTap: () => Navigator.pop(ctx, i),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (picked == null) return; // dismissed
+    setState(() => _selectedLocationIndex = picked == clear ? null : picked);
   }
 
   @override
@@ -190,7 +334,7 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        "Broadcasting: ${_store.reports.value[_myActiveId]?.subject ?? ''}",
+                        _myActiveBroadcastLabel(),
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -207,6 +351,9 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
               ),
               const SizedBox(height: 12),
             ] else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               Row(
                 children: [
                   Expanded(
@@ -236,6 +383,29 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                     ),
                     onPressed: _startStudying,
                   ),
+                ],
+              ),
+                  const SizedBox(height: 10),
+                  // A fixed list, not free text. One byte on the wire
+                  // instead of ten (see hops_constants.dart's
+                  // kStudyLocationProtocolMarker), and locations that
+                  // actually group — free text gives "Library", "library"
+                  // and "Libry" as three different places, so a list of
+                  // who is studying where could not be grouped at all.
+                  Text(
+                    "Where? (optional)",
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: colors.onSurface.withValues(alpha: 0.7),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  // One button, not a Wrap of 17 chips. The venue list
+                  // outgrew chips when it was renamed: the picker took
+                  // more height than everything else on this card
+                  // combined, for something most people set once.
+                  _locationButton(colors),
                 ],
               ),
             const SizedBox(height: 8),
@@ -342,6 +512,35 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                                     ],
                                   ],
                                 ),
+                                // Location on its own line with a pin, so
+                                // "where" is scannable down the list —
+                                // which is the point of the feature. Only
+                                // rendered when there is one: it is
+                                // optional, and tags from an older build
+                                // carry none.
+                                if (report.locationName != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.place_outlined,
+                                            size: 11, color: colors.primary),
+                                        const SizedBox(width: 3),
+                                        Flexible(
+                                          child: Text(
+                                            report.locationName!,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: colors.primary,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 Text(
                                   isMine ? "Your session · ${_reportAge(report.timestamp)}" : "Studying · ${_reportAge(report.timestamp)}",
                                   style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),

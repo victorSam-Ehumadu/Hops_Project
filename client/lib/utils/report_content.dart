@@ -51,6 +51,11 @@ Future<void> showReportContentSheet(
 }) async {
   final colors = Theme.of(context).colorScheme;
   String? selectedCategory;
+  // A fixed category alone loses the part a moderator most needs: which
+  // message, what led up to it, whether this is the fifth time. The
+  // predefined list stays — it is what makes reports sortable — and this
+  // carries the detail that does not fit a category.
+  final noteController = TextEditingController();
 
   await showModalBottomSheet(
     context: context,
@@ -104,7 +109,32 @@ Future<void> showReportContentSheet(
                   // ignore: deprecated_member_use
                   onChanged: (v) => setSheetState(() => selectedCategory = v),
                 )),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
+            TextField(
+              controller: noteController,
+              // Room to describe an incident without turning the sheet
+              // into a form. Grows to 4 lines, then scrolls.
+              minLines: 2,
+              maxLines: 4,
+              maxLength: kReportNoteMaxLength,
+              textCapitalization: TextCapitalization.sentences,
+              keyboardType: TextInputType.multiline,
+              style: TextStyle(fontSize: 13, color: colors.onSurface),
+              decoration: InputDecoration(
+                labelText: 'Anything else? (optional)',
+                labelStyle: TextStyle(
+                    fontSize: 13,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+                hintText:
+                    'What happened, or anything an admin should know.',
+                hintStyle: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurface.withValues(alpha: 0.4)),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 4),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
@@ -117,12 +147,16 @@ Future<void> showReportContentSheet(
                     ? null
                     : () async {
                         final category = selectedCategory!;
+                        // Read before the pop — the controller belongs to
+                        // the sheet being torn down.
+                        final note = noteController.text.trim();
                         Navigator.of(sheetContext).pop();
                         final ok = await _submitReport(
                           contentType: contentType,
                           targetUsername: targetUsername,
                           snapshotText: snapshotText,
                           category: category,
+                          note: note.isEmpty ? null : note,
                           contentCreatedAt: contentCreatedAt,
                         );
                         // Offline (or Supabase briefly unreachable) — queue
@@ -136,6 +170,7 @@ Future<void> showReportContentSheet(
                             targetUsername: targetUsername,
                             snapshotText: snapshotText,
                             category: category,
+                            note: note.isEmpty ? null : note,
                             contentCreatedAt: contentCreatedAt,
                           );
                         }
@@ -162,6 +197,7 @@ Future<bool> _submitReport({
   String? targetUsername,
   required String snapshotText,
   required String category,
+  String? note,
   DateTime? contentCreatedAt,
 }) async {
   final prefs = await SharedPreferences.getInstance();
@@ -174,6 +210,15 @@ Future<bool> _submitReport({
       'p_target_username': targetUsername,
       'p_snapshot_text': snapshotText,
       'p_category': category,
+      // The column and parameter have existed since 0011 — only the UI to
+      // fill them was missing, so no migration is needed for this.
+      // Clamped here as well as by the field's maxLength, since a queued
+      // report written by an older build could exceed it.
+      'p_note': note == null || note.isEmpty
+          ? null
+          : (note.length > kReportNoteMaxLength
+              ? note.substring(0, kReportNoteMaxLength)
+              : note),
       // UTC — Postgres stores timestamptz, and sending a local-time string
       // without an offset would be read as whatever the server's timezone
       // is, silently shifting every reported time.
@@ -194,11 +239,21 @@ Future<bool> _submitReport({
 // this is a short-lived queue, not a growing history.
 const _pendingReportsPrefsKey = 'pending_reports_v1';
 
+/// Cap on the reporter's own description.
+///
+/// Generous enough to describe an incident, bounded because this is free
+/// text from an unauthenticated-at-rest source that an admin will read in
+/// a list view — and because `note` is rendered into the moderation email
+/// (escaped; see send_email.ts), where an unbounded field is a payload
+/// waiting to happen.
+const int kReportNoteMaxLength = 500;
+
 Future<void> queueReport({
   required String contentType,
   String? targetUsername,
   required String snapshotText,
   required String category,
+  String? note,
   DateTime? contentCreatedAt,
 }) async {
   final prefs = await SharedPreferences.getInstance();
@@ -208,6 +263,7 @@ Future<void> queueReport({
     'targetUsername': targetUsername,
     'snapshotText': snapshotText,
     'category': category,
+    'note': note,
     'contentCreatedAt': contentCreatedAt?.toIso8601String(),
   }));
   await prefs.setStringList(_pendingReportsPrefsKey, raw);
@@ -242,6 +298,9 @@ Future<void> flushPendingReports() async {
         targetUsername: j['targetUsername'] as String?,
         snapshotText: j['snapshotText'] as String,
         category: j['category'] as String,
+        // Absent on entries queued by a build before the note existed —
+        // those must still flush rather than being dropped.
+        note: j['note'] as String?,
         contentCreatedAt:
             createdAtRaw == null ? null : DateTime.tryParse(createdAtRaw),
       );

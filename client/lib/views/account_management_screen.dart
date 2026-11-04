@@ -22,50 +22,57 @@ import 'package:client/utils/mesh_crypto.dart';
 import 'package:client/widgets/password_strength_bar.dart';
 import 'package:client/views/email_verification_screen.dart';
 import 'package:client/services/avatar_path_notifier.dart';
+import 'package:client/services/local_data_notifier.dart';
+import 'package:client/services/account_standing.dart';
+import 'package:client/services/bluetooth_name_guard.dart';
 
 /// Clears every locally-scoped identity key and the cached sqlite db, then
 /// drops the caller onto the gatekeeper. Shared by both "Log Out" and
 /// "Delete Account" (deletion also needs the server-side row gone first,
 /// which the caller does before calling this).
-Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async {
-  // Belt-and-suspenders: HopsApp's own dispose() already stops advertising
-  // once pushAndRemoveUntil below tears its route down, but that's an
-  // indirect consequence of widget disposal timing, not something this
-  // function controls directly. Stopping it explicitly, right here, means
-  // the beacon carrying this identity goes off the air immediately and
-  // deterministically the moment someone logs out — their dot shouldn't
-  // linger on anyone else's radar for even the length of a route
-  // transition after they've signed out.
+/// Stops this device broadcasting the signed-in identity.
+///
+/// Called by every teardown path. Explicit rather than relying on
+/// HopsApp.dispose() firing when its route is torn down: that is an
+/// indirect consequence of widget disposal timing, and the beacon
+/// carrying this identity should go off the air deterministically the
+/// moment the session ends, not a route transition later. Someone's dot
+/// should not linger on anyone else's radar after they are signed out.
+Future<void> _silenceIdentityRadio() async {
   await BlePeripheral.stopAdvertising();
   await FlutterBluePlus.stopScan();
+}
 
-  // Close our handle before unlinking the file — deleting an open sqlite db
-  // can leave it locked/corrupted, and DatabaseHelper's cached connection
-  // must be dropped too or every DB call for the rest of this app session
-  // keeps talking to the now-deleted file instead of the fresh one a new
-  // sign-up expects.
-  //
-  // Was reconstructing this path by hand via getDatabasesPath() — a
-  // *different* directory than the one DatabaseHelper actually opens the
-  // database in (see resolveDatabasePath()'s doc comment). That meant this
-  // deleteDatabase call was silently a no-op: it deleted a file that never
-  // existed, while the real database — every message, task, and vibe
-  // record — survived untouched and showed up again under the next
-  // account signed into on the same device.
+/// Deletes the local sqlite database — every message, task and vibe record.
+///
+/// Close our handle before unlinking the file: deleting an open sqlite db
+/// can leave it locked/corrupted, and DatabaseHelper's cached connection
+/// must be dropped too, or every DB call for the rest of this app session
+/// keeps talking to the now-deleted file instead of the fresh one a new
+/// sign-up expects.
+///
+/// This used to reconstruct the path by hand via getDatabasesPath() — a
+/// *different* directory than the one DatabaseHelper actually opens the
+/// database in (see resolveDatabasePath()'s doc comment). That made the
+/// delete silently a no-op: it removed a file that never existed, while
+/// the real database survived untouched and showed up again under the next
+/// account signed into on the same device.
+Future<void> deleteLocalDatabase() async {
   await DatabaseHelper.instance.close();
   await deleteDatabase(await DatabaseHelper.resolveDatabasePath());
+}
 
+/// Clears every account-scoped key in SharedPreferences, not just the
+/// session token — otherwise a different person signing in on this device
+/// inherits the previous account's avatar, nickname, bio and feature
+/// toggles.
+Future<void> clearAccountScopedPrefs() async {
   final prefs = await SharedPreferences.getInstance();
-  // Clear every locally-scoped identity key, not just the session token —
-  // otherwise a different person signing up on this device inherits the
-  // previous account's avatar, nickname, bio and feature toggles.
   await prefs.remove('saved_hops_token');
   await prefs.remove('my_username');
   await prefs.remove('my_hops_id');
   await prefs.remove('my_email');
   await prefs.remove('email_verified');
-  await prefs.remove('avatar_path');
-  avatarPathRevision.value++;
   await prefs.remove('nickname');
   await prefs.remove('bio');
   await prefs.remove('thinking_status');
@@ -79,15 +86,101 @@ Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async 
   await prefs.remove('pending_help_hint');
   await prefs.remove('my_role');
   await prefs.remove('my_admin_title');
+  await prefs.remove('avatar_path');
+  avatarPathRevision.value++;
   await const FlutterSecureStorage().delete(key: 'private_key');
   await const FlutterSecureStorage().delete(key: 'rotating_id_seed');
+}
+
+/// Clears every locally-scoped identity key and the cached sqlite db, then
+/// drops the caller onto the gatekeeper. Shared by "Log Out", "Delete
+/// Account" (deletion also needs the server-side row gone first, which the
+/// caller does before calling this) and a ban.
+Future<void> wipeLocalIdentityAndReturnToGatekeeper(BuildContext context) async {
+  await _silenceIdentityRadio();
+  await deleteLocalDatabase();
+  await clearAccountScopedPrefs();
 
   if (context.mounted) {
-    Navigator.of(context).pushAndRemoveUntil(
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => const HopsRootGatekeeper()),
       (route) => false,
     );
   }
+}
+
+/// Ends the session immediately because the account was suspended or
+/// banned, and lands the user on the sign-in page.
+///
+/// The session genuinely ends — `saved_hops_token` is removed, so there is
+/// nothing left for the launch path to re-enter HopsApp with, and nothing
+/// the user can navigate back to. An earlier attempt held the session and
+/// covered the app with a barrier screen instead; that left a live token
+/// in place, which is not what "their session is terminated" means.
+///
+/// NEITHER VERDICT DESTROYS LOCAL DATA. Messages, contacts, tasks and vibe
+/// records all survive; only the session goes.
+///
+/// A ban used to trigger the full teardown on the reasoning that it is
+/// permanent and there would be nothing to come back to. That was wrong on
+/// its own terms: `unban_user` exists, so a ban is reversible, and an
+/// unbanned student would have returned to an empty app with every
+/// conversation gone. Destroying data irreversibly as a side effect of a
+/// reversible decision is not a trade a moderator made or was offered —
+/// and a student banned by mistake had no recourse at all.
+///
+/// The data is also the user's own, sitting on the user's own device.
+/// Moderation removes their access to the network, which is what the
+/// server-side block does; it is not a mandate to erase their phone.
+///
+/// Three things still wipe, all of them deliberate:
+///
+///   * Log Out and Delete Account — an explicit choice, behind a
+///     confirmation that says what will be lost.
+///   * discardLocalDataForAccountSwitch() — a DIFFERENT account signing in
+///     on this device, which is the only state where someone could inherit
+///     another person's threads. `my_hops_id` is left behind precisely so
+///     that comparison can be made.
+Future<void> endSessionForModeration(
+  BuildContext context,
+  AccountStanding standing,
+) async {
+  await _silenceIdentityRadio();
+  await BluetoothNameGuard.restore();
+
+  // The token, and only the token. my_hops_id stays as the marker of whose
+  // data this is.
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.remove('saved_hops_token');
+
+  if (!context.mounted) return;
+  Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+    MaterialPageRoute(builder: (context) => const HopsRootGatekeeper()),
+    (route) => false,
+  );
+}
+
+/// Wipes local data when a *different* account signs in on this device.
+///
+/// Normally unnecessary: every ordinary sign-out already deletes the
+/// database, so there is nothing to inherit. A suspension is the exception
+/// — it leaves the database in place so the user gets their messages back
+/// when the suspension lifts (see endSessionForModeration). That is the
+/// one state in which the next person to sign in could otherwise inherit
+/// someone else's threads, so sign-in calls this with the id it just
+/// authenticated.
+///
+/// [signedInHopsId] is the id the server just returned. Returns true if
+/// local data was discarded.
+Future<bool> discardLocalDataForAccountSwitch(String? signedInHopsId) async {
+  final prefs = await SharedPreferences.getInstance();
+  final previous = prefs.getString('my_hops_id');
+  if (previous == null || signedInHopsId == null || previous == signedInHopsId) {
+    return false;
+  }
+  await deleteLocalDatabase();
+  await clearAccountScopedPrefs();
+  return true;
 }
 
 class AccountManagementScreen extends StatefulWidget {
@@ -97,21 +190,163 @@ class AccountManagementScreen extends StatefulWidget {
   State<AccountManagementScreen> createState() => _AccountManagementScreenState();
 }
 
+/// Writes a full local backup to a file the user chooses.
+///
+/// Top-level rather than a method, so the two actions that erase this
+/// device — Log Out and Delete Account — can both offer it without keeping
+/// their own copy of the logic.
+///
+/// Returns true ONLY when a file was actually written. A cancelled picker
+/// must never be mistaken for "your data is safe" by a caller that is
+/// about to wipe the device.
+Future<bool> exportMyHopsData(BuildContext context) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString('my_username') ?? 'hops_user';
+
+    final data = await DatabaseHelper.instance.exportAllData();
+    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
+
+    final timestamp = DateTime.now();
+    final stamp = '${timestamp.year}${timestamp.month.toString().padLeft(2, '0')}'
+        '${timestamp.day.toString().padLeft(2, '0')}';
+    final fileName = 'hops_data_export_${username}_$stamp.json';
+
+    final savedPath = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save your Hops data export',
+      fileName: fileName,
+      bytes: bytes,
+    );
+
+    messenger.showSnackBar(SnackBar(
+      content: Text(savedPath != null ? "Saved $fileName" : "Export cancelled"),
+    ));
+    return savedPath != null;
+  } catch (e) {
+    messenger.showSnackBar(
+      SnackBar(content: Text("Couldn't export your data: $e")),
+    );
+    return false;
+  }
+}
+
+/// What the user chose when offered an export before something destructive.
+enum _PreWipeChoice { cancel, exportFirst, proceed }
+
 class _AccountManagementScreenState extends State<AccountManagementScreen> {
   bool _busy = false;
 
+  /// Offers an export, then confirms the destructive action itself.
+  ///
+  /// Both halves matter. The export is offered FIRST because once Log Out
+  /// or Delete Account has run, the messages, tasks, vibe records and
+  /// contacts on this device are gone and no server copy exists to restore
+  /// from — Hops keeps that data nowhere else by design.
+  ///
+  /// Returns true if the caller should go ahead.
+  Future<bool> _offerExportThenConfirm({
+    required String title,
+    required String body,
+    required String proceedLabel,
+    required bool destructive,
+  }) async {
+    var exported = false;
+    // Loops so exporting does not count as answering the question: after
+    // the file is written the user is asked again whether to go ahead,
+    // rather than the export silently committing them to it.
+    while (true) {
+      if (!mounted) return false;
+      final choice = await showDialog<_PreWipeChoice>(
+        context: context,
+        builder: (ctx) {
+          final colors = Theme.of(ctx).colorScheme;
+          return AlertDialog(
+            title: Text(title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(body, style: const TextStyle(fontSize: 13.5, height: 1.4)),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: (exported ? Colors.green : colors.primary)
+                        .withValues(alpha: 0.09),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        exported
+                            ? Icons.check_circle_outline
+                            : Icons.download_for_offline_outlined,
+                        size: 20,
+                        color: exported ? Colors.green : colors.primary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          exported
+                              ? "Backup saved. You can restore it later with "
+                                  "Import My Data."
+                              : "Your messages, tasks and contacts live only "
+                                  "on this phone. Save a backup first?",
+                          style: const TextStyle(fontSize: 12, height: 1.35),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            actionsOverflowButtonSpacing: 6,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, _PreWipeChoice.cancel),
+                child: const Text("Cancel"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, _PreWipeChoice.proceed),
+                style: TextButton.styleFrom(
+                    foregroundColor:
+                        destructive ? Colors.redAccent : colors.primary),
+                child: Text(exported ? proceedLabel : "$proceedLabel anyway"),
+              ),
+              if (!exported)
+                ElevatedButton.icon(
+                  onPressed: () =>
+                      Navigator.pop(ctx, _PreWipeChoice.exportFirst),
+                  icon: const Icon(Icons.download_for_offline_outlined,
+                      size: 18),
+                  label: const Text("Export my data"),
+                ),
+            ],
+          );
+        },
+      );
+
+      if (choice == null || choice == _PreWipeChoice.cancel) return false;
+      if (choice == _PreWipeChoice.proceed) return true;
+
+      if (!mounted) return false;
+      setState(() => _busy = true);
+      final saved = await exportMyHopsData(context);
+      if (mounted) setState(() => _busy = false);
+      // A cancelled or failed export leaves the prompt exactly as it was,
+      // so the offer is still there rather than having been spent.
+      if (saved) exported = true;
+    }
+  }
+
   Future<void> _confirmLogOut() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Log out?"),
-        content: const Text(
-            "You'll need your username and password to sign back in on this device."),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Log Out")),
-        ],
-      ),
+    final confirmed = await _offerExportThenConfirm(
+      title: "Log out?",
+      body: "Logging out erases everything Hops has stored on this device. "
+          "You'll need your username and password to sign back in.",
+      proceedLabel: "Log out",
+      destructive: false,
     );
     if (confirmed != true || !mounted) return;
     setState(() => _busy = true);
@@ -127,6 +362,125 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Password changed.")),
       );
+    }
+  }
+
+  // The other half of Export My Data. An export you cannot restore is not
+  // a backup, it is a souvenir — this is what makes the export mean
+  // something after a reinstall, a new phone, or a Log Out that cleared
+  // the database.
+  //
+  // MERGES rather than replaces, and says so before doing anything.
+  // Replacing would be the more obvious implementation and the wrong one:
+  // someone importing an old backup onto a phone they have kept using
+  // would silently lose everything since. Merging cannot lose anything,
+  // and because every table has a real primary key, importing the same
+  // file twice adds nothing the second time.
+  Future<void> _importMyData() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Import data?"),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Pick a Hops export file to restore messages, tasks, "
+                "vibe reports and contacts."),
+            SizedBox(height: 10),
+            Text("Nothing on this phone is deleted. Anything already here "
+                "is kept as it is, so importing the same file twice "
+                "changes nothing.",
+                style: TextStyle(fontSize: 12.5)),
+            SizedBox(height: 10),
+            // Worth saying plainly: the export format carries no owner, so
+            // the app genuinely cannot tell whose file this is.
+            Text("Only import your own export. A file from someone else's "
+                "account would mix their conversations into yours, and "
+                "Hops cannot tell the difference.",
+                style: TextStyle(fontSize: 12.5)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Choose file")),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Choose your Hops data export',
+        // Deliberately not type: FileType.custom with allowedExtensions —
+        // on several Android file providers that filter hides the file
+        // entirely (a JSON picked from Downloads can arrive with no
+        // extension at all), and a file the user cannot select is worse
+        // than one validated after the fact. importAllData rejects
+        // anything that is not a Hops export anyway.
+        withData: true,
+      );
+      if (picked == null || picked.files.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Import cancelled")),
+          );
+        }
+        return;
+      }
+
+      final bytes = picked.files.first.bytes;
+      if (bytes == null) {
+        throw const FormatException("Couldn't read that file.");
+      }
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('That file is not a Hops data export.');
+      }
+
+      final counts = await DatabaseHelper.instance.importAllData(decoded);
+
+      var added = 0, skipped = 0;
+      for (final table in counts.values) {
+        added += table[DatabaseHelper.importInserted] ?? 0;
+        skipped += table[DatabaseHelper.importSkipped] ?? 0;
+      }
+
+      // Tell the rest of the app. Account Management is a pushed route, so
+      // HopsApp's contact tray is still mounted behind it holding a list
+      // that is now stale — without this the imported conversations do not
+      // appear until something else happens to refresh it.
+      localDataRevision.value++;
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text(added == 0
+              ? (skipped == 0
+                  ? "That export was empty — nothing to restore."
+                  : "Everything in that file was already on this phone.")
+              : "Restored $added item${added == 1 ? '' : 's'}"
+                  "${skipped > 0 ? ' ($skipped already here)' : ''}."),
+        ),
+      );
+    } on FormatException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Couldn't import that file: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -154,40 +508,27 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
   Future<void> _exportMyData() async {
     setState(() => _busy = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final username = prefs.getString('my_username') ?? 'hops_user';
-
-      final data = await DatabaseHelper.instance.exportAllData();
-      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
-
-      final timestamp = DateTime.now();
-      final stamp = '${timestamp.year}${timestamp.month.toString().padLeft(2, '0')}'
-          '${timestamp.day.toString().padLeft(2, '0')}';
-      final fileName = 'hops_data_export_${username}_$stamp.json';
-
-      final savedPath = await FilePicker.platform.saveFile(
-        dialogTitle: 'Save your Hops data export',
-        fileName: fileName,
-        bytes: bytes,
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(savedPath != null ? "Saved $fileName" : "Export cancelled"),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Couldn't export your data: $e")),
-      );
+      await exportMyHopsData(context);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _openDeleteAccount() async {
+    // Offered here rather than on the delete screen's final button: the
+    // export opens a file picker, and returning from that into a
+    // half-filled password field is a worse moment to interrupt than
+    // before anything has been typed.
+    final goAhead = await _offerExportThenConfirm(
+      title: "Delete your account?",
+      body: "This permanently erases your Hops identity from the server and "
+          "wipes everything stored on this device. It cannot be undone, and "
+          "there is no server copy of your messages to restore from.",
+      proceedLabel: "Continue",
+      destructive: true,
+    );
+    if (goAhead != true || !mounted) return;
+
     final deleted = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const _DeleteAccountScreen()),
@@ -241,6 +582,14 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
             ),
             const SizedBox(height: 12),
             _ManagementTile(
+              icon: Icons.upload_file_outlined,
+              iconColor: colors.primary,
+              title: "Import My Data",
+              subtitle: "Restore from a Hops export — nothing here is deleted",
+              onTap: _busy ? null : _importMyData,
+            ),
+            const SizedBox(height: 12),
+            _ManagementTile(
               icon: Icons.logout,
               iconColor: colors.primary,
               title: "Log Out",
@@ -254,7 +603,7 @@ class _AccountManagementScreenState extends State<AccountManagementScreen> {
               title: "Delete Account",
               subtitle: "Permanently erase your identity — this can't be undone",
               destructive: true,
-              onTap: _openDeleteAccount,
+              onTap: _busy ? null : _openDeleteAccount,
             ),
             if (_busy) ...[
               const SizedBox(height: 24),
@@ -394,7 +743,11 @@ class _ChangePasswordScreenState extends State<_ChangePasswordScreen> {
       if (!ok) {
         setState(() {
           _sendingCode = false;
-          _error = "Couldn't send a confirmation code — try again in a moment.";
+          // "try again in a moment" was wrong for two of the three
+          // failures: a quota needs longer than a moment, and a missing
+          // sending domain never resolves by retrying at all.
+          _error = describeEmailSendFailure(
+              (res.data is Map) ? res.data['error'] : null);
         });
         return;
       }
@@ -612,7 +965,10 @@ class _ChangeEmailScreenState extends State<_ChangeEmailScreen> {
   Future<void> _submit() async {
     final password = _passwordController.text;
     final newEmail = _newEmailController.text.trim();
-    final emailError = validateEmail(newEmail);
+    // Same rule as signup: this sets the account's address, so it must
+    // be an institutional one. Otherwise the signup restriction would
+    // be trivially bypassable by signing up and changing it after.
+    final emailError = validateAccountEmail(newEmail);
 
     if (password.isEmpty) {
       setState(() => _error = "Enter your password to confirm.");

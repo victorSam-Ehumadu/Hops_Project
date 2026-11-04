@@ -30,8 +30,8 @@ const double kFloatingNavClearance = 92;
 //
 // Community Chat used to ride this channel too (the v2 wire format,
 // removed — see the v3 block below for why). What still uses it: Emergency
-// Flare / Official Alert signature chunks, Watch Me seed exchange, the
-// discoverable-name tag, and the Hops & Robbers runner tag. Those are all
+// Flare / Official Alert signature chunks, Watch Me seed exchange, and
+// the discoverable-name tag. Those are all
 // *supplementary* — every one of them enriches something whose primary
 // signal already rides the advertisement name, so if this channel silently
 // drops on a given handset the feature degrades (an alert shows as
@@ -89,11 +89,66 @@ const int kCommunityChunkBudgetBytes = 20;
 // 31 - 2 (the name's AD header) = 29, minus the 3-byte TX Power structure
 // many Android stacks append whether asked to or not = 26.
 //
-// 24, not 26, deliberately: two characters of margin for a handset that
-// adds one more AD structure of its own. This is a broadcast chat in a
-// safety app — a message that arrives beats a longer one that doesn't, and
-// the cost is only that long messages take one more chunk.
-const int kCommunityNameBudget = 24;
+// 22, not 26, deliberately: margin for a handset that adds one more AD
+// structure of its own. This is a broadcast chat in a safety app — a
+// message that arrives beats a longer one that doesn't, and the cost is
+// only that long messages take one more chunk.
+//
+// Lowered from 24 to 22 on 2 Nov 2026, and the evidence is worth keeping
+// because this is the SECOND time this number has been too high:
+//
+//   An admin reported that an alert of about ten characters sent fine and
+//   anything longer never arrived. That is not a chunk-count problem — the
+//   chunking round-trips correctly at every length (see
+//   community_alert_roundtrip_test.dart). It is a chunk-SIZE problem. A
+//   chunk's name is kCommunityNameOverhead + text = 13 + text, so a
+//   10-character message produced a 23-byte name and an 11-character one
+//   produced the first FULL chunk at 24 bytes. The cutoff sat exactly on
+//   the point where a chunk fills up, which puts that handset's real
+//   ceiling at 23 bytes — below the 26 this file computes.
+//
+// So 26 is the theoretical limit, not a limit every radio honours. The
+// margin exists because the cost of being wrong here is silent: an
+// over-long name is rejected on an async callback, so the send looks
+// successful and the message simply never exists for anyone else.
+//
+// NOT device-verified — it is inferred from that report, and confirming it
+// needs two physical phones. If an alert still fails to send, the admin
+// app now says so out loud (AdminBleHub.lastAdvertisingError) instead of
+// failing silently, which is what made this take so long to find.
+const int kCommunityNameBudget = 22;
+
+/// Hard ceiling for ANY advertisement local name, in UTF-8 bytes.
+///
+/// Same arithmetic as kCommunityNameBudget above, stopping at the computed
+/// ceiling rather than taking its extra two bytes of margin: the name
+/// rides the scan response, giving 31 - 2 (AD header) = 29, minus the
+/// 3-byte TX Power structure many Android stacks append whether asked to
+/// or not = 26.
+///
+/// Guards that used 29 were wrong, and wrong in the worst direction: a
+/// 27-28 byte name passed the check, overflowed the packet, and failed the
+/// whole advertisement with ADVERTISE_FAILED_DATA_TOO_LARGE. Since that
+/// verdict only arrives asynchronously on a callback (see
+/// hops_app.dart's _handleAdvertisingStatusUpdate) the send looked
+/// successful and simply never left the radio.
+const int kAdvertisementNameMaxBytes = 26;
+
+/// Whether [name] fits in a single advertisement.
+///
+/// Measured in UTF-8 BYTES, not characters — the budget is a byte budget,
+/// so an accented or emoji character costs more than one. `.length` on a
+/// Dart String counts UTF-16 code units and silently under-counts both.
+bool advertisementNameFits(String name) =>
+    utf8.encode(name).length <= kAdvertisementNameMaxBytes;
+
+/// How many bytes of room are left for free text in an advertisement whose
+/// fixed framing (prefix, separators, any id) costs [overheadBytes].
+/// Lets a UI constrain its input field instead of failing at send time.
+int advertisementTextBudget(int overheadBytes) {
+  final left = kAdvertisementNameMaxBytes - overheadBytes;
+  return left < 0 ? 0 : left;
+}
 
 const String kCommunityChatPrefix = 'CM:';
 // Admin-originated — same layout, different prefix, so one decode path
@@ -128,6 +183,22 @@ const String kAdminCommunityChatPrefix = 'CA:';
 // 8 characters matches the sender-tag width EMG:/ADM: already use, so
 // KeyDirectory.candidatesForTruncatedUsername resolves these for free.
 const int kCommunityNameSenderTagChars = 8;
+
+/// The on-the-wire sender tag for [username]: truncated to
+/// kCommunityNameSenderTagChars, and PADDED to it when shorter.
+///
+/// One definition because there were five, and one of them — the server
+/// post in admin_community_alerts_tab.dart — truncated without padding.
+/// Every alert from an admin with a short username then carried "victor"
+/// on the server and "victor__" over BLE, so the (senderTag, msgId) pair
+/// the two are deduped on never matched and every alert arrived twice.
+///
+/// The padding is not cosmetic: decodeCommunityNameChunk reads the tag at
+/// FIXED offsets, so a short tag would shift every field after it.
+String communitySenderTag(String username) =>
+    username.length >= kCommunityNameSenderTagChars
+        ? username.substring(0, kCommunityNameSenderTagChars)
+        : username.padRight(kCommunityNameSenderTagChars, '_');
 const int kCommunityNameOverhead = 13;
 const int kCommunityNameTextBudget = kCommunityNameBudget - kCommunityNameOverhead; // 11
 
@@ -156,9 +227,7 @@ String encodeCommunityNameChunk({
   final prefix = isAdmin ? kAdminCommunityChatPrefix : kCommunityChatPrefix;
   // Padded as well as truncated — a short tag would otherwise shift every
   // fixed offset the decoder relies on.
-  final tag = senderTag.length >= kCommunityNameSenderTagChars
-      ? senderTag.substring(0, kCommunityNameSenderTagChars)
-      : senderTag.padRight(kCommunityNameSenderTagChars, '_');
+  final tag = communitySenderTag(senderTag);
   final id = _kNameFieldAlphabet[msgId & 0x3F];
   final info = _kNameFieldAlphabet[
       ((chunkIndex & 0x07) << 3) | ((totalChunks - 1) & 0x07)];
@@ -237,9 +306,7 @@ String encodeCommunityDeletion({
   required int msgId,
   required CommunityDeleteReason reason,
 }) {
-  final tag = senderTag.length > kCommunityNameSenderTagChars
-      ? senderTag.substring(0, kCommunityNameSenderTagChars)
-      : senderTag.padRight(kCommunityNameSenderTagChars, '_');
+  final tag = communitySenderTag(senderTag);
   return '$kCommunityDeletePrefix$tag'
       '${_kNameFieldAlphabet[msgId & 0x3F]}'
       '${_kNameFieldAlphabet[reason.index & 0x3F]}';
@@ -772,33 +839,129 @@ String? decodeDiscoverableName(List<int> bytes) {
   return utf8.decode(bytes.sublist(1), allowMalformed: true);
 }
 
-// ── Hops & Robbers runner tag ───────────────────────────────────────────
+// ── Study Bunny location (manufacturer data) ────────────────────────────
 //
-// Fixes a regression from the rotating-ID presence beacon: the tag
-// scanner used to read a runner's username straight off "HPS:<username>",
-// which stopped working the moment that beacon started carrying an opaque
-// rotating token instead. Rather than trying to resolve tokens back to
-// names mid-game (game lobby participants are frequently strangers with
-// no exchanged rotating-ID seed at all — unlike Watch Me, which only ever
-// targets existing contacts), a runner broadcasts a small, explicit,
-// consensual tag alongside their normal beacon for exactly as long as
-// they're actively a runner in an active game — never at any other time.
-// Reuses the same manufacturer-data channel as Community Chat/flare
-// signatures, distinguished by its own marker byte.
-const int kGameRunnerTagProtocolMarker = 0x52; // ascii 'R'
-const int kGameRunnerTagMaxUsernameBytes = 20;
+// Where someone is studying, riding alongside the SBF: advertisement.
+//
+// WHY NOT IN THE NAME. "SBF:" + a 4-char id + ":" already costs 9 of the
+// 26-byte ceiling, leaving 17 for the subject. Splitting that between a
+// subject and a free-text location leaves roughly eight characters each,
+// which is too little for either to be useful — and over-stuffing the name
+// is exactly what silently broke this feature before (see
+// kAdvertisementNameMaxBytes). Manufacturer data is the channel this
+// codebase already uses where the name is full, and nothing else competes
+// for the single slot during an SBF: advertisement.
+//
+// WHY A CODE RATHER THAN FREE TEXT. One byte instead of ten, and — more
+// usefully — locations that actually group. Free text produces "Library",
+// "library" and "Libry" as three different places, so a list of who is
+// studying where cannot be grouped or filtered. A fixed campus list also
+// makes posting a tag a two-tap operation, which matters for something
+// sent on the way into a study session.
+//
+// Backward compatible in both directions by construction: an older build
+// ignores manufacturer data it does not recognise, and a newer one treats
+// its absence as "no location given". Neither needs to know about the
+// other, which is why this is additive rather than a format change.
+const int kStudyLocationProtocolMarker = 0x4C; // ascii 'L'
 
-Uint8List encodeGameRunnerTag(String username) {
-  var bytes = utf8.encode(username);
-  if (bytes.length > kGameRunnerTagMaxUsernameBytes) {
-    bytes = bytes.sublist(0, kGameRunnerTagMaxUsernameBytes);
-  }
-  return Uint8List.fromList([kGameRunnerTagProtocolMarker, ...bytes]);
+/// Venues a Vibe Check report can be tagged with.
+///
+/// The campus venues plus the four places that only matter for crowding.
+///
+/// IMPORTANT, and the opposite of kStudyLocations: a Vibe Check location
+/// travels as plain TEXT inside "VBT:<location>:<level>", not as an index.
+/// So this list may be reordered, added to or trimmed at any time without
+/// breaking anything already in flight — and a phone on an older build
+/// still displays whatever name it receives. The only constraint is
+/// length: every entry must fit advertisementTextBudget(6), which
+/// vibe_check_location_test.dart checks.
+/// "VBT:" (4) + ":" (1) + one level digit (1) = 6 bytes of framing, so this
+/// is what is left for the venue name itself.
+final int kVibeCheckLocationMaxBytes = advertisementTextBudget(6);
+
+const List<String> kVibeCheckLocations = <String>[
+  ...kStudyLocations,
+  'Lab 1',
+  'Lab 2',
+  'Lab 3',
+  'Reception',
+];
+
+/// The campus study locations a tag can name, in wire order.
+///
+/// **Append only, and never reorder or remove.** The index is what travels
+/// on the air, so inserting an entry in the middle silently relabels every
+/// tag already in flight — a device would report the Library and be shown
+/// as being in a lab. Retire an entry by leaving it in place and hiding it
+/// from the picker.
+///
+/// REPLACED WHOLESALE on 2 Nov 2026, which is exactly the edit the rule
+/// above forbids, so the reasoning is recorded rather than left implied.
+/// The previous list was generic ('Library', 'Computer Lab', 'Cafeteria',
+/// …) and did not match the actual venue names on this campus, so every
+/// label was wrong in practice. Renaming in place is the whole change:
+/// index 0 is still index 0, nothing was inserted or removed mid-list.
+///
+/// What it costs: a device running a build from before this change shows
+/// the OLD name for the same index — index 0 reads 'Library' there and
+/// 'Venue 1' here. There is no version marker on the wire to detect that,
+/// so the only remedy is that every phone runs the same build. The APK
+/// published as v1.0-phase5 predates this, so it needs re-publishing
+/// before anyone pairs an old install against a new one.
+///
+/// From here the append-only rule applies again, and for real: this was a
+/// one-off correction made while the installed base is a handful of test
+/// phones, not a precedent.
+const List<String> kStudyLocations = <String>[
+  'Venue 1',
+  'Venue 2',
+  'Venue 3',
+  'Venue 4',
+  'Venue 5',
+  'Venue 6',
+  'Venue 7',
+  'Venue 8',
+  'Venue 9',
+  'Venue 10',
+  'Venue 11',
+  'Venue 12',
+  'Venue 13',
+  'Venue 14',
+  'Student Pods',
+  'Auditorium',
+  'Benches',
+];
+
+Uint8List encodeStudyLocation(int locationIndex) {
+  return Uint8List.fromList([
+    kStudyLocationProtocolMarker,
+    locationIndex & 0xFF,
+  ]);
 }
 
-String? decodeGameRunnerTag(List<int> bytes) {
-  if (bytes.isEmpty || bytes[0] != kGameRunnerTagProtocolMarker) return null;
-  return utf8.decode(bytes.sublist(1), allowMalformed: true);
+/// The location index carried alongside an SBF: advertisement, or null if
+/// there is none or it is not one this build knows.
+///
+/// An out-of-range index returns null rather than clamping. Clamping would
+/// invent a location the sender never chose, and a tag with no location is
+/// a state the UI already handles — whereas a wrong location is worse than
+/// no location for a feature whose whole purpose is finding someone.
+int? decodeStudyLocation(List<int> bytes) {
+  if (bytes.length < 2 || bytes[0] != kStudyLocationProtocolMarker) {
+    return null;
+  }
+  final index = bytes[1];
+  if (index >= kStudyLocations.length) return null;
+  return index;
+}
+
+/// Display name for a location index, or null when absent/unknown.
+String? studyLocationName(int? index) {
+  if (index == null || index < 0 || index >= kStudyLocations.length) {
+    return null;
+  }
+  return kStudyLocations[index];
 }
 
 // ── Lost & Found board post encoding (chunked) ──────────────────────────

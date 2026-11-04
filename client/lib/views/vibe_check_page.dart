@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:client/services/hops_constants.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
@@ -8,7 +9,6 @@ import 'package:client/widgets/hops_card.dart';
 import 'package:client/utils/report_content.dart';
 import 'package:client/services/unread_tracker.dart';
 import 'package:client/services/vibe_report_store.dart';
-import 'package:client/utils/profanity_filter.dart';
 
 
 class VibeCheckPage extends StatefulWidget {
@@ -38,8 +38,14 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
 
   int _selectedCrowdLevel = 0;
 
-  final TextEditingController _locationController = TextEditingController();
-  final FocusNode _focusNode = FocusNode();     // explicit focus for the text field
+
+  /// The chosen venue, or null until one is picked.
+  ///
+  /// Replaces a free-text field. Typed locations could not be grouped —
+  /// "Lab 1", "lab1" and "Lab one" are three different places to a map
+  /// and one place to a person — which defeats the point of a feature
+  /// whose whole output is "where are the crowds".
+  String? _selectedLocation;
 
   @override
   void initState() {
@@ -69,10 +75,10 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
   }
 
   Future<void> _saveLocation() async {
-    final location = censorProfanity(_locationController.text.trim());
+    final location = _selectedLocation ?? '';
     if (location.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Enter a location name")),
+        const SnackBar(content: Text("Pick a venue first")),
       );
       return;
     }
@@ -98,8 +104,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
 
     await widget.onAdvertiseVibeTag(location, level);
 
-    _locationController.clear();
-    _focusNode.unfocus();   // dismiss the keyboard after saving
+    setState(() => _selectedLocation = null);
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Saved $location as ${_levelNames[level]}")),
@@ -137,8 +142,6 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
   @override
   void dispose() {
     _expiryTimer?.cancel();
-    _locationController.dispose();
-    _focusNode.dispose();
     super.dispose();
   }
 
@@ -146,6 +149,110 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
     final minutes = DateTime.now().difference(timestamp).inMinutes;
     if (minutes < 1) return "just now";
     return "${minutes}m ago";
+  }
+
+  // ── Venue picker ─────────────────────────────────────────────────────
+  //
+  // Same control as Study Bunny's "Where?": one button carrying the
+  // current choice, with the list behind it in a sheet. A Wrap of 21
+  // chips would take more height than the rest of the form.
+
+  Widget _venueButton(ColorScheme colors) {
+    final chosen = _selectedLocation;
+    final isSet = chosen != null;
+    final accent = isSet ? colors.primary : colors.onSurface;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _pickVenue,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: isSet
+                ? colors.primary.withValues(alpha: 0.08)
+                : Colors.transparent,
+            border: Border.all(
+                color: isSet ? colors.primary : colors.primary.withValues(alpha: 0.5),
+                width: isSet ? 2 : 1.5),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.place_outlined,
+                  size: 18, color: accent.withValues(alpha: 0.8)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  chosen ?? "Tag this location",
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: isSet ? FontWeight.bold : FontWeight.w500,
+                    color: isSet
+                        ? colors.onSurface
+                        : colors.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+              Icon(Icons.expand_more, size: 20, color: accent.withValues(alpha: 0.6)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickVenue() async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) {
+        final colors = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.onSurface.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(100),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text("Which venue?",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              const SizedBox(height: 6),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final venue in kVibeCheckLocations)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.place_outlined, size: 20),
+                        title: Text(venue, style: const TextStyle(fontSize: 14)),
+                        trailing: _selectedLocation == venue
+                            ? const Icon(Icons.check, size: 20)
+                            : null,
+                        onTap: () => Navigator.pop(ctx, venue),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (picked == null) return;
+    setState(() => _selectedLocation = picked);
   }
 
   @override
@@ -270,33 +377,7 @@ class _VibeCheckPageState extends State<VibeCheckPage> {
             const SizedBox(height: 24),
             Row(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _locationController,
-                    focusNode: _focusNode,
-                    maxLength: 24,
-                    style: TextStyle(color: colors.onSurface),  // typed text visible
-                    decoration: InputDecoration(
-                      hintText: "e.g., Library, Cafeteria",
-                      hintStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.5)),
-                      labelText: "Tag this location",
-                      labelStyle: TextStyle(color: colors.onSurface.withValues(alpha: 0.7)),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: colors.primary, width: 1.5),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: colors.primary, width: 2),
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                    ),
-                  ),
-                ),
+                Expanded(child: _venueButton(colors)),
                 const SizedBox(width: 12),
                 ElevatedButton.icon(
                   icon: const Icon(Icons.save),

@@ -92,6 +92,40 @@ class AdminBleHub {
   final Map<String, _SigBuffer> _sigBuffers = {}; // keyed by advName
   final Set<String> _sigHandled = {};
 
+  // ── Why an alert is only ever announced once ───────────────────────────
+  //
+  // liveAlerts is keyed by SENDER ("EMG:victor"), which is what dedups
+  // repeat sightings while an alert is up. It is not enough to decide
+  // whether to notify, because entries leave that map two ways that have
+  // nothing to do with the alert being over for the admin:
+  //
+  //   * a stand-down (EMG_OFF:) removes it, and
+  //   * _pruneStale drops it after 45s without a sighting.
+  //
+  // Either way the next sighting finds `existing == null` and fires a
+  // fresh notification. A flare is relayed by every phone that hears it,
+  // so those sightings keep arriving for a while AFTER the sender has
+  // stood down — which is the reported "I keep getting spammed with
+  // notifications even after the alert is cancelled".
+  //
+  // Keyed by the full advertisement string, the same identity the
+  // notification registry uses, with a time-based expiry so a genuinely
+  // new emergency from the same person still announces itself.
+  final Map<String, DateTime> _announced = {};
+
+  /// Senders whose alert was explicitly stood down, and when.
+  ///
+  /// Suppresses the tail of relayed sightings that outlive the cancel.
+  /// Keyed by the sender key rather than the advertisement name because a
+  /// relay carries the original name — matching on the name alone would
+  /// let the very packets this exists to ignore through.
+  final Map<String, DateTime> _stoodDown = {};
+
+  /// Long enough to cover a flare's own lifetime plus the relay tail, so
+  /// one emergency is one notification; short enough that a real second
+  /// emergency from the same person is not swallowed.
+  static const Duration _announceMemory = Duration(minutes: 6);
+
   /// Call once, after Bluetooth permissions are granted (see
   /// admin_sign_in_screen.dart) and before anything tries to advertise or
   /// scan. Safe to call repeatedly — every call after the first is a no-op.
@@ -102,6 +136,10 @@ class AdminBleHub {
     // since — best-effort, same as everywhere else.
     KeyDirectory.sync();
     await BlePeripheral.initialize();
+    // Registered before the first advertisement so nothing can fail
+    // unobserved in the gap — the same ordering hops_app.dart uses.
+    BlePeripheral.setAdvertisingStatusUpdateCallback(
+        _handleAdvertisingStatusUpdate);
     await FlutterBluePlus.startScan(
       androidUsesFineLocation: true,
       continuousUpdates: true,
@@ -121,6 +159,59 @@ class AdminBleHub {
 
   StreamSubscription<List<ScanResult>>? _scanSub;
   Timer? _pruneTimer;
+
+  // ── Did the radio actually accept the last advertisement? ──────────────
+  //
+  // BlePeripheral.startAdvertising() posts to an Android Handler and
+  // returns immediately, so awaiting it proves NOTHING about whether the
+  // advertisement went out. The real verdict arrives asynchronously on
+  // AdvertiseCallback.onStartFailure, surfaced only through
+  // setAdvertisingStatusUpdateCallback.
+  //
+  // The admin app never registered that callback, so a rejected
+  // advertisement was indistinguishable from a sent one: the await
+  // succeeded, broadcastAdminChatMessage returned a msgId, the alert
+  // appeared in the admin's own list looking delivered, and nothing had
+  // left the radio. That is the single worst shape a bug can take in this
+  // app, and it is exactly the failure reported as "the alert doesn't
+  // send" with no error anywhere.
+  //
+  // Reported through a notifier rather than a callback so the UI can show
+  // it wherever it makes sense without this service knowing about widgets.
+  final ValueNotifier<String?> lastAdvertisingError = ValueNotifier(null);
+
+  /// Set while a broadcast is in flight, so an asynchronous failure can be
+  /// attributed to it rather than to some unrelated later advertisement.
+  bool _broadcastInFlight = false;
+  bool _broadcastFailed = false;
+
+  void _handleAdvertisingStatusUpdate(bool advertising, String? error) {
+    if (error == null) return;
+    debugPrint('Admin BLE advertising failed: $error');
+    if (_broadcastInFlight) _broadcastFailed = true;
+    lastAdvertisingError.value = _describeAdvertisingError(error);
+  }
+
+  /// Turns the plugin's raw error into something an admin can act on.
+  static String _describeAdvertisingError(String error) {
+    final e = error.toUpperCase();
+    if (e.contains('DATA_TOO_LARGE')) {
+      // The one that silently ate long alerts. Worth naming precisely,
+      // because the admin's only visible symptom is a message that never
+      // arrives and the instinct is to blame the receiving phone.
+      return 'the alert was too long for this phone to broadcast';
+    }
+    if (e.contains('TOO_MANY_ADVERTISERS')) {
+      return 'the Bluetooth radio is busy — try again in a moment';
+    }
+    if (e.contains('NOT_SUPPORTED') || e.contains('FEATURE_UNSUPPORTED')) {
+      return 'this phone cannot broadcast over Bluetooth, only receive';
+    }
+    if (e.contains('INTERNAL_ERROR')) {
+      return 'the Bluetooth radio reported an internal error';
+    }
+    return 'Bluetooth refused to broadcast it ($error)';
+  }
 
   /// Genuinely stops and restarts the scan. For the "my device has stopped
   /// hearing anything" case, where the radio is in a bad state and the only
@@ -172,17 +263,22 @@ class AdminBleHub {
             rssi: r.rssi,
           );
           changed = true;
-          // Fires once per newly-seen alert, not per scan result for it.
-          // Keyed by the full advertisement string, same as the student app
-          // — the hub's own `key` is sender-only (it's what dedups repeat
-          // sightings of one alert), which is too coarse to identify a
-          // notification.
-          if (isOfficial) {
-            NotificationService.showOfficialAlertNotification(
-                alertKey: name, sender: sender, reason: reason);
-          } else {
-            NotificationService.showEmergencyNotification(
-                alertKey: name, sender: sender, reason: reason);
+          // Fires once per emergency, not once per time it re-enters
+          // liveAlerts — see _announced. Keyed by the full advertisement
+          // string, same as the student app and the notification registry;
+          // the hub's own `key` is sender-only and too coarse to identify
+          // a notification.
+          final standDown = _stoodDown[key];
+          final alreadyAnnounced = _announced.containsKey(name);
+          if (!alreadyAnnounced && standDown == null) {
+            _announced[name] = DateTime.now();
+            if (isOfficial) {
+              NotificationService.showOfficialAlertNotification(
+                  alertKey: name, sender: sender, reason: reason);
+            } else {
+              NotificationService.showEmergencyNotification(
+                  alertKey: name, sender: sender, reason: reason);
+            }
           }
         } else {
           existing.lastSeen = DateTime.now();
@@ -213,6 +309,10 @@ class AdminBleHub {
         final isOfficial = name.startsWith("ADM_OFF:");
         // "EMG_OFF:" and "ADM_OFF:" are both exactly 8 characters.
         final key = "${isOfficial ? 'ADM' : 'EMG'}:${name.substring(8)}";
+        // Recorded whether or not this device currently holds the alert:
+        // the stand-down can arrive after _pruneStale has already dropped
+        // it, and the relayed originals keep coming either way.
+        _stoodDown[key] = DateTime.now();
         if (alerts.remove(key) != null) {
           changed = true;
           // Notifications are per-alert now, so this cancels exactly the
@@ -291,11 +391,19 @@ class AdminBleHub {
   }
 
   void _pruneStale() {
-    final cutoff = DateTime.now().subtract(const Duration(seconds: 45));
+    final now = DateTime.now();
+    final cutoff = now.subtract(const Duration(seconds: 45));
     final alerts = Map<String, LiveAlert>.from(liveAlerts.value);
     final before = alerts.length;
     alerts.removeWhere((_, a) => a.lastSeen.isBefore(cutoff));
     if (alerts.length != before) liveAlerts.value = alerts;
+
+    // Both of these are unbounded without this: the app runs for the whole
+    // admin session and every distinct advertisement string seen would be
+    // remembered forever.
+    final forget = now.subtract(_announceMemory);
+    _announced.removeWhere((_, at) => at.isBefore(forget));
+    _stoodDown.removeWhere((_, at) => at.isBefore(forget));
   }
 
   int _chatMsgCounter = 0;
@@ -394,16 +502,26 @@ class AdminBleHub {
     final totalCycles = chunks.length <= 3 ? 3 : 4;
 
     Future<void> advertiseChunk(int index) async {
+      final localName = encodeCommunityNameChunk(
+        senderTag: adminUsername,
+        msgId: msgId,
+        chunkIndex: index,
+        totalChunks: chunks.length,
+        chunkText: chunks[index],
+        isAdmin: true,
+      );
+      // Refused here rather than handed to a radio that will reject it on
+      // a callback this code used to ignore. Same guard _advertiseWithName
+      // applies in the student app; the admin path never had one, so an
+      // over-long chunk failed silently and the alert simply never arrived.
+      if (!advertisementNameFits(localName)) {
+        throw StateError('chunk $index is '
+            '${utf8.encode(localName).length} bytes, over the '
+            '$kAdvertisementNameMaxBytes-byte advertisement ceiling');
+      }
       await BlePeripheral.stopAdvertising();
       await BlePeripheral.startAdvertising(
-        localName: encodeCommunityNameChunk(
-          senderTag: adminUsername,
-          msgId: msgId,
-          chunkIndex: index,
-          totalChunks: chunks.length,
-          chunkText: chunks[index],
-          isAdmin: true,
-        ),
+        localName: localName,
         services: [HOPS_SERVICE_UUID],
       );
     }
@@ -421,6 +539,7 @@ class AdminBleHub {
         } else {
           // Cycling is genuinely done — safe for the next queued call (the
           // next part of a split alert, most commonly) to start its own.
+          _broadcastInFlight = false;
           BlePeripheral.stopAdvertising();
           finishTurn();
         }
@@ -429,9 +548,27 @@ class AdminBleHub {
 
     // First chunk awaited and checked — if advertising can't start at all,
     // say so now rather than spinning through a full cycle pretending.
+    _broadcastFailed = false;
+    _broadcastInFlight = true;
     try {
       await advertiseChunk(0);
     } catch (e) {
+      _broadcastInFlight = false;
+      lastAdvertisingError.value = e is StateError
+          ? 'the alert was too long for this phone to broadcast'
+          : 'Bluetooth refused to broadcast it';
+      finishTurn();
+      return null;
+    }
+
+    // The await above proves only that the call was accepted for posting.
+    // Give onStartFailure a moment to land before claiming success —
+    // otherwise a rejected advertisement still returns a msgId and the
+    // alert shows as sent. This is the whole reason the callback exists.
+    await Future.delayed(const Duration(milliseconds: 250));
+    if (_broadcastFailed) {
+      _broadcastInFlight = false;
+      await BlePeripheral.stopAdvertising();
       finishTurn();
       return null;
     }

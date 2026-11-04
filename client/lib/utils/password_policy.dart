@@ -53,6 +53,53 @@ String? validateEmail(String email) {
   return null;
 }
 
+/// The institutional domain Hops accounts belong to.
+///
+/// Hops is a campus safety app: the mesh is only meaningful among people
+/// who are actually on campus, and an account is the one thing tying a
+/// real student to a flare, a report or a moderation record. Restricting
+/// signup to the university's own domain is what makes "a Hops account is
+/// a Richfield student" true rather than aspirational.
+const String kInstitutionalEmailDomain = '@my.richfield.ac.za';
+
+/// Addresses allowed to sign up despite not being on the institutional
+/// domain.
+///
+/// TESTING ONLY, and deliberately a short explicit list of full addresses
+/// rather than a domain pattern — `@gmail.com` here would reopen signup to
+/// everyone, which is the whole thing the restriction exists to prevent.
+///
+/// Same shape of scoped relaxation as
+/// 0009_allow_duplicate_signup_emails_for_testing.sql, for the same
+/// reason: there are more test devices than institutional addresses to go
+/// around. EMPTY THIS LIST before the app is used by real students. It is
+/// mirrored server-side in 0021 — both must be emptied, since either one
+/// alone still lets a signup through.
+const List<String> kTestEmailAllowlist = <String>[
+  'victorsamehumadu@gmail.com',
+  'vikkysamehumadu@gmail.com',
+];
+
+/// Validates an address that is about to BECOME an account's email —
+/// signup and change-email. Not used by forgot-password.
+///
+/// That split is deliberate and load-bearing: accounts created before this
+/// restriction existed have non-institutional addresses, and those people
+/// must still be able to reset a password. Putting the domain check inside
+/// validateEmail() would have locked every legacy account out of recovery,
+/// which is a far worse failure than a loose signup rule.
+String? validateAccountEmail(String email) {
+  final generic = validateEmail(email);
+  if (generic != null) return generic;
+
+  final trimmed = email.trim().toLowerCase();
+  if (trimmed.endsWith(kInstitutionalEmailDomain)) return null;
+  if (kTestEmailAllowlist.contains(trimmed)) return null;
+
+  return "Use your Richfield student email "
+      "(ending in $kInstitutionalEmailDomain) to create a Hops account.";
+}
+
 // Deliberately exact (case-insensitive) matches against the single most
 // common leaked/guessed passwords, rather than trying to be a full
 // dictionary check — this catches the "12345678"/"password1" class of

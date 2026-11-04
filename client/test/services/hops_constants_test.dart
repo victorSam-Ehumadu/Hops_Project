@@ -21,7 +21,9 @@ void main() {
   group('advertisement budgets', () {
     test('community text budget is the name budget minus its overhead', () {
       expect(kCommunityNameTextBudget, kCommunityNameBudget - kCommunityNameOverhead);
-      expect(kCommunityNameTextBudget, 11);
+      // 22 - 13. Lowered from 11 when the budget dropped 24 -> 22;
+      // see kCommunityNameBudget for the handset evidence.
+      expect(kCommunityNameTextBudget, 9);
     });
 
     test('community overhead matches the documented field layout', () {
@@ -31,7 +33,10 @@ void main() {
 
     test('direct message text budget is the name budget minus its overhead', () {
       expect(kDirectMessageTextBudget, kCommunityNameBudget - kDirectMessageOverhead);
-      expect(kDirectMessageTextBudget, 13);
+      // 22 - 11. Was 13 when the name budget was 24; it moves with the
+      // budget because a DM rides the same advertisement name, and so the
+      // same handset ceiling applies to it.
+      expect(kDirectMessageTextBudget, 11);
     });
 
     test('direct message overhead matches the documented field layout', () {
@@ -43,7 +48,9 @@ void main() {
       // base64 carries 3 bytes per 4 characters, then 6 bytes go to the nonce.
       const base64Chars = kDirectMessageMaxChunks * kDirectMessageTextBudget;
       expect(kDirectMessageMaxPlaintextBytes, ((base64Chars ~/ 4) * 3) - 6);
-      expect(kDirectMessageMaxPlaintextBytes, 72);
+      // Falls out of the budget above rather than being chosen: 8 chunks x
+      // 11 characters of base64 = 88 -> 66 bytes, less the 6-byte nonce.
+      expect(kDirectMessageMaxPlaintextBytes, 60);
     });
 
     test('alert part budget stays inside the reliable few-chunk band', () {

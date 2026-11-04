@@ -120,17 +120,6 @@ const List<_PermissionInfo> _kPermissions = [
     ],
     safetyCritical: true,
   ),
-  _PermissionInfo(
-    permission: Permission.camera,
-    title: "Camera",
-    icon: Icons.photo_camera_outlined,
-    why: "Only used when you choose to take a profile picture or scan a "
-        "pairing code. Hops never opens the camera on its own.",
-    breaks: [
-      "You can't scan a pairing code (you can still type it in)",
-      "You can't take a new profile photo (you can still pick one)",
-    ],
-  ),
 ];
 
 class PermissionsScreen extends StatefulWidget {

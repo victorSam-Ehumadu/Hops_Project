@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/views/admin/admin_alert_screen.dart';
+import 'package:client/views/admin/admin_statistics_screen.dart';
 import 'package:client/views/admin/admin_settings_screen.dart';
 
 class AdminDashboardTab extends StatefulWidget {
@@ -176,9 +177,37 @@ class _AdminDashboardTabState extends State<AdminDashboardTab> {
                 _Stat("Admin actions (30d)", _stats!['actions_30d']),
                 _Stat("Admins", _stats!['admin_count']),
               ]),
+              const SizedBox(height: 4),
+              _buildStatisticsButton(colors),
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  /// Entry point to the charted, filterable view.
+  ///
+  /// The cards above stay as they are — fixed 7d/30d windows are the right
+  /// thing for an at-a-glance landing screen, and replacing them with a
+  /// chart would make the common case slower to read. This is the "now
+  /// show me properly" door.
+  Widget _buildStatisticsButton(ColorScheme colors) {
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: colors.primary,
+          side: BorderSide(color: colors.primary.withValues(alpha: 0.5)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+        icon: const Icon(Icons.insights_rounded),
+        label: const Text("Statistics & reports",
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => const AdminStatisticsScreen())),
       ),
     );
   }

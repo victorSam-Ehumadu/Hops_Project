@@ -12,9 +12,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/utils/auth_error_messages.dart';
 import 'package:client/utils/mesh_crypto.dart';
 import 'package:client/views/admin/admin_shell.dart';
@@ -59,12 +59,11 @@ class _AdminSignInScreenState extends State<AdminSignInScreen> {
       // asked up front rather than deferring to whichever screen first
       // needs it, same reasoning as _requestMeshPermissionsGate in
       // root_gatekeeper.dart.
-      await [
-        Permission.location,
-        Permission.bluetoothAdvertise,
-        Permission.bluetoothConnect,
-        Permission.bluetoothScan,
-      ].request();
+      //
+      // Version-gated via BluetoothPermissions: naming the Android 12 trio
+      // directly denies all three on an older handset, with no dialog and
+      // no way for the admin to grant them afterwards.
+      await BluetoothPermissions.request();
 
       // See mesh_crypto.dart's header comment for the salted-hashing
       // scheme — the salt has to be fetched before the hash can even be

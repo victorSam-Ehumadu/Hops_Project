@@ -11,6 +11,7 @@ import 'package:client/theme/app_theme.dart';
 import 'package:client/views/root_gatekeeper.dart';
 import 'package:client/views/hops_app.dart';
 import 'package:client/views/hops_splash_screen.dart';
+import 'package:client/services/account_standing.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/widgets/alarm_ringing_banner.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -297,17 +298,50 @@ class _HopsRootState extends State<HopsRoot> {
         },
       );
     }
-    return FutureBuilder<SharedPreferences>(
-      future: SharedPreferences.getInstance(),
+    return FutureBuilder<AccountStanding?>(
+      future: _resolveLaunchStanding(),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) return const SizedBox.shrink();
-        final savedToken = snapshot.data!.getString('saved_hops_token');
-        if (savedToken != null) {
-          return const HopsApp();
-        } else {
-          return const HopsRootGatekeeper();
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const SizedBox.shrink();
         }
+        // null == no usable session: either none was saved, or the one
+        // that was is under a moderation block and has just been ended.
+        if (snapshot.data == null) return const HopsRootGatekeeper();
+        return const HopsApp();
       },
     );
+  }
+
+  /// Resolves what the launch path should show: null when there is no
+  /// saved session, otherwise this account's moderation standing.
+  ///
+  /// The standing comes from local storage, NOT from the network. That is
+  /// the point — the old launch path checked only that a token existed, so
+  /// a banned or suspended user could force-close the app and be back in
+  /// until a 30-second poll next happened to succeed, and on an offline
+  /// device that was never. Reading the persisted verdict makes a restart
+  /// the thing that re-applies the block rather than the thing that shakes
+  /// it off. See account_standing.dart.
+  ///
+  /// A lapsed suspension clears itself inside load(), so this returns
+  /// good standing for one that has run its course without needing a
+  /// server round trip.
+  Future<AccountStanding?> _resolveLaunchStanding() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString('saved_hops_token') == null) return null;
+    final standing = await AccountStandingStore.instance.load();
+    if (!standing.blocksUse) return standing;
+
+    // Blocked: end the session here rather than entering HopsApp and
+    // bouncing straight back out of it.
+    //
+    // The token, and only the token — for a ban as well as a suspension.
+    // See endSessionForModeration for why a ban does not wipe either: it is
+    // reversible (unban_user), so an unbanned student would otherwise come
+    // back to an empty app. my_hops_id stays as the marker of whose data
+    // this is, which is what lets sign-in tell "the same person returning"
+    // from "somebody else on a shared phone".
+    await prefs.remove('saved_hops_token');
+    return null;
   }
 }

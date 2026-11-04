@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:client/services/bluetooth_permissions.dart';
@@ -10,6 +9,9 @@ import 'package:client/views/terms_screen.dart';
 import 'package:client/views/walkthrough_screen.dart';
 import 'package:client/views/email_verification_screen.dart';
 import 'package:client/utils/auth_error_messages.dart';
+import 'package:client/services/account_standing.dart';
+import 'package:client/views/account_management_screen.dart'
+    show discardLocalDataForAccountSwitch;
 import 'package:client/services/hops_engine.dart' show isReservedUsername;
 import 'package:client/utils/mesh_crypto.dart';
 import 'dart:convert';
@@ -23,6 +25,13 @@ class HopsRootGatekeeper extends StatefulWidget {
 }
 
 class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
+
+  @override
+  void initState() {
+    super.initState();
+    _explainModerationSignOutIfAny();
+  }
+
   String authEngineStatus = "System Ready";
   final _secureStorage = const FlutterSecureStorage();
 
@@ -52,10 +61,6 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
     // the user can change. That failed sign-up and sign-in outright on
     // those handsets, with "Err: Permissions Denied" and no way forward.
     final bluetoothGranted = await BluetoothPermissions.request();
-
-    // Camera is only for the QR pairing flow, not for sign-in, so it is
-    // requested alongside but never gates the result.
-    await Permission.camera.request();
 
     if (bluetoothGranted) {
       return true;
@@ -205,6 +210,9 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
       // reset code to anyway.
       final String targetedEmail = email.trim().toLowerCase();
 
+      // Known-blocked accounts never reach the network.
+      if (await _blockedLocally(targetedEmail)) return;
+
       // Server-side RPC, not a direct select+update — public.profiles no
       // longer grants anon/authenticated direct table access (see
       // supabase/migrations/0001_lockdown_profiles.sql). password_hash is
@@ -230,6 +238,20 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         setState(() => authEngineStatus = "Err: That email and password don't match any Hops account.");
         return;
       }
+
+      // A suspension leaves the local database in place so the user gets
+      // their messages back when it lifts (see endSessionForModeration).
+      // That is the one state in which a DIFFERENT person signing in here
+      // could inherit someone else's threads, so discard it first if the
+      // id we just authenticated is not the one that data belongs to.
+      // Must run BEFORE the prefs below overwrite my_hops_id, which is
+      // the marker it compares against.
+      await discardLocalDataForAccountSwitch(response['id'] as String?);
+
+      // In good standing by definition — the server would have raised
+      // otherwise — so clear any verdict left over from a lapsed
+      // suspension or a lifted ban.
+      await AccountStandingStore.instance.clear();
 
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setString('saved_hops_token', response['hops_token'] as String);
@@ -470,6 +492,66 @@ class _HopsRootGatekeeperState extends State<HopsRootGatekeeper> {
         }
       }
     }
+  }
+
+  /// Says why the user is looking at this screen instead of the app.
+  ///
+  /// A moderation sign-out is otherwise indistinguishable from having been
+  /// logged out at random, which reads as a broken app rather than a
+  /// decision somebody made. The verdict is already persisted by
+  /// AccountStandingStore, so this needs no network — which matters,
+  /// because the whole reason it is persisted is that this app spends most
+  /// of its life offline.
+  Future<void> _explainModerationSignOutIfAny() async {
+    final standing = await AccountStandingStore.instance.load();
+    if (!mounted || !standing.blocksUse) return;
+    setState(() => authEngineStatus = "Err: ${_describeStanding(standing)}");
+  }
+
+  String _describeStanding(AccountStanding standing) {
+    final reason =
+        standing.reason == null ? "" : " Reason: ${standing.reason}.";
+    if (standing.kind == AccountStandingKind.banned) {
+      // Says the data is safe, because the obvious fear on being signed
+      // out is that everything is gone — and it is not. Neither verdict
+      // deletes anything; see endSessionForModeration.
+      return "This account has been banned by a Hops admin, so it has been "
+          "signed out on this device. Your messages and contacts are still "
+          "here and will be back if the ban is lifted.$reason";
+    }
+    final until = standing.until;
+    final when = until == null
+        ? ""
+        : " until ${until.toIso8601String().split('T').first}";
+    return "This account is suspended$when, so it has been signed out on "
+        "this device. Your messages and contacts are still here — sign back "
+        "in once the suspension ends.$reason";
+  }
+
+  /// Refuses a sign-in we already know the server will refuse.
+  ///
+  /// Only when the email matches the account the block belongs to — a
+  /// suspension leaves `my_email` behind, and blocking *every* sign-in on
+  /// the device because the last user was suspended would lock out
+  /// everyone else who shares the phone. For any other email this returns
+  /// false and the server decides (signin_hops_user_by_email has checked
+  /// suspension since 0020).
+  ///
+  /// Worth doing locally as well as server-side because this check works
+  /// with no connection, and the one thing a moderated user is likely to
+  /// have is no connection.
+  Future<bool> _blockedLocally(String email) async {
+    final standing = await AccountStandingStore.instance.load();
+    if (!standing.blocksUse) return false;
+    final prefs = await SharedPreferences.getInstance();
+    final owner = prefs.getString('my_email');
+    if (owner == null || owner.toLowerCase() != email.toLowerCase()) {
+      return false;
+    }
+    if (mounted) {
+      setState(() => authEngineStatus = "Err: ${_describeStanding(standing)}");
+    }
+    return true;
   }
 
   @override

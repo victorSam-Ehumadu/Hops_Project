@@ -33,7 +33,11 @@ import 'package:client/widgets/hops_bot_avatar.dart';
 import 'package:client/views/token_generator.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/views/root_gatekeeper.dart';
-import 'package:client/views/account_management_screen.dart' show wipeLocalIdentityAndReturnToGatekeeper;
+import 'package:client/services/account_standing.dart';
+import 'package:client/services/community_alert_sync.dart';
+import 'package:client/services/local_data_notifier.dart';
+import 'package:client/views/account_management_screen.dart'
+    show endSessionForModeration;
 import 'package:client/models/feature_item.dart';
 import 'package:client/views/vibe_check_page.dart';
 import 'package:client/views/study_bunny_finder_page.dart';
@@ -117,9 +121,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // protocol. Reuses _FlareSigBuffer's shape (just chunks + totalChunks)
   // for reassembly; keyed by the exact "WR:.../WA:..." advertisement
   // string, same correlation-key trick the flare signature buffer uses.
-  Timer? _watchSeedCycleTimer;
-  final Map<String, _FlareSigBuffer> _pendingWatchSeedChunks = {};
-  final Set<String> _watchSeedHandledNames = {};
 
   // Global task-due reminder — moved here from task_tracker_page.dart,
   // which only ever checked while that exact screen was open and only
@@ -140,9 +141,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // if it's been banned. See _syncIdentityStatus.
   Timer? _identitySyncTimer;
 
-  // Hops & Robbers runner tag — see _advertisePresenceBeacon/_setGameRunnerTag.
-  bool _isGameRunnerTagActive = false;
-  String? _gameRunnerUsername;
+  // True once a moderation sign-out is under way — the poll keeps running
+  // until this widget is actually torn down, and firing a second teardown
+  // every 30 seconds would race the first one's navigation.
+  bool _moderationSignOutStarted = false;
 
   // True while nearbyConnectionsSessionCount (see main.dart) is above zero —
   // see _pauseBackgroundBleForNearbyConnections/_resumeBackgroundBle... below.
@@ -294,8 +296,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   final Map<String, DateTime> _lastChatPingNotifiedAt = {};
   static const Duration _kChatPingNotifyCooldown = Duration(minutes: 2);
 
-  final _gameEventStreamController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get gameEventStream => _gameEventStreamController.stream;
 
   // Watch request stream
   late final StreamController<List<String>> _pendingWatchStreamController;
@@ -304,6 +304,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // Active buddies stream
   late final StreamController<Set<String>> _watchingBuddiesStreamController;
   Stream<Set<String>> get watchingBuddiesStream => _watchingBuddiesStreamController.stream;
+  late final StreamController<Set<String>> _watchedByStreamController;
+  Stream<Set<String>> get watchedByStream => _watchedByStreamController.stream;
 
   // Feature toggles
   Set<int> enabledFeatureIds = {};
@@ -324,6 +326,15 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // Watch Me state
   Set<String> _watchingBuddies = {};
+
+  /// Who has accepted a request to watch ME.
+  ///
+  /// The mirror of _watchingBuddies, held by the other side of the same
+  /// pair. It did not exist before: the watched person got a one-off
+  /// "they accepted" notification and then held nothing, so there was
+  /// nobody for them to stop. A safety feature granted by consent has to
+  /// be withdrawable by the person who granted it.
+  Set<String> _watchedBy = {};
   final Set<String> _addedFriends = {};
   final List<String> pendingWatchRequests = [];
   final Set<String> _processingWatchAccepts = {};
@@ -337,6 +348,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     super.initState();
     _pendingWatchStreamController = StreamController<List<String>>.broadcast(
       onListen: () => _pendingWatchStreamController.add(List<String>.from(pendingWatchRequests)),
+    );
+    _watchedByStreamController = StreamController<Set<String>>.broadcast(
+      onListen: () => _watchedByStreamController.add(Set<String>.from(_watchedBy)),
     );
     _watchingBuddiesStreamController = StreamController<Set<String>>.broadcast(
       onListen: () => _watchingBuddiesStreamController.add(Set<String>.from(_watchingBuddies)),
@@ -370,6 +384,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // it off again, not app-restart amnesia.
     _checkPermissionsAndStartBLE();
     _refreshContactsTrayList();
+    // An Import My Data run replaces rows underneath this screen while
+    // it stays mounted — see local_data_notifier.dart.
+    localDataRevision.addListener(_refreshContactsTrayList);
     _maybeShowHelpHint();
 
     // Best-effort, fire-and-forget — see key_directory.dart. This is what
@@ -648,6 +665,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    localDataRevision.removeListener(_refreshContactsTrayList);
     avatarPathRevision.removeListener(_loadCurrentIdentityMetrics);
     nearbyConnectionsSessionCount.removeListener(_onNearbyConnectionsSessionCountChanged);
     chatPingRequest.removeListener(_onChatPingRequested);
@@ -669,13 +687,12 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     _radarStreamController.close();
     _pendingWatchStreamController.close();
     _watchingBuddiesStreamController.close();
-    _gameEventStreamController.close();
+    _watchedByStreamController.close();
     _diagTimer?.cancel();
     _scanRestartTimer?.cancel();
     _bleCountTimer?.cancel();
     _rotatingIdRefreshTimer?.cancel();
     _keyDirectorySyncTimer?.cancel();
-    _watchSeedCycleTimer?.cancel();
     _taskReminderTimer?.cancel();
     _identitySyncTimer?.cancel();
     for (final timer in _recentWatchTimers.values) {
@@ -690,7 +707,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   Future<void> _loadWatchState() async {
     final prefs = await SharedPreferences.getInstance();
     final watching = prefs.getStringList('watchingBuddies') ?? [];
-    setState(() => _watchingBuddies = watching.toSet());
+    final watchedBy = prefs.getStringList('watchedByBuddies') ?? [];
+    setState(() {
+      _watchingBuddies = watching.toSet();
+      _watchedBy = watchedBy.toSet();
+    });
     _notifyWatchingBuddiesChanged();
   }
 
@@ -716,15 +737,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // ---------- Discoverable mode ----------
   //
-  // Mirrors _setGameRunnerTag's shape — toggled from Radar's discoverable
-  // button. Re-advertises immediately so turning it on/off is reflected
-  // within seconds rather than waiting for the next incidental beacon
-  // refresh.
+  // Toggled from Radar's discoverable button. Re-advertises immediately so
+  // turning it on or off is reflected within seconds rather than waiting
+  // for the next incidental beacon refresh.
   Future<void> _setDiscoverable(bool value) async {
     _discoverableAutoOffTimer?.cancel();
     _discoverableAutoOffTimer = null;
     setState(() => _isDiscoverable = value);
-    if (_activePairingCode == null && !_isFlareActive) {
+    if (_activePairingCode == null && !_isFlareActive && !_ownFlareHoldsRadio) {
       _advertisePresenceBeacon();
     }
 
@@ -796,7 +816,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // rotating-ID scheme too. Without this, the beacon would silently stay
     // off for up to a minute until _startRotatingIdRefreshTimer's next
     // tick happened to fire.
-    if (_activePairingCode == null && !_isFlareActive) {
+    if (_activePairingCode == null && !_isFlareActive && !_ownFlareHoldsRadio) {
       _advertisePresenceBeacon();
     }
     _startRotatingIdRefreshTimer();
@@ -845,7 +865,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // after this same delay via resumeAfterPing().
     if (nearbyConnectionsSessionCount.value == 0 &&
         _activePairingCode == null &&
-        !_isFlareActive) {
+        !_isFlareActive &&
+        !_ownFlareHoldsRadio) {
       await _advertisePresenceBeacon();
     }
   }
@@ -948,8 +969,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         } else if (cycle + 1 < totalCycles) {
           step(0, cycle + 1);
         } else {
-          BlePeripheral.stopAdvertising();
-          _advertisePresenceBeacon();
+          _releaseRadioToPresenceBeacon();
         }
       });
     }
@@ -1044,12 +1064,32 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await BluetoothNameGuard.restore();
   }
 
+  // The name of the advertisement we most recently asked the radio to
+  // send. BlePeripheral's status callback reports a failure with no
+  // indication of WHICH advertisement failed, so this is what lets
+  // _handleAdvertisingStatusUpdate name the affected feature instead of
+  // showing a bare error code.
+  String? _lastAttemptedAdvertisementName;
+
   Future<void> _advertiseWithName(
     String localName,
     List<String> services, {
     ManufacturerData? manufacturerData,
     bool manufacturerDataInScanResponse = false,
   }) async {
+    _lastAttemptedAdvertisementName = localName;
+    // Refuse to send a name that cannot fit rather than letting the radio
+    // reject the whole advertisement asynchronously. Over-long names were
+    // the practical cause of "I sent it and nothing arrived": the send
+    // appeared to succeed and the failure only surfaced on a callback
+    // that, until now, ignored everything that was not a flare.
+    if (!advertisementNameFits(localName)) {
+      debugPrint('Advertisement name too long for one packet '
+          '(${utf8.encode(localName).length}B > '
+          '$kAdvertisementNameMaxBytes B): $localName');
+      _reportAdvertisingFailure('it was too long to broadcast');
+      return;
+    }
     await BlePeripheral.stopAdvertising();
     await BlePeripheral.startAdvertising(
       localName: localName,
@@ -1160,13 +1200,40 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     } finally {
       _emgRelayRunning = false;
     }
-    // Hand the slot back only once the queue is genuinely drained, and only
-    // if nothing more important claimed it meanwhile — the old code
-    // reverted unconditionally, which is how a relay that overlapped the
-    // start of our own flare could kill it outright.
-    if (!mounted || _isFlareActive || _ownFlareHoldsRadio) return;
+    // Hand the slot back only once the queue is genuinely drained. The
+    // "and only if nothing more important claimed it meanwhile" half is
+    // the helper's job now — the old code reverted unconditionally here,
+    // which is how a relay that overlapped the start of our own flare
+    // could kill it outright.
+    await _releaseRadioToPresenceBeacon();
+  }
+
+  /// Hands the radio back to the idle presence beacon. This is the ONLY
+  /// correct way to revert from a transient advertisement.
+  ///
+  /// Every short-lived advertisement — friend/watch request, vibe or study
+  /// tag, Lost & Found, a DM chunk cycle — schedules a timer to revert once
+  /// its window closes. Reverting *unconditionally* is a safety bug: if that
+  /// timer fires while our own Emergency Flare is on the air, it takes the
+  /// flare off the radio. Nothing puts it back once the signature cycle has
+  /// finished, so the UI keeps showing an active flare with its countdown
+  /// running while the device is transmitting nothing at all.
+  ///
+  /// [_ownFlareHoldsRadio] is deliberately wider than [_isFlareActive]: it
+  /// stays true across the 5s `EMG_OFF:` stand-down window too, so a revert
+  /// can't replace the stand-down broadcast either and strand nearby phones
+  /// still ringing on our behalf.
+  ///
+  /// Scanning is deliberately NOT handled here — a scan doesn't compete with
+  /// an advertisement, so callers that restart one should keep doing so
+  /// unconditionally, whatever this returns.
+  ///
+  /// Returns true if the radio was actually handed back.
+  Future<bool> _releaseRadioToPresenceBeacon() async {
+    if (!mounted || _isFlareActive || _ownFlareHoldsRadio) return false;
     await BlePeripheral.stopAdvertising();
     await _advertisePresenceBeacon();
+    return true;
   }
 
   void _cancelEmergencyFlare({bool silent = false}) {
@@ -1190,8 +1257,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     Future.delayed(const Duration(seconds: 5), () {
       _ownFlareHoldsRadio = false;
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
 
     setState(() => _isFlareActive = false);
@@ -1486,6 +1552,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   Future<void> _saveWatchState() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('watchingBuddies', _watchingBuddies.toList());
+    // The other half of the pair, so the watched side still knows who to
+    // withdraw from after a restart.
+    await prefs.setStringList('watchedByBuddies', _watchedBy.toList());
   }
 
   void _notifyWatchRequestsChanged() {
@@ -1523,20 +1592,40 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final advName = "FR:$targetToken:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
+    // NO seed cycling here, and it must not be added back without first
+    // doing the packet arithmetic. Manufacturer data cannot coexist with a
+    // local name in one 31-byte scan response:
+    //
+    //   name "FR:<token>:<user>"   23 bytes (2 AD header + 21 chars)
+    //   manufacturer seed chunk    24 bytes (4 AD header + 20 payload)
+    //                              ──
+    //                              47 bytes -> ADVERTISE_FAILED_DATA_TOO_LARGE
+    //
+    // An attempt to teach the peer our rotating seed here broke friend
+    // requests outright on real hardware. See "Naming a Radar dot" in
+    // CLAUDE.md for what that means for Radar, and why the seed still only
+    // travels over the RFCOMM profile exchange.
     Future.delayed(const Duration(seconds: 10), () {
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
   Future<void> _advertiseVibeTag(String location, int level) async {
     final advName = "VBT:$location:$level";
-    if (advName.length > 29) { _showToastFeedbackAlert("Location name too long"); return; }
+    // Byte-measured against the real ceiling. Was `length > 29`, which is
+    // both the wrong number (26 is the actual limit — see
+    // kAdvertisementNameMaxBytes) and the wrong unit (UTF-16 code units,
+    // not UTF-8 bytes), so a long location name sailed through and then
+    // failed silently on the radio.
+    if (!advertisementNameFits(advName)) {
+      _showToastFeedbackAlert(
+          "That location name is too long to broadcast - try a shorter one.");
+      return;
+    }
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 30), () {
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1554,8 +1643,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1572,17 +1660,36 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // _myActiveStudyTagId below.
   String? _myActiveStudyTagId;
 
-  Future<void> _advertiseStudyTag(String id, String subject) async {
+  Future<void> _advertiseStudyTag(String id, String subject,
+      {int? locationIndex}) async {
     final advName = "SBF:$id:$subject";
-    if (advName.length > 29) { _showToastFeedbackAlert("Subject too long"); return; }
+    if (!advertisementNameFits(advName)) {
+      _showToastFeedbackAlert(
+          "That subject is too long to broadcast - try a shorter one.");
+      return;
+    }
     _myActiveStudyTagId = id;
     await BlePeripheral.stopAdvertising();
-    await _advertiseWithName(advName, []);
+    // The location rides manufacturer data in the scan response, because
+    // the name has no room for it — "SBF:" + id + ":" already costs 9 of
+    // the 26-byte ceiling. See hops_constants.dart's
+    // kStudyLocationProtocolMarker. Nothing else competes for the single
+    // manufacturer-data slot during an SBF: advertisement.
+    await _advertiseWithName(
+      advName,
+      [],
+      manufacturerData: locationIndex == null
+          ? null
+          : ManufacturerData(
+              manufacturerId: kCommunityManufacturerId,
+              data: encodeStudyLocation(locationIndex),
+            ),
+      manufacturerDataInScanResponse: locationIndex != null,
+    );
     Future.delayed(kStudyTagAdvertiseDuration, () {
       if (!mounted) return;
       if (_myActiveStudyTagId == id) _myActiveStudyTagId = null;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1598,8 +1705,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1616,8 +1722,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1633,8 +1738,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1716,8 +1820,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         }
       }
       if (!mounted) return;
-      await BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      await _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     } finally {
       _lnfCycleActive = false;
@@ -1749,8 +1852,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     await _advertiseWithName(advName, []);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
       _startContinuousScan();
     });
   }
@@ -1759,13 +1861,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final advName = "FA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
+    // No seed cycling — see sendFriendRequest above for the packet
+    // arithmetic that rules it out.
     if (!_addedFriends.contains(sender)) {
       _addedFriends.add(sender);
       await _refreshContactsTrayList();
     }
     Future.delayed(const Duration(seconds: 5), () {
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
@@ -1802,6 +1905,24 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     Future.delayed(const Duration(seconds: 2), () => _processingWatchAccepts.remove(sender));
   }
 
+  /// Applies a WX: from [other] to whichever side of the pair we are on.
+  ///
+  /// Checks both sets rather than assuming a role: the same device can be
+  /// watching one person while being watched by another, and the sender
+  /// tag is truncated, so deciding by role would be guessing.
+  void _applyWatchCancelled(String other) {
+    final wasWatching = _watchingBuddies.remove(other);
+    final wasWatched = _watchedBy.remove(other);
+    if (!wasWatching && !wasWatched) return;
+    _saveWatchState();
+    if (wasWatching) _notifyWatchingBuddiesChanged();
+    if (wasWatched) _notifyWatchedByChanged();
+    if (mounted) setState(() {});
+    _showToastFeedbackAlert(wasWatching
+        ? "$other stopped sharing their location with you"
+        : "$other is no longer watching you");
+  }
+
   void _addRecentWatchSender(String sender) {
     _recentWatchSenders.add(sender);
     _recentWatchTimers[sender]?.cancel();
@@ -1815,96 +1936,39 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final advName = "WA:${_adUser(sender)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
-    // Cycle our own seed alongside the accept so sender's device learns
-    // how to recognize our beacon too — Watch Me relationships work in
-    // both directions, and neither side should need a separate chat for
-    // this to actually function.
-    _cycleWatchSeedChunks(advName, const Duration(seconds: 5));
     Future.delayed(const Duration(seconds: 5), () {
-      _watchSeedCycleTimer?.cancel();
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
-  // Cycles this device's own rotating-ID seed across manufacturer-data
-  // chunks alongside [advName] for [duration] — same cadence/shape as
-  // _startSignatureCycle, minus the signing step (the seed is static, so
-  // there's nothing to compute per call, just chunk and repeat). Lets a
-  // Watch request/accept teach the other device how to recognize this
-  // device's beacon without either side ever needing to have chatted —
-  // see hops_constants.dart's watch-seed chunk protocol.
-  void _cycleWatchSeedChunks(String advName, Duration duration) {
-    _watchSeedCycleTimer?.cancel();
-    final seed = _myRotatingSeed;
-    if (seed == null) return; // pre-rotating-ID account — nothing to share
-
-    final chunks = <List<int>>[];
-    for (var i = 0; i < seed.length; i += kWatchSeedChunkBudgetBytes) {
-      final end = (i + kWatchSeedChunkBudgetBytes < seed.length)
-          ? i + kWatchSeedChunkBudgetBytes
-          : seed.length;
-      chunks.add(seed.sublist(i, end));
-    }
-    if (chunks.isEmpty) return;
-
-    const perChunkDuration = Duration(milliseconds: 500);
-    final endTime = DateTime.now().add(duration);
-
-    void step(int index) {
-      if (!mounted || DateTime.now().isAfter(endTime)) return;
-      _advertiseWithName(
-        advName,
-        [],
-        manufacturerData: ManufacturerData(
-          manufacturerId: kCommunityManufacturerId,
-          data: encodeWatchSeedChunk(
-            chunkIndex: index,
-            totalChunks: chunks.length,
-            chunkBytes: chunks[index],
-          ),
-        ),
-        manufacturerDataInScanResponse: true,
-      );
-      _watchSeedCycleTimer = Timer(perChunkDuration, () => step((index + 1) % chunks.length));
-    }
-
-    step(0);
-  }
-
-  // Reassembles watch-seed chunks riding alongside a WR:/WA: advertisement
-  // (see _cycleWatchSeedChunks above / hops_constants.dart's watch-seed
-  // chunk protocol) and, once complete, saves it as [peer]'s rotating-ID
-  // seed — the exact same persistence call chat_terminal.dart's first-chat
-  // handshake uses, so Radar and Watch Me can't tell the difference
-  // afterwards between a contact learned via chat vs. via a watch request.
-  Future<void> _handleIncomingWatchSeedChunk({
-    required String name,
-    required String peer,
-    required ScanResult r,
-  }) async {
-    final mfgBytes = r.advertisementData.manufacturerData[kCommunityManufacturerId];
-    if (mfgBytes == null || _watchSeedHandledNames.contains(name)) return;
-    final decoded = decodeWatchSeedChunk(mfgBytes);
-    if (decoded == null) return;
-
-    final buffer = _pendingWatchSeedChunks.putIfAbsent(
-        name, () => _FlareSigBuffer(decoded.totalChunks));
-    buffer.chunks[decoded.chunkIndex] = decoded.bytes;
-    buffer.lastSeen = DateTime.now();
-
-    if (buffer.isComplete) {
-      _pendingWatchSeedChunks.remove(name);
-      _watchSeedHandledNames.add(name);
-      Future.delayed(const Duration(seconds: 40), () => _watchSeedHandledNames.remove(name));
-      await DatabaseHelper.instance
-          .upsertContactRotatingSeed(peer, base64Encode(buffer.reassembled));
-      await _refreshContactsTrayList(); // reloads _contactSeeds too
-    }
-
-    final staleCutoff = DateTime.now().subtract(const Duration(seconds: 20));
-    _pendingWatchSeedChunks.removeWhere((_, buf) => buf.lastSeen.isBefore(staleCutoff));
-  }
+  // REMOVED: seed-over-manufacturer-data.
+  //
+  // _cycleOwnSeedChunks / _handleIncomingSeedChunk used to push this
+  // device's 24-byte rotating-ID seed to a peer as manufacturer-data
+  // chunks riding alongside a WR:/WA: (and briefly FR:/FA:) advertisement,
+  // so a handshake could teach the peer how to recognise our beacon
+  // without a 1:1 chat.
+  //
+  // It cannot work, and never did. Manufacturer data and a local name
+  // cannot share one 31-byte scan response:
+  //
+  //   name "WR:<user>:<user>"    24 bytes (2 AD header + 22 chars)
+  //   manufacturer seed chunk    24 bytes (4 AD header + 20 payload)
+  //                              ──
+  //                              48 bytes -> ADVERTISE_FAILED_DATA_TOO_LARGE
+  //
+  // The whole advertisement failed, so the watch request itself never left
+  // the radio either. That went unnoticed because the failure arrives on
+  // an async callback which, until recently, only reported flare errors —
+  // so this looked like it worked for as long as nobody checked.
+  //
+  // Extending the same pattern to FR:/FA: is what made it visible: friend
+  // requests started reporting "data too large" on real hardware.
+  //
+  // Any future attempt needs a channel with actual room. The viable one is
+  // a dedicated chunked NAME payload with its own prefix (as CM:/DM: do) —
+  // 24 bytes of seed is two chunks of base64 — NOT manufacturer data
+  // alongside a name. Do the byte arithmetic first.
 
   void _onWatchRequestAccepted(String buddy) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1914,6 +1978,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // screen — this is what reaches them anywhere else in the app.
     UnreadTracker.instance.mark(UnreadSource.watchMe);
     NotificationService.showWatchAcceptedNotification(username: buddy);
+    // Remember them, so this side can end the watch too.
+    _watchedBy.add(buddy);
+    _saveWatchState();
+    _notifyWatchedByChanged();
   }
 
   Future<void> sendWatchRequest(String targetUsername) async {
@@ -1924,14 +1992,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final advName = "WR:${_adUser(targetUsername)}:${_adUser(myUsername)}";
     await BlePeripheral.stopAdvertising();
     await _advertiseWithName(advName, []);
-    // Cycle our own seed alongside the request — once they accept, they
-    // already have what's needed to recognize our beacon and start
-    // watching us for real, with no chat ever required.
-    _cycleWatchSeedChunks(advName, const Duration(seconds: 10));
     Future.delayed(const Duration(seconds: 10), () {
-      _watchSeedCycleTimer?.cancel();
-      BlePeripheral.stopAdvertising();
-      _advertisePresenceBeacon();
+      _releaseRadioToPresenceBeacon();
     });
   }
 
@@ -1942,6 +2004,44 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       _notifyWatchingBuddiesChanged();
     });
     _addRecentWatchSender(buddy);
+    // Tell them too, so the person being watched stops being told they
+    // are. Best-effort like every other broadcast: if it is missed, their
+    // side is corrected the next time either of them acts.
+    _broadcastWatchCancelled(buddy);
+  }
+
+  /// Ends a watch from the WATCHED side: "stop watching me".
+  void stopBeingWatchedBy(String watcher) {
+    setState(() {
+      _watchedBy.remove(watcher);
+      _saveWatchState();
+      _notifyWatchedByChanged();
+    });
+    _addRecentWatchSender(watcher);
+    _broadcastWatchCancelled(watcher);
+  }
+
+  /// "WX:<other>:<me>" — the watch between us is over.
+  ///
+  /// ONE prefix for both directions rather than two, because the message
+  /// is identical whichever side sends it, and the receiver knows which
+  /// of its two sets the sender belongs to without being told.
+  ///
+  /// Budget: 3 + 9 + 1 + 9 = 22 bytes, inside the 26-byte ceiling, and the
+  /// same shape WR:/WA: already use.
+  Future<void> _broadcastWatchCancelled(String other) async {
+    final advName = "WX:${_adUser(other)}:${_adUser(myUsername)}";
+    await BlePeripheral.stopAdvertising();
+    await _advertiseWithName(advName, []);
+    Future.delayed(const Duration(seconds: 6), () {
+      _releaseRadioToPresenceBeacon();
+    });
+  }
+
+  void _notifyWatchedByChanged() {
+    if (!_watchedByStreamController.isClosed) {
+      _watchedByStreamController.add(Set<String>.from(_watchedBy));
+    }
   }
 
   // ---------- Permissions & BLE ----------
@@ -2091,6 +2191,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     // flushPendingReports. Piggybacked on this same periodic "do we have a
     // connection" checkpoint rather than its own separate timer.
     unawaited(flushPendingReports());
+    // Community Alerts catch-up, on the same "do we have a connection"
+    // checkpoint. Deliberately NOT in the Community Alerts page: that page
+    // only exists once the tab has been built, so a fetch living there
+    // would never run for a student who has not opened it — which is the
+    // same mistake that stopped Vibe Check and Study Bunny being heard
+    // unless their page was open. See community_alert_sync.dart.
+    unawaited(CommunityAlertSync.instance.fetch());
     try {
       final response = await Supabase.instance.client
           .rpc('get_my_status', params: {'p_hops_token': token}).maybeSingle();
@@ -2117,26 +2224,47 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         }
       }
     } on PostgrestException catch (e) {
-      if (e.message.contains('account_banned') && mounted) {
-        await NotificationService.showAccountBannedNotification();
-        // Re-checked: the notification above is itself an await, and this
-        // runs on a background poll that can easily outlive the screen.
-        if (!mounted) return;
-        await wipeLocalIdentityAndReturnToGatekeeper(context);
-      } else if (e.message.contains('account_suspended') && mounted) {
-        // Was previously unhandled here — get_my_status (0015) has raised
-        // 'account_suspended' for a while, but this branch only ever
-        // checked for 'account_banned', so it fell through to the generic
-        // catch-all below and did nothing. A suspended account stayed
-        // signed in on-device indefinitely (until it happened to hit some
-        // *other* RPC that separately checks suspended_until) instead of
-        // being signed out the same way a ban is.
-        await NotificationService.showAccountSuspendedNotification(until: e.details as String?);
-        if (!mounted) return;
-        await wipeLocalIdentityAndReturnToGatekeeper(context);
+      // Classification and persistence both live in AccountStandingStore
+      // so the poll, the sign-in path and the launch gate cannot drift
+      // apart on what counts as a ban.
+      //
+      // This used to translate the error inline, matching only
+      // `e.message.contains(...)`, and then immediately call
+      // wipeLocalIdentityAndReturnToGatekeeper. Three problems, all fixed
+      // by going through the store:
+      //
+      //   * The verdict was never written down, so force-closing the app
+      //     discarded it and nothing re-applied it at launch.
+      //   * A suspension got the same full local wipe as a ban — the
+      //     sqlite database deleted, every message, task and vibe record
+      //     gone, for what might be a one-day timeout. Disproportionate
+      //     and irreversible; a suspension now holds the session and
+      //     blocks the UI instead.
+      //   * The user was dropped at the sign-in page with no explanation
+      //     at all, which reads as a broken app rather than a moderation
+      //     decision.
+      final standing = AccountStandingStore.classify(e);
+      if (standing == null) {
+        // Any other Postgrest error: offline or Supabase unreachable, try
+        // again on the next cycle.
+        return;
       }
-      // Any other Postgrest error: offline or Supabase unreachable, try
-      // again on the next cycle.
+      await AccountStandingStore.instance.record(standing);
+      if (standing.kind == AccountStandingKind.banned) {
+        await NotificationService.showAccountBannedNotification();
+      } else {
+        await NotificationService.showAccountSuspendedNotification(
+          until: standing.until?.toIso8601String().split('T').first,
+        );
+      }
+      // Re-checked: the notification above is itself an await, and this
+      // runs on a background poll that can easily outlive the screen.
+      if (!mounted) return;
+      // Ends the session and lands them on the sign-in page. Not a barrier
+      // over a still-live session — the token itself goes.
+      if (_moderationSignOutStarted) return;
+      _moderationSignOutStarted = true;
+      await endSessionForModeration(context, standing);
     } catch (_) {
       // Offline or Supabase unreachable — try again on the next cycle.
     }
@@ -2172,27 +2300,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // Every "go back to just being present" call site funnels through here
   // instead of calling _advertiseWithName(_presenceBeaconName(), [])
-  // directly, so the Hops & Robbers runner tag (see hops_constants.dart)
-  // rides along automatically wherever the presence beacon would
-  // otherwise be re-advertised — without every one of those ~10 call
-  // sites needing to individually know or care whether a game is active.
+  // directly, so anything that must ride alongside the presence beacon is
+  // attached in one place rather than at every one of those ~10 call
+  // sites.
   Future<void> _advertisePresenceBeacon() {
-    final runnerUsername = _gameRunnerUsername;
-    if (_isGameRunnerTagActive && runnerUsername != null) {
-      return _advertiseWithName(
-        _presenceBeaconName(),
-        [],
-        manufacturerData: ManufacturerData(
-          manufacturerId: kCommunityManufacturerId,
-          data: encodeGameRunnerTag(runnerUsername),
-        ),
-        manufacturerDataInScanResponse: true,
-      );
-    }
-    // Discoverable mode rides the same single manufacturer-data slot the
-    // game tag uses — the two are mutually exclusive in practice (an
-    // active Hops & Robbers runner tag wins if somehow both are on at
-    // once), so this only ever kicks in outside a game.
+    // Discoverable mode is the only current user of the single
+    // manufacturer-data slot on the idle beacon. If a second one is ever
+    // added the two must be made mutually exclusive here — there is one
+    // slot per advertisement, not one per feature.
     if (_isDiscoverable) {
       return _advertiseWithName(
         _presenceBeaconName(),
@@ -2207,26 +2322,6 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     return _advertiseWithName(_presenceBeaconName(), []);
   }
 
-  // Called by HopsAndRobbersPage when this device becomes (or stops being)
-  // a runner in an active game — see hops_and_robbers.dart's onSetGameRunnerTag.
-  // Kept, not deleted: this is the *sending* half of the Hops & Robbers
-  // runner tag, and the receiving half is still live further down (the
-  // "TAG:"/"GAME_" branches in the scan handler). The game itself is
-  // currently commented out of models/feature_item.dart's catalog, so
-  // nothing calls this — dormant rather than dead. Deleting it would leave
-  // a protocol with a parser and no writer.
-  // ignore: unused_element
-  void _setGameRunnerTag(bool active) {
-    _isGameRunnerTagActive = active;
-    _gameRunnerUsername = active ? myUsername : null;
-    // Re-advertise immediately rather than waiting for the next periodic
-    // refresh — a robber's proximity scan should pick up a fresh runner
-    // (or stop seeing a caught one) without a up-to-1-minute lag.
-    if (_activePairingCode == null && !_isFlareActive) {
-      _advertisePresenceBeacon();
-    }
-  }
-
   // Keeps the beacon's rotating token current while the app just sits idle
   // — nothing else in this file re-advertises on its own once a window
   // rolls over, since every other advertisement flow only reverts to the
@@ -2239,7 +2334,12 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       // all run their own short-lived advertisement windows that this
       // shouldn't clobber (see _lnfCycleActive's comment for what went
       // wrong before this check existed).
-      if (_activePairingCode != null || _isFlareActive || _lnfCycleActive) return;
+      if (_activePairingCode != null ||
+          _isFlareActive ||
+          _ownFlareHoldsRadio ||
+          _lnfCycleActive) {
+        return;
+      }
       _advertisePresenceBeacon();
     });
   }
@@ -2268,9 +2368,94 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // rejected outright.
   bool _bleAdvertiseSupported = true;
 
+  /// Turns an Android AdvertiseCallback failure into something a student
+  /// can act on. The raw values are constants like
+  /// ADVERTISE_FAILED_DATA_TOO_LARGE, which mean nothing to a user and
+  /// were previously shown verbatim.
+  static String _describeAdvertisingError(String error) {
+    final e = error.toUpperCase();
+    if (e.contains('DATA_TOO_LARGE')) {
+      return 'it was too long to broadcast';
+    }
+    if (e.contains('TOO_MANY_ADVERTISERS')) {
+      return "the phone's Bluetooth is busy";
+    }
+    if (e.contains('ALREADY_STARTED')) {
+      return 'another Hops broadcast was still going out';
+    }
+    if (e.contains('FEATURE_UNSUPPORTED')) {
+      return "this phone cannot broadcast over Bluetooth";
+    }
+    if (e.contains('INTERNAL_ERROR')) {
+      return "the phone's Bluetooth reported an internal error";
+    }
+    return error;
+  }
+
+  /// Maps an advertisement prefix back to the human name of the feature
+  /// that sent it. Keep in step with the dispatch chain in the scan
+  /// handler and with bluetooth_name_guard.dart's prefix list.
+  static String? _featureNameForAdvertisement(String? advName) {
+    if (advName == null) return null;
+    const labels = <String, String>{
+      'VBT:': 'Your Vibe Check report',
+      'VBX:': 'That report deletion',
+      'SBF:': 'Your study session',
+      'SBI:': 'Your reply',
+      'SBX:': 'That study session change',
+      'LNF:': 'Your Lost & Found post',
+      'LNR:': 'That resolution',
+      'FR:': 'Your friend request',
+      'FA:': 'Your friend accept',
+      'WR:': 'Your watch request',
+      'WA:': 'Your watch accept',
+      'CHT:': 'Your chat invite',
+      'CM:': 'Your message',
+      'CA:': 'Your alert',
+      'CX:': 'That deletion',
+      'DM:': 'Your message',
+      'ACK:': 'That pairing code',
+      'HOP:': 'That pairing code',
+      'EMG:': 'Your Emergency Flare',
+      'ADM:': 'Your Official Alert',
+    };
+    for (final entry in labels.entries) {
+      if (advName.startsWith(entry.key)) return entry.value;
+    }
+    return null;
+  }
+
+  /// Tells the user that something they just sent did not leave the radio.
+  ///
+  /// This used to be flare-only: the status callback returned early for
+  /// every other feature, so a failed Vibe Check, Study Bunny tag, Lost &
+  /// Found post, friend request or community message was written to
+  /// debugPrint and otherwise swallowed. The sender saw their own entry
+  /// appear locally (every feature records its own report immediately) and
+  /// had no way to know nothing had been transmitted — which presents
+  /// exactly as "I sent it, the other phone got nothing."
+  void _reportAdvertisingFailure(String reason) {
+    if (!mounted) return;
+    final feature =
+        _featureNameForAdvertisement(_lastAttemptedAdvertisementName);
+    final what = feature ?? "That";
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("$what was not sent — $reason. "
+            "Check Bluetooth is on and try again."),
+        backgroundColor: Colors.orange.shade900,
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
   void _handleAdvertisingStatusUpdate(bool advertising, String? error) {
     if (error == null) return;
-    debugPrint('❌ BLE advertising failed: $error');
+    debugPrint('BLE advertising failed: $error');
+    // Every feature now hears about this, not just flares. The flare
+    // branch below stays separate because it has to do more than report:
+    // it must also stop claiming the flare is live.
+    _reportAdvertisingFailure(_describeAdvertisingError(error));
     // A flare that failed to go out must never keep claiming it's live —
     // same rule _broadcastEmergencyFlare already applies to the errors it
     // *can* see. This is the path that catches the ones it can't.
@@ -2281,10 +2466,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       _flareSigCycleTimer = null;
       if (mounted) {
         setState(() => _isFlareActive = false);
+        // Replaces the generic notice above with the louder, flare-specific
+        // one — this is the one case where the stakes justify shouting.
+        ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                "⚠️ Emergency flare did NOT go out ($error). Check Bluetooth is on, then try again."),
+                "Emergency flare did NOT go out (${_describeAdvertisingError(error)}). "
+                "Check Bluetooth is on, then try again."),
             backgroundColor: Colors.red.shade900,
             duration: const Duration(seconds: 10),
           ),
@@ -2409,7 +2598,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             final id = name.substring(4, 8);
             final subject = name.substring(9);
             if (subject.isNotEmpty) {
-              final isNew = StudyBunnyStore.instance.record(id: id, subject: subject);
+              // Rides the same ScanResult as the name, so it is always
+              // available here when the sender included one. A result
+              // without it (older build, or no location chosen) decodes
+              // to null and record() keeps any location already known for
+              // this tag — see its own note on why.
+              final mfgBytes = r.advertisementData
+                  .manufacturerData[kCommunityManufacturerId];
+              final locationIndex =
+                  mfgBytes == null ? null : decodeStudyLocation(mfgBytes);
+              final isNew = StudyBunnyStore.instance.record(
+                  id: id, subject: subject, locationIndex: locationIndex);
               if (isNew) UnreadTracker.instance.mark(UnreadSource.studyBunny);
             }
           }
@@ -2537,10 +2736,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         if (name.startsWith("FA:")) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
-            if (!_addedFriends.contains(parts[1])) {
-              _addedFriends.add(parts[1]);
+            final sender = parts[1];
+            if (!_addedFriends.contains(sender)) {
+              _addedFriends.add(sender);
               await _refreshContactsTrayList();
-              await NotificationService.showFriendAcceptedNotification(username: parts[1]);
+              await NotificationService.showFriendAcceptedNotification(username: sender);
             }
           }
         }
@@ -2581,17 +2781,26 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               UnreadTracker.instance.mark(UnreadSource.watchMe);
               await NotificationService.showWatchRequestNotification(sender: sender);
             }
-            // The sender's rotating-ID seed rides alongside the WR: name
-            // for its whole cycling window — reassemble regardless of
-            // whether we've already recorded this exact request, so a
-            // lingering rebroadcast still finishes teaching us their seed.
-            // This is what lets Watch Me work on a friend you've never
-            // actually chatted with.
-            await _handleIncomingWatchSeedChunk(name: name, peer: sender, r: r);
           }
         }
 
         // Watch ACK – permanent one‑time snackbar
+        // Watch cancelled, from either side of the pair.
+        if (name.startsWith("WX:")) {
+          final parts = name.substring(3).split(":");
+          if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
+            final other = parts[1];
+            // Dedup on the whole advertisement, the same way WA: does —
+            // this name is re-broadcast for several seconds.
+            if (!_handledWatchAcks.contains(name)) {
+              _handledWatchAcks.add(name);
+              Future.delayed(const Duration(seconds: 30),
+                  () => _handledWatchAcks.remove(name));
+              _applyWatchCancelled(other);
+            }
+          }
+        }
+
         if (name.startsWith("WA:")) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
@@ -2600,50 +2809,9 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
               _handledWatchAcks.add(sender);
               _onWatchRequestAccepted(sender);
             }
-            // Same seed exchange as WR: above, other direction — lets the
-            // original requester recognize the accepter's beacon too.
-            await _handleIncomingWatchSeedChunk(name: name, peer: sender, r: r);
           }
         }
 
-        // Tag game
-        if (name.startsWith("TAG:")) {
-          final parts = name.substring(4).split(":");
-          if (parts.length == 2 && parts[0] == myUsername) {
-            final tagger = parts[1];
-            // `continue`, not `return`: this sits inside the loop over scan
-            // results, and bailing out entirely would drop every remaining
-            // advertisement in the batch.
-            if (!mounted) continue;
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (ctx) => AlertDialog(
-                title: const Text("You've been tagged!"),
-                content: Text("$tagger tagged you!"),
-                actions: [
-                  ElevatedButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text("OK"),
-                  ),
-                ],
-              ),
-            );
-          }
-        }
-        // Hops & Robbers game actions
-        if (name.startsWith("GAME_")) {
-          final parts = name.substring(5).split(":");
-          if (parts.length == 2) {
-            final action = parts[0];
-            final data = <String, String>{};
-            for (final pair in parts[1].split(';')) {
-              final kv = pair.split('=');
-              if (kv.length == 2) data[kv[0]] = kv[1];
-            }
-            _gameEventStreamController.add({'action': action, 'data': data});
-          }
-        }
         // Emergency Flare (with reason parsing)
         if (name.startsWith("EMG:")) {
           // Ignore own flares (we're the sender) — must be an exact match
@@ -3172,11 +3340,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             watchingBuddies: _watchingBuddies,
             contactSeeds: _contactSeeds,
             watchingBuddiesStream: watchingBuddiesStream,
+            watchedBy: _watchedBy,
+            watchedByStream: watchedByStream,
             pendingWatchStream: pendingWatchStream,
             onSendWatchRequest: sendWatchRequest,
             onAcceptWatchRequest: acceptWatchRequestFromCard,
             onDeclineWatchRequest: declineWatchRequestFromCard,
             onStopWatching: stopWatchingBuddy,
+            onStopBeingWatched: stopBeingWatchedBy,
             onClearAll: clearAllWatchState,
           ),
         ),
@@ -3241,6 +3412,10 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     String title, {
     bool showMeta = true,
     Widget Function(ColorScheme colors)? metaReplacement,
+    // The icon beside the title. Defaults to the Bluetooth mark, which is
+    // right for a tab about the radio and wrong for one about people —
+    // pass something that matches what the tab actually shows.
+    IconData icon = Icons.bluetooth_audio,
   }) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -3250,7 +3425,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       backgroundColor: theme.scaffoldBackgroundColor.withValues(alpha: 0.8),
       title: Row(
         children: [
-          Icon(Icons.bluetooth_audio, color: colors.primary),
+          Icon(icon, color: colors.primary),
           const SizedBox(width: 8),
           Flexible(
             child: Text(
@@ -3810,7 +3985,8 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     return Scaffold(
-      appBar: _buildSharedCustomAppBar("Contacts", showMeta: false),
+      appBar: _buildSharedCustomAppBar("Contacts",
+          showMeta: false, icon: Icons.people_alt_rounded),
       body: Container(
         decoration: BoxDecoration(
           gradient: RadialGradient(
