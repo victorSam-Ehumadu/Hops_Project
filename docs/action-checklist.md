@@ -286,11 +286,45 @@ work.
       accounts cannot share an email. Steps are in that file's "TO REVERT"
       section. Note it also makes forgot-password deterministic, which it
       currently is not for shared addresses.
-- [ ] **Finish the email encryption** by dropping the plaintext column.
-      Encryption at rest is only actually achieved once it is gone.
-      `0021` section 8 has the verification steps and the list of readers
-      to rewrite first. It is a one-way change, so it is deliberately not
-      automatic.
+- [ ] **Finish the email encryption** by applying
+      `0026_retire_plaintext_email.sql`. Written 5 Nov 2026 and ready, but
+      deliberately NOT applied — read its header first, because it is
+      irreversible and it rewrites the whole sign-in path at once.
+
+      Two things to know before you run it:
+
+      - **Back both Vault keys up off the database first.** That is the
+        item two lines below this one, and it is the difference between
+        "encrypted" and "permanently unreadable". Once the plaintext
+        column is gone, losing `hops_email_encryption_key` means nobody
+        can sign in by email or reset a password, ever, with no recovery
+        path.
+      - **Rehearse it on a restored copy**, which costs nothing:
+        ```
+        powershell -ExecutionPolicy Bypass -File .\scripts\verify-backup.ps1 -Keep
+        psql -U postgres -d hops_restore_test -f supabase\migrations\0026_retire_plaintext_email.sql
+        dropdb hops_restore_test
+        ```
+        If it commits there, the shape is right.
+
+      `0021` section 8 described this step, but **its list of readers was
+      wrong in both directions** — it missed `get_password_salt_by_email`
+      (every email sign-in calls it first, so following that list would
+      have broken sign-in for everyone) and named `admin_list_users`,
+      which does not exist. `0026`'s header records the real list and how
+      it was derived. Prerequisite 3 is already satisfied: as of the
+      4 Nov backup all 14 profiles have `email`, `email_encrypted` and
+      `email_lookup` populated.
+
+      Note `0026` does **not** add a unique index on `email_lookup`, because
+      that would silently re-impose the email uniqueness `0009` removed for
+      testing. Reverting `0009` and applying `0026` are independent; the
+      index to create is named in both files.
+
+      Still not finished afterwards: `password_reset_otps` and
+      `email_verification_otps` keep plaintext email columns of their own,
+      so "emails are encrypted at rest" is only true of `profiles` until
+      those are dealt with too.
 
 ---
 

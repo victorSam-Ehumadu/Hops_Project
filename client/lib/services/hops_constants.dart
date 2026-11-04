@@ -649,10 +649,22 @@ int get kDirectMessageMaxPlaintextBytes {
 // secure storage next to private_key). The token below is deterministic
 // from that seed + a coarse time window, so it changes on its own schedule
 // without any coordination between devices. Only someone who already holds
-// the *same* seed — exchanged pairwise, once, over an already-encrypted
-// chat session (HopsChatService payload type 0x03, see chat_terminal.dart)
+// the *same* seed — exchanged pairwise, once, over a direct 1:1 chat
+// session (HopsChatService payload type 0x03, see chat_terminal.dart)
 // — can recompute it and recognize a beacon as belonging to a known
 // contact. Everyone else just sees an opaque, changing string.
+//
+// That exchange is point-to-point but NOT encrypted: RfcommChatService
+// opens an insecure socket (createInsecureRfcommSocketToServiceRecord /
+// listenUsingInsecureRfcommWithServiceRecord), deliberately, because the
+// secure variant kicks off OS-level bonding and surfaced as an
+// unsolicited "Pair with X?" dialog on every connection. This comment
+// used to claim the session was "already-encrypted", which was simply
+// wrong and overstated the guarantee — the protection here is that the
+// seed never rides a *broadcast*, so a passive scanner never sees it,
+// not that the link is confidential. Anyone in RFCOMM range who is
+// actively connected to one of the two devices is a different threat,
+// and one this does not address.
 
 /// 15 minutes: the same order of magnitude Exposure Notification rotates
 /// its rolling identifiers on — long enough that resolving a contact's

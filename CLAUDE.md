@@ -12,8 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   probe that reports which ones are actually live. Run it before trusting any server-side
   feature — a missing migration has already been mistaken for an app bug more than once.
 - `website/` — the static marketing/download site at `hopsapp.me` (plain HTML/CSS, no build step,
-  unrelated to the app's code). Five pages share the single `styles.css`, so **a class renamed
-  there fails silently on whichever page you didn't open** — grep before renaming. Three things
+  unrelated to the app's code). Six pages share the single `styles.css`, so **a class renamed
+  there fails silently on whichever page you didn't open** — grep before renaming.
+  `privacy.html` is the POPIA/GDPR privacy notice, linked from every footer and called out in a
+  note box on `download.html`; it still carries a `TODO` for the real information officer name
+  and mailbox, which must be filled in before real users (a policy naming an unreachable
+  contact is worse than none). Three things
   that are easy to break:
   - **Dark mode is token-only.** `:root` and the `prefers-color-scheme: dark` block define
     colours; components must reference tokens and never hardcode one, or they look right in light
@@ -857,6 +861,15 @@ Current shape of the backend, useful for sanity-checking a dump: 9 tables, all w
 and **zero policies** (deny-all by design — everything goes through 65 `SECURITY DEFINER`
 functions), 74 `REVOKE`s, 61 `GRANT EXECUTE`s. If a dump comes back with policies in it, something
 changed. The ninth table is `community_alerts`, added by `0024` — so a restore reporting only 8 is itself evidence that `0024` never applied, which is a cheaper check than reading the function list. The `SECURITY DEFINER` count also moves with each migration (`0024` adds three functions, `0025` one), so treat 65 as the figure at `0023` rather than a constant.
+
+`0026_retire_plaintext_email.sql` is written but **deliberately unapplied** — it drops
+`profiles.email` and rewrites the eight functions that read or write it. It is irreversible and
+gated on both Vault keys being stored off the database; its header carries the prerequisites and
+a rehearse-on-a-restored-copy procedure. Worth knowing if you touch anything on the email path:
+`0021`'s own section-8 list of readers to rewrite is **wrong in both directions** — it missed
+`get_password_salt_by_email` (which every email sign-in calls first, so following that list
+breaks sign-in for everyone) and named `admin_list_users`, which does not exist in this schema.
+`0026`'s header has the real list and how it was derived.
 
 Since `0020` there is also a unique index `profiles_username_unique_ci` on
 `lower(username)` — a dump without it means `0020` was never applied, and duplicate usernames are
