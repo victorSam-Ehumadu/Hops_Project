@@ -513,6 +513,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // leave two dialogs to dismiss, with only the top one visible.
   bool _flareDialogOpen = false;
 
+  /// Owned by this State, not by the dialog — see
+  /// _showFlareReasonDialog for why that distinction caused a crash.
+  final TextEditingController _flareReasonController =
+      TextEditingController();
+
   void _showFlareConfirmDialog() {
     if (!mounted || _flareDialogOpen) return;
     _flareDialogOpen = true;
@@ -554,21 +559,43 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   }
 
   void _showFlareReasonDialog() {
-    final reasonController = TextEditingController();
+    // Reused and cleared, NOT created per dialog, and disposed with this
+    // State rather than when the dialog closes.
+    //
+    // It used to be a local disposed in whenComplete, and that was the
+    // first domino in the red screen. showDialog's future completes the
+    // moment the route is popped, but the route keeps rebuilding through
+    // its exit animation — so the TextField was still bound to a
+    // controller that had just been disposed:
+    //
+    //   A TextEditingController was used after being disposed.
+    //   'package:flutter/.../framework.dart': Failed assertion:
+    //     '_dependents.isEmpty': is not true
+    //   Tried to build dirty widget in the wrong build scope
+    //
+    // in that order, on a Galaxy A04e. The two framework errors were the
+    // cascade; this was the cause. A field owned by the State cannot be
+    // used after disposal, because it outlives every dialog that shows it.
+    _flareReasonController.clear();
     _flareDialogOpen = true;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("What is the emergency?"),
         content: TextField(
-          controller: reasonController,
+          controller: _flareReasonController,
           autofocus: true,
           maxLength: 25,
           decoration: const InputDecoration(
             hintText: "e.g., Fire in Lab 3",
+            // maxLength renders a character counter beneath the field, and
+            // that extra line is what overflowed this dialog by 13px once
+            // the keyboard was up ("A RenderFlex overflowed by 13 pixels").
+            // The limit still applies; only the counter is hidden.
+            counterText: '',
           ),
           onSubmitted: (_) =>
-              _submitFlareReason(ctx, reasonController.text),
+              _submitFlareReason(ctx, _flareReasonController.text),
         ),
         actions: [
           TextButton(
@@ -581,16 +608,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () =>
-                _submitFlareReason(ctx, reasonController.text),
+                _submitFlareReason(ctx, _flareReasonController.text),
             child: const Text("ACTIVATE",
                 style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
-    ).whenComplete(() {
-      _flareDialogOpen = false;
-      reasonController.dispose();
-    });
+    ).whenComplete(() => _flareDialogOpen = false);
   }
 
   /// Closes the reason dialog without sending.
@@ -741,6 +765,11 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    // The flare reason field's controller lives as long as this State, so
+    // this is the only correct place to dispose it. Disposing it when the
+    // dialog closed is what produced the red screen — the route keeps
+    // rebuilding through its exit animation.
+    _flareReasonController.dispose();
     localDataRevision.removeListener(_refreshContactsTrayList);
     avatarPathRevision.removeListener(_loadCurrentIdentityMetrics);
     nearbyConnectionsSessionCount.removeListener(_onNearbyConnectionsSessionCountChanged);
