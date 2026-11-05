@@ -776,10 +776,14 @@ skips confirmation:
   or warm via `onNewIntent`.
 - The app-icon shortcut (`quick_actions`, `shortcutNotifier`).
 - **The app-bar button on the Radar/Home tab** (`radar_screen.dart`'s `_buildFlareButton`),
-  added 5 Nov 2026 in the slot the Hops Shop had taken. A flare button had been removed from
-  exactly this spot once, for two stated reasons, and both are answered rather than ignored:
-  the removed one was **hold-to-fire**, one gesture from sending and so easy to trigger by
-  accident, whereas this one only opens the dialog, so a stray tap cannot broadcast; and
+  added 5 Nov 2026 in the slot the Hops Shop had taken. It is **long-press**, restoring the
+  gesture the original button used. A flare button had been removed from exactly this spot once,
+  for two stated reasons, and both are answered rather than ignored: "easy to set off by
+  accident" is handled by requiring a deliberate hold, then a confirmation, then a typed reason
+  — a tap cannot raise a flare and instead says which gesture is needed, because a control
+  that ignores taps silently reads as broken. (A correction worth keeping: the removed button was
+  described here as "hold-to-fire". Checking `29e5265` shows it was `onLongPress` opening the same
+  confirm dialog, so that was never accurate.) And
   "useless in the situation it exists for" argues it is not *sufficient*, not that it is
   harmful — the tile and shortcut remain for the phone-in-pocket case, and this is additive
   for when the app is already open. While a flare is active the same button becomes the

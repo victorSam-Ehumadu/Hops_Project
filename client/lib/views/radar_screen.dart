@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+// HapticFeedback, for the flare button's long-press confirmation.
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/services/hops_constants.dart';
@@ -43,10 +45,12 @@ class RadarScreen extends StatefulWidget {
   // it is the slot the Hops Shop briefly occupied. It was removed once for
   // two stated reasons; both are addressed rather than ignored:
   //
-  //   * "easy to set off by accident" — the button that was removed was
-  //     HOLD-to-fire, which is a single gesture away from sending. This one
-  //     only opens hops_app.dart's _showFlareConfirmDialog, so firing takes
-  //     a confirm AND a typed reason. A stray tap cannot raise a flare.
+  //   * "easy to set off by accident" — it is LONG-PRESS, restoring the
+  //     gesture the original button used (29e5265). Checked rather than
+  //     assumed: that button was `onLongPress` and it opened the confirm
+  //     dialog, so "hold-to-fire" was never an accurate description of it.
+  //     Raising a flare now takes a deliberate hold, then a confirmation,
+  //     then a typed reason. A tap cannot do it, and says so.
   //   * "useless in the situation it exists for" — true as an argument that
   //     it is not SUFFICIENT, and it isn't the primary trigger: the Quick
   //     Settings tile and app-icon shortcut still exist for the
@@ -108,6 +112,28 @@ class _RadarScreenState extends State<RadarScreen>
     return Colors.red;
   }
 
+  /// Told to the user when they tap the flare button instead of holding it.
+  ///
+  /// Short, and it names the gesture rather than scolding. Uses the same
+  /// red as the button so it reads as coming from that control.
+  void _showFlareHoldHint(bool active) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 2),
+        backgroundColor: const Color(0xFFD32F2F),
+        content: Text(
+          active
+              ? 'Hold the button to stand the flare down.'
+              : 'Hold the button to raise an Emergency Flare.',
+          style: const TextStyle(color: Colors.white),
+        ),
+      ),
+    );
+  }
+
   /// The app-bar Emergency Flare control.
   ///
   /// Two states, and the swap matters: while a flare is up this is the
@@ -115,24 +141,57 @@ class _RadarScreenState extends State<RadarScreen>
   /// raised does nothing useful, whereas cancelling is the thing you
   /// urgently want and the SnackBar that offered it may well be gone.
   ///
-  /// Tapping NEVER sends. It opens hops_app.dart's confirm dialog, which
-  /// then asks for a reason before anything is broadcast.
+  /// LONG PRESS, not tap, and it still never sends on its own — the gesture
+  /// only opens hops_app.dart's confirm dialog, which then asks for a reason
+  /// before anything is broadcast. So raising a flare takes a deliberate
+  /// hold, a confirmation and a typed reason.
+  ///
+  /// A plain tap is handled too, and deliberately does not fall through to
+  /// the dialog: it says what gesture is needed instead. A control that
+  /// ignores taps silently reads as broken, and someone poking at a red
+  /// button in an emergency needs to be told what to do, not left guessing.
+  ///
+  /// Both states use the same gesture. Cancelling is not the urgent half —
+  /// the SnackBar's CANCEL is still there for that — and an accidentally
+  /// cancelled flare is its own quiet failure, so it gets the same guard.
   Widget _buildFlareButton() {
     final active = widget.isFlareActive;
     // Fixed red in both states — see the call site for why this one control
     // does not follow the theme.
     const flare = Color(0xFFD32F2F);
     return Tooltip(
-      message: active ? 'Stand down emergency flare' : 'Emergency Flare',
+      message: active
+          ? 'Hold to stand down the emergency flare'
+          : 'Hold to raise an Emergency Flare',
+      // MANUAL, and this is load-bearing. Tooltip's default triggerMode on
+      // touch is TooltipTriggerMode.longPress (tooltip.dart's
+      // _defaultTriggerMode), so a Tooltip wrapped around a long-press
+      // control binds the SAME gesture twice: the tooltip inserts an
+      // overlay entry while this button's handler pushes a dialog, and
+      // tearing those down together threw
+      //   'package:flutter/src/widgets/framework.dart':
+      //   Failed assertion: '_dependents.isEmpty': is not true
+      // the moment anyone actually held the button. Manual keeps the
+      // message for mouse hover on the Windows build — hover is handled
+      // separately from triggerMode — while leaving the long press to us.
+      triggerMode: TooltipTriggerMode.manual,
       child: Semantics(
         button: true,
         label: active
-            ? 'Stand down emergency flare'
-            : 'Emergency Flare. Asks for confirmation and a reason before sending.',
+            ? 'Stand down emergency flare. Press and hold.'
+            : 'Emergency Flare. Press and hold, then confirm and give a reason.',
         child: GestureDetector(
-          onTap: active
-              ? widget.onCancelEmergencyFlare
-              : widget.onEmergencyFlare,
+          onLongPress: () {
+            // Confirms the hold registered before any dialog paints. In the
+            // situation this exists for, the user is not watching the
+            // screen closely.
+            HapticFeedback.heavyImpact();
+            final handler = active
+                ? widget.onCancelEmergencyFlare
+                : widget.onEmergencyFlare;
+            handler?.call();
+          },
+          onTap: () => _showFlareHoldHint(active),
           child: Container(
             width: 40,
             height: 40,
