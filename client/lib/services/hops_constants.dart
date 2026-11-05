@@ -989,14 +989,39 @@ String? studyLocationName(int? index) {
 // sender to tell apart, a Lost & Found post is posted once).
 //
 // Layout per chunk: "LNF:" (4) + postId (4) + type (1) + chunkInfo (1) =
-// 10 overhead, leaving kLostFoundChunkTextBudget of the ~29-byte total for
-// text. chunkIndex/totalChunks-1 pack into chunkInfo the same 3-bits-each
-// scheme encodeCommunityNameChunk uses, so up to 8 chunks — comfortably
-// enough for 61 characters at ~19 per chunk (4 chunks).
+// 10 overhead, leaving kLostFoundChunkTextBudget for text.
+// chunkIndex/totalChunks-1 pack into chunkInfo the same 3-bits-each scheme
+// encodeCommunityNameChunk uses, so up to 8 chunks — 8 x 16 = 128 bytes,
+// comfortably more than the two 30-character fields can produce.
+//
+// THE BUDGET IS DERIVED, NEVER WRITTEN DOWN. This was `29 - overhead`,
+// giving 19, and 29 is not the ceiling — kAdvertisementNameMaxBytes is 26.
+// So a full chunk came to 10 + 19 = 29 bytes, three over, and
+// _advertiseWithName refused it outright: every Lost & Found post whose
+// "<object>|<location>" text was long enough to fill one chunk failed with
+// "the post could not be sent". "Access Card" lost in "Corridors" is 21
+// characters, so the first chunk was a full 19 and the post never left the
+// device.
+//
+// This is the third time a feature has hand-written this number and got it
+// wrong — Vibe Check said 24, Study Bunny said 20 — which is exactly why
+// advertisementTextBudget() exists. Use it. See the "Advertisement size"
+// note in CLAUDE.md.
 const String kLostFoundPrefix = 'LNF:';
 const int kLostFoundPostIdChars = 4;
 const int kLostFoundOverhead = 4 + kLostFoundPostIdChars + 1 + 1; // 10
-const int kLostFoundChunkTextBudget = 29 - kLostFoundOverhead; // 19
+// Derived from kCommunityNameBudget (22), NOT from
+// kAdvertisementNameMaxBytes (26). 26 is the theoretical ceiling; the
+// report behind kCommunityNameBudget's own comment puts a real handset's
+// ceiling at 23 bytes, and this feature fails exactly the same silent way
+// Community Alerts did. Deriving from 26 would give 16 bytes of text and a
+// 26-byte name — which would have fixed the arithmetic and still not sent
+// on the phone that reported this. Same margin, same reason.
+//
+// 12 x 8 chunks = 96 bytes, still well clear of what two 30-character
+// fields plus a separator can produce (61).
+const int kLostFoundChunkTextBudget =
+    kCommunityNameBudget - kLostFoundOverhead; // 12
 const int kLostFoundMaxChunks = 8;
 
 String encodeLostFoundChunk({

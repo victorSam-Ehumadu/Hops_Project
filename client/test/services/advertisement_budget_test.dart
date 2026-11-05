@@ -99,4 +99,77 @@ void main() {
     // the app spends ~all its time broadcasting is nowhere near the limit.
     expect(advertisementNameFits('HPS:${'a' * 8}'), isTrue);
   });
+  // ── Lost & Found ──────────────────────────────────────────────────────
+  //
+  // This feature had NO budget coverage, which is exactly how it drifted.
+  // kLostFoundChunkTextBudget was written as `29 - overhead` = 19, and 29
+  // is not the ceiling — so a full chunk came to 10 + 19 = 29 bytes against
+  // a 26-byte limit and _advertiseWithName refused it. Every post whose
+  // "<object>|<location>" text filled one chunk failed with "the post could
+  // not be sent".
+  group('Lost & Found chunk budget', () {
+    test('a full chunk fits the advertisement ceiling', () {
+      final name = encodeLostFoundChunk(
+        postId: 'AB12',
+        typeChar: 'L',
+        chunkIndex: 0,
+        totalChunks: 2,
+        chunkText: 'x' * kLostFoundChunkTextBudget,
+      );
+      expect(advertisementNameFits(name), isTrue,
+          reason: 'A chunk filled to kLostFoundChunkTextBudget produces a '
+              '${utf8.encode(name).length}-byte name, over the '
+              '$kAdvertisementNameMaxBytes-byte ceiling. The radio rejects '
+              'it asynchronously, so the post silently never sends.');
+    });
+
+    test('the budget leaves room for the feature its own framing', () {
+      expect(kLostFoundOverhead, 10,
+          reason: 'LNF: (4) + postId (4) + type (1) + chunkInfo (1).');
+      expect(kLostFoundChunkTextBudget + kLostFoundOverhead,
+          lessThanOrEqualTo(kAdvertisementNameMaxBytes),
+          reason: 'text budget + framing must not exceed the ceiling.');
+    });
+
+    test('it keeps the same margin Community Alerts proved it needs', () {
+      // 26 is the theoretical ceiling; a real handset reported a 23-byte
+      // one, which is why kCommunityNameBudget is 22. Deriving Lost & Found
+      // from 26 would fix the arithmetic and still not send on that phone.
+      expect(kLostFoundChunkTextBudget + kLostFoundOverhead,
+          lessThanOrEqualTo(kCommunityNameBudget),
+          reason: 'Lost & Found must respect the same conservative budget '
+              'as Community Alerts, not the theoretical 26.');
+    });
+
+    test('the reported failing post now fits in every chunk', () {
+      // "Access Card" lost in "Corridors" — the exact report. 21 characters.
+      final chunks = splitLostFoundText('Access Card|Corridors');
+      expect(chunks, isNotEmpty);
+      expect(chunks.length, lessThanOrEqualTo(kLostFoundMaxChunks));
+      for (var i = 0; i < chunks.length; i++) {
+        final name = encodeLostFoundChunk(
+          postId: 'AB12',
+          typeChar: 'L',
+          chunkIndex: i,
+          totalChunks: chunks.length,
+          chunkText: chunks[i],
+        );
+        expect(advertisementNameFits(name), isTrue,
+            reason: 'chunk $i of "Access Card|Corridors" does not fit: '
+                '"$name" is ${utf8.encode(name).length} bytes.');
+      }
+      // And it must still round-trip to the original text.
+      expect(chunks.join(), 'Access Card|Corridors');
+    });
+
+    test('two full 30-character fields still fit within the chunk ceiling',
+        () {
+      final text = '${'o' * 30}|${'l' * 30}'; // the UI field maxLengths
+      final chunks = splitLostFoundText(text);
+      expect(chunks.length, lessThanOrEqualTo(kLostFoundMaxChunks),
+          reason: 'The 8-chunk ceiling must cover what the input fields '
+              'actually allow, or a long post is silently truncated.');
+      expect(chunks.join(), text);
+    });
+  });
 }

@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **292 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **297 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -148,7 +148,7 @@ What is and isn't covered, so you know what a green run actually proves:
   add a prefix, or the new one gets mistaken for a user's real Bluetooth name. Conversely, when a
   prefix is *removed*, drop it from the guard, this test's expected list, and any literal payload
   assertion that used it — removing Hops & Robbers needed all three.
-- `test/services/advertisement_budget_test.dart` (12) — the advertisement-name byte budget
+- `test/services/advertisement_budget_test.dart` (17) — the advertisement-name byte budget
   and each feature's framing arithmetic against it. This is the exact thing that drifted and
   silently broke Vibe Check and Study Bunny on real devices: both set their input `maxLength`
   to a number that looked like the budget but ignored their own prefix/id framing, producing
@@ -156,7 +156,12 @@ What is and isn't covered, so you know what a green run actually proves:
   looked successful and the report appeared locally while never leaving the phone. Pins the
   ceiling, that measurement is in UTF-8 *bytes* (a char-based check allows roughly double), and
   that each feature's budget leaves room for its own framing. One test documents the broken
-  limits so nobody restores them.
+  limits so nobody restores them. Lost & Found was the **third** feature to hand-write
+  this number: `kLostFoundChunkTextBudget` was `29 - overhead` = 19, and 29 is not the
+  ceiling, so a full chunk was a 29-byte name against the 26-byte limit and every post
+  long enough to fill one chunk silently failed to send. It is now derived from
+  `kCommunityNameBudget` (22), not 26 — deriving from the theoretical ceiling fixes the
+  arithmetic but still would not send on the handset that reported a 23-byte real ceiling.
 - `test/services/admin_stats_test.dart` (18) — the statistics window arithmetic and CSV
   export. Pins the boundary bug worth preventing: a custom range must include the *whole* of
   its end day, since treating the picked date as midnight silently drops a day and the chart
