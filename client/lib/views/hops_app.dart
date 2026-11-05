@@ -482,10 +482,19 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // Lives here, on HopsApp itself, rather than on the Radar screen where
   // the old red app-bar button used to own it. Two reasons:
   //
-  //   1. There is no in-app flare button any more (see radar_screen.dart)
-  //      — every remaining trigger is external (Quick Settings tile,
-  //      app-icon shortcut), so neither has a natural home on one
-  //      particular tab.
+  //   1. Two of the three triggers are external (Quick Settings tile,
+  //      app-icon shortcut) and have no natural home on one particular
+  //      tab. The third, radar_screen.dart's long-press app-bar button,
+  //      does live on a tab — but it calls into this same dialog rather
+  //      than owning one, so all three paths behave identically.
+  //
+  //      THIS IS ALSO WHY THE FLARE IS NOT AN ADMIN-STYLE SCREEN. The
+  //      admin app composes an Official Alert on a dedicated page
+  //      (admin_alert_screen.dart): navigate, type, send, confirm. That
+  //      suits a moderator writing an announcement deliberately. It is
+  //      the wrong shape for a flare, because a dedicated page IS a
+  //      navigation, which is exactly what reason 2 below records as
+  //      having been removed for being too slow in an emergency.
   //   2. HopsApp is the MaterialApp's `home`, so `Navigator.of(context)`
   //      here resolves to the ROOT navigator. Pushing the dialog off this
   //      context puts it above every pushed route — Wordle, a chat, the
