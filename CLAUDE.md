@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **317 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **344 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -724,8 +724,17 @@ mode while buying nothing. Everything else that picks an image — the profile b
 
 `HopsEngine` is a singleton holding two unrelated subsystems that share a load-once lifecycle:
 
-- **`askBunny(query)`** — keyword lookup over `assets/data/hops_knowledge.json` (62
-  `{keywords, response}` entries). This is what backs the built-in contact named `Hops`
+- **`askBunny(query)`** — keyword lookup over `assets/data/hops_knowledge.json` (74
+  entries). An entry carries either `response` (one answer) or `responses` (a list, picked
+  from at random) — jokes need the latter, since a single fixed string meant "tell me
+  another" returned the same joke forever. An entry with neither, or with no keywords, is
+  dropped by the loader, so `knowledgeEntryCount` is the figure to trust rather than the
+  file's length. **No keyword may be claimed by two entries**: scoring is
+  `words*10 + length` per keyword and the highest total wins, so a shared keyword makes the
+  answer depend on whatever else happened to be in the sentence.
+  `test/services/hops_knowledge_test.dart` (27) runs against the REAL shipped asset and
+  fails on a malformed entry, a shared keyword, a loader-dropped entry, or a plausible
+  question routing to the wrong topic. This is what backs the built-in contact named `Hops`
   (`kHopsBotUsername`), which every user has from first launch; `chat_terminal.dart` routes
   messages to that peer here instead of over the radio. Bot history lives in the same local
   `messages` table keyed by peer username, which is why sign-up reserves the bot usernames —

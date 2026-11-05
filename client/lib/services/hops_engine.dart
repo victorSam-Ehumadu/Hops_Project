@@ -62,9 +62,20 @@ bool isReservedUsername(String username) =>
 /// re-read out of a `List<dynamic>` on every keystroke.
 class _KnowledgeEntry {
   final List<String> keywords;
-  final String response;
 
-  const _KnowledgeEntry(this.keywords, this.response);
+  /// One or more answers. An entry with several rotates between them, so
+  /// asking the same thing twice does not give the identical reply.
+  ///
+  /// The JSON accepts either `"response": "..."` or
+  /// `"responses": ["...", "..."]`. Jokes are the reason: with a single
+  /// fixed string, "tell me a joke" returned the same joke forever, which
+  /// is the one topic where that is actively worse than no answer.
+  final List<String> responses;
+
+  const _KnowledgeEntry(this.keywords, this.responses);
+
+  String pick(Random rng) =>
+      responses.length == 1 ? responses.first : responses[rng.nextInt(responses.length)];
 }
 
 class HopsEngine {
@@ -125,9 +136,22 @@ class HopsEngine {
                 .map((k) => k.toString().toLowerCase().trim())
                 .where((k) => k.isNotEmpty)
                 .toList(growable: false);
-            return _KnowledgeEntry(keywords, map['response'].toString());
+            // Either shape is valid; `responses` wins when both are
+            // present. An entry with neither is dropped below along with
+            // keyword-less ones, rather than answering with "null".
+            final raw = map['responses'];
+            final responses = raw is List
+                ? raw
+                    .map((r) => r.toString())
+                    .where((r) => r.trim().isNotEmpty)
+                    .toList(growable: false)
+                : <String>[
+                    if (map['response'] != null) map['response'].toString()
+                  ];
+            return _KnowledgeEntry(keywords, responses);
           })
-          .where((entry) => entry.keywords.isNotEmpty)
+          .where((entry) =>
+              entry.keywords.isNotEmpty && entry.responses.isNotEmpty)
           .toList(growable: false);
       debugPrint('HopsEngine: knowledge base loaded (${_knowledge.length} entries)');
     } catch (e) {
@@ -191,7 +215,7 @@ class HopsEngine {
     }
 
     if (best == null) return _randomFallback();
-    return best.response;
+    return best.pick(_random);
   }
 
   /// Lowercase, strip punctuation, collapse whitespace. Apostrophes are
