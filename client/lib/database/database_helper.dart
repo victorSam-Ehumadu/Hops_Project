@@ -589,6 +589,19 @@ class DatabaseHelper {
   // row, which would silently null out rotating_seed (set by a completely
   // separate call, upsertContactRotatingSeed below) every time the bio or
   // avatar gets refreshed, and vice versa.
+  //
+  // Each column is coalesced for the SAME reason, one level down. A null
+  // argument here means "I don't know this field", not "erase it", and
+  // this is reached from one place only: a peer's profile arriving over
+  // RFCOMM. That payload carries whatever the peer happened to have set,
+  // so a peer with a bio but no avatar used to null out an avatar this
+  // device had already received and stored from them earlier — the
+  // contact's picture simply vanished, with nothing to explain it.
+  //
+  // The trade: a peer cannot CLEAR a field this way any more, only change
+  // it. For a cached copy of someone else's profile that is the right side
+  // to err on — a stale picture beats a missing one, and the next exchange
+  // with an actual value overwrites it.
   Future<void> upsertContactProfile(
     String username, {
     String? avatarPath,
@@ -600,9 +613,9 @@ class DatabaseHelper {
       INSERT INTO $contactProfilesTable ($cpColUsername, $cpColAvatarPath, $cpColBio, $cpColThinking, $cpColUpdatedAt)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT($cpColUsername) DO UPDATE SET
-        $cpColAvatarPath = excluded.$cpColAvatarPath,
-        $cpColBio = excluded.$cpColBio,
-        $cpColThinking = excluded.$cpColThinking,
+        $cpColAvatarPath = coalesce(excluded.$cpColAvatarPath, $cpColAvatarPath),
+        $cpColBio = coalesce(excluded.$cpColBio, $cpColBio),
+        $cpColThinking = coalesce(excluded.$cpColThinking, $cpColThinking),
         $cpColUpdatedAt = excluded.$cpColUpdatedAt
     ''', [username, avatarPath, bio, thinking, DateTime.now().millisecondsSinceEpoch]);
   }

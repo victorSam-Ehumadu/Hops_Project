@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **306 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **309 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -244,7 +244,7 @@ What is and isn't covered, so you know what a green run actually proves:
   in prose so nobody re-adds them, and a naive search matches that prose. See "Naming a
   Radar dot" below.
 
-- `test/database/import_export_test.dart` (13) — the restore half of Export My Data, and the
+- `test/database/import_export_test.dart` (16) — the restore half of Export My Data, and the
   first tests to touch `database_helper.dart` at all. Every path there reaches the file via
   `getApplicationDocumentsDirectory()`, a platform channel, which is why it had none;
   `openInMemoryForTest()` bypasses that one call so these run against the real `_onCreate`

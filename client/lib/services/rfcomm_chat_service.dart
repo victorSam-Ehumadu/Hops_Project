@@ -438,6 +438,10 @@ class RfcommChatService {
         final avatarBytes = bytes.length > avatarStart
             ? Uint8List.fromList(bytes.sublist(avatarStart))
             : null;
+        debugPrint('PRF: received profile — bio ${bioLen}B, '
+            'thinking ${thinkingLen}B, '
+            'avatar ${avatarBytes?.length ?? 0}B '
+            '(decoded ${bytes.length}B total)');
         onProfileReceived?.call(bio, thinking, avatarBytes);
       } else if (line.startsWith(_prefixReceipt)) {
         final ids = parseReadReceiptIds(line);
@@ -447,7 +451,14 @@ class RfcommChatService {
         if (bytes.isEmpty) return;
         onRotatingSeedReceived?.call(Uint8List.fromList(bytes));
       }
-    } catch (_) {}
+    } catch (e) {
+      // Was a bare `catch (_) {}`, so a truncated or malformed line — the
+      // most likely failure for a profile, which is by far the longest
+      // line this protocol sends — disappeared with no trace at all.
+      debugPrint('RFCOMM: failed to handle an incoming line '
+          '(${line.length} chars, prefix '
+          '"${line.length >= 4 ? line.substring(0, 4) : line}"): $e');
+    }
   }
 
   // ── Sending ──────────────────────────────────────────────────────────────
@@ -485,7 +496,7 @@ class RfcommChatService {
     required String bio,
     required String thinking,
     Uint8List? avatarBytes,
-  }) {
+  }) async {
     final bioBytesFull = utf8.encode(bio);
     final bioBytes =
     bioBytesFull.length > 255 ? bioBytesFull.sublist(0, 255) : bioBytesFull;
@@ -500,7 +511,20 @@ class RfcommChatService {
       ...thinkingBytes,
       ...?avatarBytes,
     ]);
-    return _sendLine(_prefixProfile + base64Encode(payload));
+    final line = _prefixProfile + base64Encode(payload);
+    // This path had NO logging whatsoever, which is why "my picture does
+    // not show on their phone" was undiagnosable from either end: there
+    // was no way to tell whether the avatar was read off disk, whether it
+    // was sent, or whether it arrived. Sizes matter here — the whole
+    // profile goes as ONE line, so a large avatar is a single multi-second
+    // write over a ~100kbps link.
+    debugPrint('PRF: sending profile — bio ${bioBytes.length}B, '
+        'thinking ${thinkingBytes.length}B, '
+        'avatar ${avatarBytes?.length ?? 0}B, '
+        'line ${line.length} chars');
+    final ok = await _sendLine(line);
+    if (!ok) debugPrint('PRF: send FAILED (not connected, or write error)');
+    return ok;
   }
 
   Future<bool> sendRotatingSeed(Uint8List seed) {

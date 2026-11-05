@@ -193,4 +193,60 @@ void main() {
     expect(rows.map((r) => r[DatabaseHelper.columnMessage]).toList(),
         ['one', 'two']);
   });
+  // ── Contact profile merge ─────────────────────────────────────────────
+  //
+  // A peer's profile arrives over RFCOMM carrying whatever that peer
+  // happened to have set. A peer with a bio but no avatar used to null out
+  // an avatar this device had already received and stored from them, so the
+  // contact's picture vanished with nothing to explain it. A null argument
+  // means "I don't know this field", not "erase it".
+  group('upsertContactProfile merges rather than erasing', () {
+    test('a later profile with no avatar keeps the stored one', () async {
+      final db = await DatabaseHelper.instance.openInMemoryForTest();
+      addTearDown(db.close);
+
+      await DatabaseHelper.instance
+          .upsertContactProfile('diya', avatarPath: '/docs/a_1.jpg', bio: 'hi');
+      // Second exchange: same peer, bio changed, no avatar in the payload.
+      await DatabaseHelper.instance
+          .upsertContactProfile('diya', avatarPath: null, bio: 'back later');
+
+      final row = await DatabaseHelper.instance.getContactProfile('diya');
+      expect(row?[DatabaseHelper.cpColAvatarPath], '/docs/a_1.jpg',
+          reason: 'A payload without an avatar must not erase the avatar '
+              'already on file for that contact.');
+      expect(row?[DatabaseHelper.cpColBio], 'back later',
+          reason: 'A field that IS present must still update.');
+    });
+
+    test('a new avatar still replaces the old one', () async {
+      final db = await DatabaseHelper.instance.openInMemoryForTest();
+      addTearDown(db.close);
+      await DatabaseHelper.instance
+          .upsertContactProfile('diya', avatarPath: '/docs/a_1.jpg');
+      await DatabaseHelper.instance
+          .upsertContactProfile('diya', avatarPath: '/docs/a_2.jpg');
+      final row = await DatabaseHelper.instance.getContactProfile('diya');
+      expect(row?[DatabaseHelper.cpColAvatarPath], '/docs/a_2.jpg');
+    });
+
+    test('the rotating seed survives a profile refresh, and vice versa',
+        () async {
+      // The reason this upsert is hand-written rather than
+      // ConflictAlgorithm.replace. Pinned so nobody "simplifies" it back.
+      final db = await DatabaseHelper.instance.openInMemoryForTest();
+      addTearDown(db.close);
+      await DatabaseHelper.instance.upsertContactRotatingSeed('diya', 'c2VlZA==');
+      await DatabaseHelper.instance
+          .upsertContactProfile('diya', avatarPath: '/docs/a_1.jpg', bio: 'hi');
+      var row = await DatabaseHelper.instance.getContactProfile('diya');
+      expect(row?[DatabaseHelper.cpColRotatingSeed], 'c2VlZA==',
+          reason: 'A profile refresh must not drop the rotating seed — that '
+              'seed is the only way Radar can name this contact.');
+      await DatabaseHelper.instance.upsertContactRotatingSeed('diya', 'bmV3');
+      row = await DatabaseHelper.instance.getContactProfile('diya');
+      expect(row?[DatabaseHelper.cpColAvatarPath], '/docs/a_1.jpg',
+          reason: 'A seed update must not drop the avatar either.');
+    });
+  });
 }
