@@ -1118,11 +1118,34 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       _reportAdvertisingFailure('it was too long to broadcast');
       return;
     }
+    // The name fitting is only half the packet. Manufacturer data costs
+    // 4 bytes of AD header plus its payload out of what the name leaves,
+    // and an over-full packet is rejected WHOLE — taking the name with it.
+    // That is how the flare signature was silently killing flares whose
+    // own name was well inside the ceiling.
+    //
+    // Dropped rather than refused, deliberately: every current user of
+    // this channel is supplementary (a flare signature, the Study Bunny
+    // location, the Discoverable tag) and enriches something whose primary
+    // signal IS the name. Sending the name without the extra degrades the
+    // feature; refusing outright loses both. Callers that need to know
+    // should check manufacturerPayloadFitsWithName() first — the flare
+    // signature cycle does, so it can skip cycling entirely instead of
+    // re-attempting this 24 times.
+    var mfg = manufacturerData;
+    if (mfg != null &&
+        !manufacturerPayloadFitsWithName(localName, mfg.data.length)) {
+      debugPrint('Dropping ${mfg.data.length}B of manufacturer data: only '
+          '${advertisementManufacturerPayloadBudget(localName)}B fit '
+          'alongside the ${utf8.encode(localName).length}B name '
+          '"$localName". Advertising the name alone.');
+      mfg = null;
+    }
     await BlePeripheral.stopAdvertising();
     await BlePeripheral.startAdvertising(
       localName: localName,
       services: [HOPS_SERVICE_UUID, ...services], // ← always include Hops UUID
-      manufacturerData: manufacturerData,
+      manufacturerData: mfg,
       addManufacturerDataInScanResponse: manufacturerDataInScanResponse,
     );
     // Put the device's own name back shortly after the advertisement is
@@ -1476,6 +1499,38 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         chunks.add(signature.sublist(i, end));
       }
       if (chunks.isEmpty) return;
+
+      // FAIL OPEN. A signature chunk only fits alongside a name short
+      // enough to leave room for it, and for a real flare it never is.
+      // Confirmed on a Galaxy A04e: "EMG:Victor:fire" is 15 bytes, which
+      // leaves 7 for manufacturer payload, and encodeFlareSigChunk wants
+      // 20. The radio answered ADVERTISE_FAILED_DATA_TOO_LARGE and
+      // _handleAdvertisingStatusUpdate then cancelled the flare and told
+      // the user it had not gone out — a second after the plain "EMG:"
+      // name had advertised perfectly well. The signature was killing
+      // working flares.
+      //
+      // It cannot be made to fit, either: at 5 usable signature bytes per
+      // chunk a 256-byte RSA-2048 signature needs 51 chunks, and chunkInfo
+      // packs 3 bits of index, so 8 is the hard ceiling. This is the same
+      // arithmetic that killed seed-over-manufacturer-data — see "Naming a
+      // Radar dot" in CLAUDE.md.
+      //
+      // So: skip signing rather than destroy the alert. An unsigned flare
+      // that reaches people beats a verifiable one that never transmits.
+      // Receivers already treat an unverified alert as unverified rather
+      // than discarding it; only an admin Official Alert is dropped on a
+      // failed check, and that path has its own shorter names.
+      const chunkPayloadBytes = 2 + kFlareSigChunkBudgetBytes;
+      if (!manufacturerPayloadFitsWithName(advName, chunkPayloadBytes)) {
+        debugPrint(
+            'Skipping flare signature: a $chunkPayloadBytes-byte chunk does '
+            'not fit alongside the ${utf8.encode(advName).length}-byte name '
+            '"$advName" (budget '
+            '${advertisementManufacturerPayloadBudget(advName)}). The alert '
+            'stays on the air unsigned.');
+        return;
+      }
 
       const perChunkDuration = Duration(milliseconds: 1200);
       const totalCycles = 3; // more reliability margin than Community Alerts — this one's safety-critical

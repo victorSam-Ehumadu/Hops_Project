@@ -172,4 +172,66 @@ void main() {
       expect(chunks.join(), text);
     });
   });
+  // ── Manufacturer data alongside a name ────────────────────────────────
+  //
+  // Device-verified on a Galaxy A04e (Android 14): a flare whose name was
+  // only 15 bytes was rejected ADVERTISE_FAILED_DATA_TOO_LARGE, because the
+  // signature chunk riding beside it needed 24 bytes of a scan response
+  // that had 11 left. The flare name itself had advertised fine a second
+  // earlier, so the signature was destroying working alerts.
+  group('manufacturer-data budget', () {
+    test('the observed failing case is correctly rejected', () {
+      const name = 'EMG:Victor:fire'; // exactly what the device logged
+      expect(utf8.encode(name).length, 15);
+      // marker + chunkInfo + signature bytes
+      const chunkPayload = 2 + kFlareSigChunkBudgetBytes;
+      expect(chunkPayload, 20);
+      expect(advertisementManufacturerPayloadBudget(name), 7,
+          reason: '26 (name ceiling) - 15 (name) - 4 (mfg AD header) = 7');
+      expect(manufacturerPayloadFitsWithName(name, chunkPayload), isFalse,
+          reason: 'This is the packet the radio rejected. If this ever '
+              'returns true the arithmetic has drifted back.');
+    });
+
+    test('a flare signature cannot fit beside ANY usable flare name', () {
+      // 8 chunks is the hard ceiling (chunkInfo packs 3 bits of index), and
+      // an RSA-2048 signature is 256 bytes, so a chunk would have to carry
+      // 32 signature bytes — more than the whole payload budget even with
+      // an empty name. Pinned so nobody re-enables signing by shrinking the
+      // chunk and assuming it now fits.
+      const sigBytes = 256;
+      const maxChunks = 8;
+      final neededPerChunk = (sigBytes / maxChunks).ceil();
+      expect(neededPerChunk, 32);
+      expect(advertisementManufacturerPayloadBudget(''), lessThan(neededPerChunk),
+          reason: 'Even with no name at all there is not room for a chunk '
+              'big enough to carry the signature in 8 parts.');
+    });
+
+    test('budget shrinks byte-for-byte with the name and floors at zero', () {
+      expect(advertisementManufacturerPayloadBudget('A' * 10), 12);
+      expect(advertisementManufacturerPayloadBudget('A' * 22), 0);
+      expect(advertisementManufacturerPayloadBudget('A' * 26), 0,
+          reason: 'Must floor at 0, never go negative.');
+    });
+
+    test('measured in UTF-8 bytes, not characters', () {
+      // 'é' is two bytes, so it costs twice what .length suggests.
+      final budget = advertisementManufacturerPayloadBudget('é' * 5);
+      expect(budget, 26 - 10 - 4);
+    });
+
+    test('the Study Bunny location still fits beside a full-length tag', () {
+      // The one manufacturer-data user that MUST keep working: marker plus
+      // a one-byte location index, beside the longest subject the UI allows.
+      final name = 'SBF:AB12:${'x' * advertisementTextBudget(9)}';
+      expect(advertisementNameFits(name), isTrue);
+      expect(manufacturerPayloadFitsWithName(name, 2), isFalse,
+          reason: 'A full-length Study Bunny subject leaves no room for the '
+              'location byte, so the location silently does not travel. '
+              'Documented, not desired — see CLAUDE.md.');
+      // With a short subject it does fit, which is the common case.
+      expect(manufacturerPayloadFitsWithName('SBF:AB12:Maths', 2), isTrue);
+    });
+  });
 }

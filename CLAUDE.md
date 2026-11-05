@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **301 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **306 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -148,7 +148,7 @@ What is and isn't covered, so you know what a green run actually proves:
   add a prefix, or the new one gets mistaken for a user's real Bluetooth name. Conversely, when a
   prefix is *removed*, drop it from the guard, this test's expected list, and any literal payload
   assertion that used it — removing Hops & Robbers needed all three.
-- `test/services/advertisement_budget_test.dart` (17) — the advertisement-name byte budget
+- `test/services/advertisement_budget_test.dart` (22) — the advertisement-name byte budget
   and each feature's framing arithmetic against it. This is the exact thing that drifted and
   silently broke Vibe Check and Study Bunny on real devices: both set their input `maxLength`
   to a number that looked like the budget but ignored their own prefix/id framing, producing
@@ -320,9 +320,22 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
   `kCommunityChatPrefix` (`CM:`), `kAdminCommunityChatPrefix` (`CA:`), `kCommunityDeletePrefix`
   (`CX:`), `kDirectMessagePrefix` (`DM:`), `kLostFoundPrefix` (`LNF:`).
 - Manufacturer data (`kCommunityManufacturerId`, `0xFFFF`) is a *second*, parallel channel riding
-  the same advertisement, used where the name is already full: signature chunks for flares/alerts
-  (`encodeFlareSigChunk`), the Study Bunny location, and the Discoverable name — each on an
-  advertisement whose *name* leaves room for it. A name of ~22 characters already fills the
+  the same advertisement — the Study Bunny location and the Discoverable name — and it only
+  works on an advertisement whose *name* leaves room for it. **Use
+  `manufacturerPayloadFitsWithName()`; the budget is `26 - nameBytes - 4`, which is far less
+  than it looks.** `_advertiseWithName` now DROPS manufacturer data that will not fit and sends
+  the name alone, because an over-full packet is rejected whole and would otherwise take the
+  name down with it.
+  **Flare/alert signature chunks (`encodeFlareSigChunk`) were listed here as a working user of
+  this channel and never were.** Device-verified on a Galaxy A04e: `EMG:Victor:fire` is 15
+  bytes, leaving 7 for payload, and a chunk wants 20 — the radio answered
+  `ADVERTISE_FAILED_DATA_TOO_LARGE` and `_handleAdvertisingStatusUpdate` then cancelled the
+  flare and told the user it had not gone out, a second after the plain name had advertised
+  fine. **The signature was killing working flares.** It cannot be made to fit either: at 8
+  chunks (chunkInfo packs 3 bits of index) a 256-byte RSA-2048 signature needs 32 bytes per
+  chunk, more than the whole budget even with an empty name. `_startSignatureCycle` now checks
+  and skips, leaving the alert on the air unsigned — an unsigned flare that arrives beats a
+  verifiable one that never transmits. A name of ~22 characters already fills the
   scan response on its own, which is why seed chunks alongside a handshake name could never
   work (see "Naming a Radar dot"). There is
   only **one** manufacturer-data slot per advertisement, so these are mutually exclusive by

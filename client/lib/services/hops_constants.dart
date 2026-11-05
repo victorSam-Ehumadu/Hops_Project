@@ -150,6 +150,35 @@ int advertisementTextBudget(int overheadBytes) {
   return left < 0 ? 0 : left;
 }
 
+/// How many bytes of manufacturer-data PAYLOAD can ride alongside a local
+/// name of [nameBytes] bytes, in the same 31-byte scan response.
+///
+/// There was no helper for this, and that is why flare signing silently
+/// never worked. The arithmetic, confirmed on a Galaxy A04e:
+///
+///   scan response                          31
+///   name AD structure        2 + nameBytes
+///   TX Power AD                             3   (appended by many stacks)
+///   manufacturer AD header                  4   (len + type + company id)
+///   ------------------------------------------
+///   payload left                 22 - nameBytes
+///
+/// So a 15-byte name like "EMG:Victor:fire" leaves SEVEN bytes, while
+/// encodeFlareSigChunk wants twenty. The radio rejected the whole
+/// advertisement with ADVERTISE_FAILED_DATA_TOO_LARGE, which took the
+/// already-working flare off the air with it.
+///
+/// Returns 0 when nothing fits. Use [manufacturerPayloadFitsWithName] to
+/// test a specific payload.
+int advertisementManufacturerPayloadBudget(String name) {
+  final left = kAdvertisementNameMaxBytes - utf8.encode(name).length - 4;
+  return left < 0 ? 0 : left;
+}
+
+/// Whether [payloadBytes] of manufacturer data fits alongside [name].
+bool manufacturerPayloadFitsWithName(String name, int payloadBytes) =>
+    payloadBytes <= advertisementManufacturerPayloadBudget(name);
+
 const String kCommunityChatPrefix = 'CM:';
 // Admin-originated — same layout, different prefix, so one decode path
 // handles both; only the styling and the role check on resolution differ.
