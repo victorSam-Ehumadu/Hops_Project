@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **309 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **317 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -187,13 +187,18 @@ What is and isn't covered, so you know what a green run actually proves:
   direction — that "wrong password" and "no such account" stay **identical**. The server
   collapses those too (0008/0009/0018/0023); splitting them client-side would turn the sign-in
   form into an account-existence oracle at the last step.
-- `test/widgets/bar_chart_painter_test.dart` (12) — the hand-painted statistics chart.
+- `test/widgets/bar_chart_painter_test.dart` (20) — the hand-painted statistics chart.
   Painters do their own layout arithmetic (a reserved y-axis gutter, top headroom for the peak
   label, per-bar slot widths), and one that throws takes the whole admin screen down with a red
   error box. Pins the divisions and negative dimensions: empty series, all-zero, a peak of 1,
   30 buckets on a 280px phone, and a canvas narrower than the gutter. Also that `shouldRepaint`
   compares list *contents* — `fetch()` builds a fresh list every poll, so an identity check
   would repaint on every refresh regardless of whether anything moved.
+  The x-axis labels added 5 Nov bring their own geometry: they reserve a 14px strip under
+  the axis, so the baseline is no longer the canvas bottom and every height below it
+  shifted. Covered for 30 daily and 24 hourly buckets, a single bucket, a canvas too short
+  to hold the strip, and a label/value count mismatch — an index error inside `paint()`
+  takes the whole admin screen down with a red error box.
 - `test/widgets/password_strength_bar_test.dart` (10) — the password strength bar.
 - `test/services/account_standing_test.dart` (18) — moderation verdicts: classifying the
   server's error into ban/suspension, and whether that verdict currently blocks the app.

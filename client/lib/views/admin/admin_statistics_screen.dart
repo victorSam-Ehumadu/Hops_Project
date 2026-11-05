@@ -285,9 +285,29 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
         ),
       );
 
+  /// Short x-axis label for one bucket.
+  ///
+  /// 24h buckets are hourly, so they want a time; 7d/30d and custom
+  /// buckets are daily and want a date. Reading it off the window's kind
+  /// rather than guessing from the spacing between buckets, which breaks
+  /// on a single-bucket series.
+  String _bucketLabel(DateTime bucket, StatsRange kind) {
+    final local = bucket.toLocal();
+    if (kind == StatsRange.last24h) {
+      return '${local.hour.toString().padLeft(2, '0')}:00';
+    }
+    return '${local.day}/${local.month}';
+  }
+
   Widget _chartCard(ColorScheme colors, AdminStats stats) {
     final values =
         stats.series.map((p) => p.valueFor(_series)).toList(growable: false);
+    // The buckets were being discarded here, which is why the chart had no
+    // dates on it: BarChartPainter only ever received the numbers. Every
+    // point already carries its own bucket timestamp.
+    final labels = stats.series
+        .map((p) => _bucketLabel(p.bucket, stats.window.kind))
+        .toList(growable: false);
     final total = values.fold<int>(0, (a, b) => a + b);
     final peak = values.isEmpty ? 0 : values.reduce(math.max);
 
@@ -350,10 +370,14 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
               )
             else
               SizedBox(
-                height: 150,
+                // Taller than the empty state: the x-axis labels need a
+                // reserved strip underneath the bars, and squeezing them
+                // into the old 150 just shortened every bar.
+                height: 176,
                 child: CustomPaint(
                   painter: BarChartPainter(
                     values: values,
+                    labels: labels,
                     barColor: colors.primary,
                     axisColor: colors.onSurface.withValues(alpha: 0.18),
                     textColor: colors.onSurface.withValues(alpha: 0.65),
@@ -567,12 +591,21 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
 /// vanish entirely.
 class BarChartPainter extends CustomPainter {
   final List<int> values;
+  /// One x-axis label per bar, in the same order as [values].
+  ///
+  /// Optional, and short by necessity: at 30 daily buckets on a 320px-wide
+  /// phone there are about 9px per bar, so these are thinned to whatever
+  /// actually fits rather than drawn per bar. Empty means no x-axis strip
+  /// is reserved at all, which keeps every existing caller and test
+  /// rendering exactly as before.
+  final List<String> labels;
   final Color barColor;
   final Color axisColor;
   final Color textColor;
 
   const BarChartPainter({
     required this.values,
+    this.labels = const [],
     required this.barColor,
     required this.axisColor,
     required this.textColor,
@@ -609,14 +642,21 @@ class BarChartPainter extends CustomPainter {
     const topPad = 13.0;
     const plotLeft = _axisLabelWidth;
     final plotWidth = size.width - plotLeft;
-    final plotHeight = size.height - topPad;
-    if (plotWidth <= 0) return;
+    // Room under the axis for the date/time labels. Zero when there are
+    // none, so a caller that passes only values gets the old geometry.
+    final hasLabels = labels.length == values.length && labels.isNotEmpty;
+    final bottomPad = hasLabels ? 14.0 : 0.0;
+    // Everything below draws against `baseline`, not size.height — the
+    // axis is no longer on the bottom edge once labels sit beneath it.
+    final baseline = size.height - bottomPad;
+    final plotHeight = baseline - topPad;
+    if (plotWidth <= 0 || plotHeight <= 0) return;
 
     final axis = Paint()
       ..color = axisColor
       ..strokeWidth = 1;
-    canvas.drawLine(Offset(plotLeft, size.height),
-        Offset(size.width, size.height), axis);
+    canvas.drawLine(Offset(plotLeft, baseline),
+        Offset(size.width, baseline), axis);
 
     // Gridlines at the peak and at half, each with its value on the left.
     // Two lines rather than a full grid: this is a 150px-tall chart on a
@@ -626,7 +666,7 @@ class BarChartPainter extends CustomPainter {
       ..strokeWidth = 0.5;
 
     void gridline(double fraction, int value) {
-      final y = size.height - (plotHeight * fraction);
+      final y = baseline - (plotHeight * fraction);
       canvas.drawLine(Offset(plotLeft, y), Offset(size.width, y), faint);
       final tp = _label('$value', 9, textColor);
       // Right-aligned against the plot edge so 1 and 100 line up.
@@ -640,7 +680,7 @@ class BarChartPainter extends CustomPainter {
     if (maxValue >= 2) gridline(0.5, maxValue ~/ 2);
     final zero = _label('0', 9, textColor);
     zero.paint(canvas,
-        Offset(plotLeft - zero.width - 4, size.height - zero.height / 2 - 1));
+        Offset(plotLeft - zero.width - 4, baseline - zero.height / 2 - 1));
 
     final slot = plotWidth / values.length;
     final gap = slot > 4 ? math.min(3.0, slot * 0.25) : 0.0;
@@ -658,7 +698,7 @@ class BarChartPainter extends CustomPainter {
       final left = plotLeft + i * slot + gap / 2;
       canvas.drawRRect(
         RRect.fromRectAndCorners(
-          Rect.fromLTWH(left, size.height - h, barWidth, h),
+          Rect.fromLTWH(left, baseline - h, barWidth, h),
           topLeft: const Radius.circular(2),
           topRight: const Radius.circular(2),
         ),
@@ -670,16 +710,51 @@ class BarChartPainter extends CustomPainter {
           tp.paint(
             canvas,
             Offset(left + (barWidth - tp.width) / 2,
-                size.height - h - tp.height - 1),
+                baseline - h - tp.height - 1),
           );
         }
       }
+    }
+
+    if (!hasLabels) return;
+
+    // Thin the x-axis labels to whatever fits instead of drawing one per
+    // bar. At 30 daily buckets on a narrow phone there are about 9px per
+    // bar and a "12/11" label is nearer 26px, so drawing them all would
+    // overlap into an unreadable smear. Measuring a real label rather than
+    // assuming a width, because "9/11" and "30/11" differ.
+    final sample = _label(labels.first, 8.5, textColor);
+    final step = math.max(1, ((sample.width + 6) / slot).ceil());
+
+    void drawLabel(int i) {
+      final tp = _label(labels[i], 8.5, textColor);
+      final centre = plotLeft + i * slot + slot / 2;
+      var x = centre - tp.width / 2;
+      // Keep the first and last inside the canvas rather than clipped.
+      if (x < plotLeft) x = plotLeft;
+      if (x + tp.width > size.width) x = size.width - tp.width;
+      tp.paint(canvas, Offset(x, baseline + 2));
+    }
+
+    final drawn = <int>{};
+    for (var i = 0; i < labels.length; i += step) {
+      drawn.add(i);
+      drawLabel(i);
+    }
+    // The last bucket is the one a reader cares about most — it is "now".
+    // Draw it even when the stride missed it, unless it would collide with
+    // the label before it.
+    final last = labels.length - 1;
+    if (last > 0 && !drawn.contains(last)) {
+      final prev = drawn.isEmpty ? -1 : drawn.reduce(math.max);
+      if (prev < 0 || (last - prev) * slot >= sample.width + 6) drawLabel(last);
     }
   }
 
   @override
   bool shouldRepaint(BarChartPainter old) =>
       !listEquals(old.values, values) ||
+      !listEquals(old.labels, labels) ||
       old.barColor != barColor ||
       old.axisColor != axisColor ||
       old.textColor != textColor;

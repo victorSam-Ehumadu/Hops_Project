@@ -34,6 +34,36 @@ Future<void> _paint(WidgetTester tester, List<int> values, Size size) async {
   expect(tester.takeException(), isNull);
 }
 
+/// Same as [_paint] but with x-axis labels, which reserve a strip under the
+/// axis and move the baseline up off the canvas bottom.
+Future<void> _paintLabelled(
+  WidgetTester tester,
+  List<int> values,
+  List<String> labels,
+  Size size,
+) async {
+  await tester.pumpWidget(MaterialApp(
+    home: Center(
+      child: SizedBox(
+        width: size.width,
+        height: size.height,
+        child: CustomPaint(
+          painter: BarChartPainter(
+            values: values,
+            labels: labels,
+            barColor: Colors.teal,
+            axisColor: Colors.black12,
+            textColor: Colors.black54,
+          ),
+          child: const SizedBox.expand(),
+        ),
+      ),
+    ),
+  ));
+  await tester.pump();
+  expect(tester.takeException(), isNull);
+}
+
 void main() {
   const phone = Size(320, 150);
 
@@ -104,6 +134,83 @@ void main() {
       // every poll, so an identity check would repaint the chart on every
       // refresh regardless of whether anything moved.
       expect(make([1, 2, 3]).shouldRepaint(make([1, 2, 3])), isFalse);
+    });
+  });
+  // x-axis labels. The chart had no dates on it because BarChartPainter
+  // only ever received the numbers: the screen mapped the series to values
+  // and discarded each point's bucket timestamp. Labels reserve a 14px
+  // strip under the axis, so every height below it shifts - the same class
+  // of division-and-negative-size hazard the rest of this file exists for.
+  group('x-axis labels', () {
+    const tall = Size(320, 176);
+
+    testWidgets('absent labels paint exactly as before', (t) async {
+      await _paint(t, const [1, 5, 3], phone);
+    });
+
+    testWidgets('a full set of labels paints', (t) async {
+      await _paintLabelled(
+          t, const [1, 5, 3], const ['1/11', '2/11', '3/11'], tall);
+    });
+
+    testWidgets('30 daily buckets on a narrow phone paint', (t) async {
+      // ~9px per bar against a ~26px label, so the thinning has to engage.
+      await _paintLabelled(
+        t,
+        List<int>.generate(30, (i) => i % 7),
+        List<String>.generate(30, (i) => '${i + 1}/11'),
+        tall,
+      );
+    });
+
+    testWidgets('24 hourly buckets paint', (t) async {
+      await _paintLabelled(
+        t,
+        List<int>.generate(24, (i) => i),
+        List<String>.generate(24, (i) => '${i.toString().padLeft(2, '0')}:00'),
+        tall,
+      );
+    });
+
+    testWidgets('a single labelled bucket paints', (t) async {
+      await _paintLabelled(t, const [4], const ['14:00'], tall);
+    });
+
+    testWidgets('a mismatched label count is ignored, not an index crash',
+        (t) async {
+      // Both lists come from the same series so this should not happen, but
+      // an index error inside paint() takes the whole admin screen down
+      // with a red error box.
+      await _paintLabelled(t, const [1, 2, 3, 4], const ['1/11', '2/11'], tall);
+    });
+
+    testWidgets('a canvas too short for the label strip stays non-negative',
+        (t) async {
+      // The strip takes 14px; at 10px tall plotHeight goes negative and the
+      // painter must bail rather than compute a negative bar height.
+      await _paintLabelled(
+          t, const [1, 2], const ['1/11', '2/11'], const Size(320, 10));
+    });
+
+    test('shouldRepaint notices a label change with identical values', () {
+      // fetch() rebuilds the series every poll, and identical counts can
+      // land on a different day - an identity check would leave yesterday's
+      // axis under today's bars.
+      BarChartPainter p(List<String> labels) => BarChartPainter(
+            values: const [1, 2],
+            labels: labels,
+            barColor: Colors.teal,
+            axisColor: Colors.black12,
+            textColor: Colors.black54,
+          );
+      expect(
+          p(const ['2/11', '3/11']).shouldRepaint(p(const ['1/11', '2/11'])),
+          isTrue);
+      expect(
+          p(const ['1/11', '2/11']).shouldRepaint(p(const ['1/11', '2/11'])),
+          isFalse,
+          reason: 'Identical contents must NOT repaint, or every poll '
+              'repaints whether or not anything moved.');
     });
   });
 }
