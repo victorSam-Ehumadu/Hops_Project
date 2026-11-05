@@ -531,7 +531,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () {
               Navigator.pop(ctx);
-              _showFlareReasonDialog();
+              // Deferred for the same reason _submitFlareReason defers its
+              // broadcast: popping one route and pushing another inside the
+              // same frame means the second dialog starts building while
+              // the first is still being dismantled. Harmless from a button
+              // tap far more often than not, but this is the one flow in
+              // the app where a crash costs someone their emergency alert,
+              // so it gets the same one-frame breathing room.
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                _showFlareReasonDialog();
+              });
             },
             child: const Text("NEXT",
                 style: TextStyle(fontWeight: FontWeight.bold)),
@@ -557,26 +567,21 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           decoration: const InputDecoration(
             hintText: "e.g., Fire in Lab 3",
           ),
-          onSubmitted: (_) {
-            final reason = reasonController.text.trim();
-            if (reason.isEmpty) return;
-            Navigator.pop(ctx);
-            _broadcastEmergencyFlare(reason);
-          },
+          onSubmitted: (_) =>
+              _submitFlareReason(ctx, reasonController.text),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            // Also goes through the dismiss helper: this field is
+            // autofocused, so Cancel tears the IME down at the same moment
+            // as the route, which threw the same assertion as submitting.
+            onPressed: () => _dismissFlareReasonDialog(ctx),
             child: const Text("Cancel"),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              final reason = reasonController.text.trim();
-              if (reason.isEmpty) return;
-              Navigator.pop(ctx);
-              _broadcastEmergencyFlare(reason);
-            },
+            onPressed: () =>
+                _submitFlareReason(ctx, reasonController.text),
             child: const Text("ACTIVATE",
                 style: TextStyle(fontWeight: FontWeight.bold)),
           ),
@@ -585,6 +590,49 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     ).whenComplete(() {
       _flareDialogOpen = false;
       reasonController.dispose();
+    });
+  }
+
+  /// Closes the reason dialog without sending.
+  ///
+  /// Drops focus BEFORE popping. The reason field is autofocused, so the
+  /// keyboard is up whenever this dialog is on screen, and letting the
+  /// route tear down while the engine is still mid-way through hiding the
+  /// IME is what produced, on a Galaxy A04e:
+  ///
+  ///   Failed assertion: '_dependents.isEmpty': is not true
+  ///   Tried to build dirty widget in the wrong build scope
+  ///
+  /// one immediately after the other, right after
+  /// `ImeTracker: onRequestHide … HIDE_SOFT_INPUT`.
+  void _dismissFlareReasonDialog(BuildContext ctx) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.pop(ctx);
+  }
+
+  /// Accepts the typed reason and raises the flare.
+  ///
+  /// Two deliberate pieces of ordering, both of which the crash came from
+  /// getting wrong:
+  ///
+  ///   1. Unfocus before popping, as above.
+  ///   2. Broadcast AFTER the current frame, not synchronously. This is
+  ///      reached from `onSubmitted`, which is delivered from the engine's
+  ///      text-input channel and can land inside a build or layout phase.
+  ///      _broadcastEmergencyFlare calls setState and reads
+  ///      ScaffoldMessenger off an inherited widget, and doing that while
+  ///      the dialog route is being torn down in the same frame is exactly
+  ///      "dirty widget in the wrong build scope".
+  ///
+  /// The delay is one frame — about 16ms — which costs nothing even here.
+  void _submitFlareReason(BuildContext ctx, String raw) {
+    final reason = raw.trim();
+    if (reason.isEmpty) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.pop(ctx);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _broadcastEmergencyFlare(reason);
     });
   }
 
