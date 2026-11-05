@@ -9,7 +9,6 @@ import 'package:client/services/hops_constants.dart';
 import 'package:client/services/cosmetic_prefs.dart';
 import 'package:client/services/avatar_path_notifier.dart';
 import 'package:client/theme/radar_icons.dart';
-import 'package:client/views/hops_shop_page.dart';
 import 'package:client/views/profile_screen.dart';
 import 'package:client/widgets/hops_background_pattern.dart';
 import 'package:client/widgets/hops_card.dart';
@@ -37,15 +36,32 @@ class RadarScreen extends StatefulWidget {
   // chat_terminal.dart) — used to resolve an observed "HPS:<token>" beacon
   // back to a real name. Absent entries just render as anonymous.
   final Map<String, List<int>> contactSeeds;
-  // Neither the Emergency Flare NOR the Official Alert has a trigger on
-  // this screen any more. Official Alert composing moved to the separate
-  // Admin app (lib/services/official_alert_service.dart); the personal
-  // flare's old red app-bar button is gone too — it's now reached only by
-  // the Quick Settings tile (HopsSosTileService.kt) or the app-icon
-  // shortcut, both of which open the confirm dialog straight from
-  // hops_app.dart so it appears
-  // over whatever screen you're on. Receiving either kind of alert is
-  // unaffected — that's handled in hops_app.dart, not here.
+  // The Official Alert has no trigger on this screen — composing one moved
+  // to the separate Admin app (lib/services/official_alert_service.dart).
+  //
+  // The personal Emergency Flare DOES have one again, in the app bar, and
+  // it is the slot the Hops Shop briefly occupied. It was removed once for
+  // two stated reasons; both are addressed rather than ignored:
+  //
+  //   * "easy to set off by accident" — the button that was removed was
+  //     HOLD-to-fire, which is a single gesture away from sending. This one
+  //     only opens hops_app.dart's _showFlareConfirmDialog, so firing takes
+  //     a confirm AND a typed reason. A stray tap cannot raise a flare.
+  //   * "useless in the situation it exists for" — true as an argument that
+  //     it is not SUFFICIENT, and it isn't the primary trigger: the Quick
+  //     Settings tile and app-icon shortcut still exist for the
+  //     phone-in-pocket case. This is additive, for when the app is
+  //     already open and in your hand, which is also the case during a
+  //     demo.
+  //
+  // Receiving either kind of alert is unaffected — handled in hops_app.dart.
+  final VoidCallback? onEmergencyFlare;
+  // Stands a flare down. The active-flare SnackBar already carries a CANCEL,
+  // but a SnackBar can be swiped away or time out, and then there is no way
+  // back to it — so while a flare is up this button becomes the persistent
+  // stand-down instead of a second way to raise one.
+  final VoidCallback? onCancelEmergencyFlare;
+  final bool isFlareActive;
   final VoidCallback? onRescan;
   final int nearbyBleCount;
   // Discoverable mode — see hops_constants.dart's kDiscoverableProtocolMarker.
@@ -65,6 +81,9 @@ class RadarScreen extends StatefulWidget {
     required this.onDeclineRequest,
     required this.friendUsernames,
     this.contactSeeds = const {},
+    this.onEmergencyFlare,
+    this.onCancelEmergencyFlare,
+    this.isFlareActive = false,
     this.onRescan,
     this.nearbyBleCount = 0,
     this.isDiscoverable = false,
@@ -87,6 +106,56 @@ class _RadarScreenState extends State<RadarScreen>
     if (count >= 20) return const Color(0xFFF9A825); // amber
     if (count >= 5) return Colors.orange;
     return Colors.red;
+  }
+
+  /// The app-bar Emergency Flare control.
+  ///
+  /// Two states, and the swap matters: while a flare is up this is the
+  /// stand-down, not a second way to raise one. Raising a flare you already
+  /// raised does nothing useful, whereas cancelling is the thing you
+  /// urgently want and the SnackBar that offered it may well be gone.
+  ///
+  /// Tapping NEVER sends. It opens hops_app.dart's confirm dialog, which
+  /// then asks for a reason before anything is broadcast.
+  Widget _buildFlareButton() {
+    final active = widget.isFlareActive;
+    // Fixed red in both states — see the call site for why this one control
+    // does not follow the theme.
+    const flare = Color(0xFFD32F2F);
+    return Tooltip(
+      message: active ? 'Stand down emergency flare' : 'Emergency Flare',
+      child: Semantics(
+        button: true,
+        label: active
+            ? 'Stand down emergency flare'
+            : 'Emergency Flare. Asks for confirmation and a reason before sending.',
+        child: GestureDetector(
+          onTap: active
+              ? widget.onCancelEmergencyFlare
+              : widget.onEmergencyFlare,
+          child: Container(
+            width: 40,
+            height: 40,
+            margin: const EdgeInsets.only(right: 8),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              // Solid while active so the app bar reflects that something
+              // is actually on the air; a tint otherwise, matching the
+              // weight of the other controls in this bar.
+              color: active ? flare : flare.withValues(alpha: 0.12),
+              border: active
+                  ? null
+                  : Border.all(color: flare.withValues(alpha: 0.45)),
+            ),
+            child: Icon(
+              active ? Icons.stop_rounded : Icons.sos_rounded,
+              color: active ? Colors.white : flare,
+              size: active ? 22 : 20,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   String _bleMeshLabel(int count) {
@@ -440,40 +509,22 @@ class _RadarScreenState extends State<RadarScreen>
           ),
 
           const SizedBox(width: 8),
-          // Was the red Emergency Flare button. Removed rather than
-          // relocated: a hold-to-fire control living permanently in the
-          // app bar is easy to set off by accident, and useless in the
-          // situation it exists for — visibly unlocking your phone,
-          // opening Hops, finding Home and press-holding a red button is
-          // exactly what you can't do when you actually need a flare.
-          // The Quick Settings tile and the app-icon shortcut raise the
-          // same confirm dialog from anywhere in the app (hops_app.dart's
-          // _showFlareConfirmDialog).
+          // The Emergency Flare, in the slot the Hops Shop had been
+          // occupying. The Shop is NOT orphaned by this — it keeps its own
+          // labelled pill on the Features tab (hops_app.dart's
+          // _buildShopButton), which is where browsing belongs anyway.
           //
-          // The Hops Shop takes the freed slot, mirroring the entry point
-          // already on the Features tab (hops_app.dart's _buildShopButton)
-          // so it's reachable from Home too. Kept as a same-sized circular
-          // icon button rather than that tab's wider labelled pill — this
-          // bar also carries the BLE-density chip and the avatar, and a
-          // second pill overflows it on narrow screens.
-          Tooltip(
-            message: "Hops Shop",
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const HopsShopPage()),
-              ),
-              child: Container(
-                width: 40,
-                height: 40,
-                margin: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: colors.primary.withValues(alpha: 0.12),
-                ),
-                child: Icon(Icons.storefront, color: colors.primary, size: 20),
-              ),
-            ),
-          ),
+          // Same 40x40 circle the Shop used rather than a wide labelled
+          // pill: this bar also carries the BLE-density chip and the
+          // avatar, and a second pill overflows it on narrow screens.
+          //
+          // Red is hardcoded here, deliberately, and is the one place in
+          // this file that ignores the active theme. Every Hops theme can
+          // recolour `primary`, and a flare control that renders mint green
+          // under one theme and navy under another stops reading as danger
+          // at a glance. It matches the flare SnackBar and notification,
+          // which are also fixed red.
+          _buildFlareButton(),
           GestureDetector(
             onTap: () async {
               await Navigator.of(context).push(

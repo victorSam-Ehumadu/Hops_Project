@@ -95,7 +95,14 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
       return;
     }
     final id = _generateTagId();
-    if (("SBF:$id:$subject").length > 29) {
+    // advertisementNameFits, not `.length > 29`. Two things were wrong with
+    // that: 29 is not the ceiling (kAdvertisementNameMaxBytes is 26), and
+    // `.length` counts UTF-16 code units, so an accented character or an
+    // emoji in a subject counted as one while costing two to four bytes on
+    // the wire. _subjectMaxLength keeps ASCII input inside the budget
+    // already, which is why this never bit — but it was the same silent
+    // over-long-name failure waiting for the first non-ASCII subject.
+    if (!advertisementNameFits("SBF:$id:$subject")) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("That's a bit long — try a shorter subject or course code.")),
       );
@@ -323,6 +330,64 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
               "Tag your subject or course code so other Hoppers nearby studying the same thing can find you.",
               style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.55)),
             ),
+            const SizedBox(height: 12),
+            // Every session is a fixed hour, so there is no meeting time to
+            // pick — which is worth saying out loud, because the first thing
+            // people look for here is where to set one.
+            //
+            // The duration is read from kStudyTagAdvertiseDuration rather
+            // than written as "1 hour", so this cannot quietly contradict
+            // the code if that constant ever changes. It is also the reason
+            // this says "an hour" and not "75 minutes": the 75 in
+            // kStudyReportLifetime is how long a RECEIVED tag is kept
+            // locally, deliberately a little longer than the on-air window
+            // so a tag first heard near the end does not vanish moments
+            // later. What a user is promised is the broadcast hour.
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: colors.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.schedule, size: 16, color: colors.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Study sessions happen now, not later",
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.bold,
+                            color: colors.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "Posting a tag says \"I'm studying this right now\" — "
+                          "it isn't a meeting you schedule, so there's no time "
+                          "to pick. It stays visible to Hoppers nearby for "
+                          "${kStudyTagAdvertiseDuration.inMinutes ~/ 60} hour "
+                          "and then stops on its own. Everyone you see below is "
+                          "studying at this moment too.",
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            height: 1.35,
+                            color: colors.onSurface.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
             if (_myActiveId != null) ...[
               HopsCard(
@@ -408,11 +473,10 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                   _locationButton(colors),
                 ],
               ),
-            const SizedBox(height: 8),
-            Text(
-              "Visible to nearby Hops users for up to ${kStudyTagAdvertiseDuration.inMinutes ~/ 60} hour.",
-              style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
-            ),
+            // The "up to 1 hour" line that used to sit here is gone: the
+            // note at the top of this screen now says the same thing, and
+            // more prominently. Two copies of the same promise invites them
+            // drifting apart.
             const SizedBox(height: 24),
             Row(
               children: [

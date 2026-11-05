@@ -3715,6 +3715,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         onDeclineRequest: declineRequest,
         friendUsernames: friendUsernames,
         contactSeeds: _contactSeeds,
+        // The in-app flare trigger. Deliberately handed the dialog rather
+        // than _broadcastEmergencyFlare: every trigger in this app goes
+        // through the same confirm-then-reason prompt and none of them may
+        // skip it (see _showFlareConfirmDialog's header and
+        // HopsSosTileService.kt's).
+        onEmergencyFlare: _showFlareConfirmDialog,
+        onCancelEmergencyFlare: _cancelEmergencyFlare,
+        isFlareActive: _isFlareActive,
         onRescan: () {
           FlutterBluePlus.stopScan();
           _startContinuousScan();

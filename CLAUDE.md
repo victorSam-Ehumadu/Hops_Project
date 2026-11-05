@@ -740,7 +740,9 @@ the Hops Shop (`views/hops_shop_page.dart`, `services/cosmetic_prefs.dart`) on c
 nothing gameplay- or safety-affecting. **Repeatable game modes must not pay carrots**: Hops
 Wordle's Unlimited mode deliberately pays nothing and can't touch the daily streak, because an
 endlessly repeatable puzzle would let anyone mint an unbounded balance. The Shop is not an addable
-catalog feature; it's reached from persistent buttons on the Radar and Features tabs.
+catalog feature; it's reached from a persistent button on the **Features** tab
+(`_buildShopButton`). It had one on Radar/Home too until 5 Nov 2026, when the Emergency
+Flare took that slot back — see "Emergency Flare" below.
 
 ### 7. App shell & background behavior
 
@@ -767,12 +769,25 @@ catalog feature; it's reached from persistent buttons on the Radar and Features 
 
 ### 8. Emergency Flare — triggers and known limits
 
-There is **no in-app flare button**. It is reached only from outside the UI, and both remaining
-paths open the same confirm-then-reason dialog — neither skips confirmation:
+Three triggers, and **all** of them open the same confirm-then-reason dialog — none
+skips confirmation:
 
 - The Quick Settings tile (`HopsSosTileService.kt`), delivered cold-start via `consumePendingSos`
   or warm via `onNewIntent`.
 - The app-icon shortcut (`quick_actions`, `shortcutNotifier`).
+- **The app-bar button on the Radar/Home tab** (`radar_screen.dart`'s `_buildFlareButton`),
+  added 5 Nov 2026 in the slot the Hops Shop had taken. A flare button had been removed from
+  exactly this spot once, for two stated reasons, and both are answered rather than ignored:
+  the removed one was **hold-to-fire**, one gesture from sending and so easy to trigger by
+  accident, whereas this one only opens the dialog, so a stray tap cannot broadcast; and
+  "useless in the situation it exists for" argues it is not *sufficient*, not that it is
+  harmful — the tile and shortcut remain for the phone-in-pocket case, and this is additive
+  for when the app is already open. While a flare is active the same button becomes the
+  **stand-down**, because the active-flare SnackBar's CANCEL can be swiped away or time out
+  and then there is no way back to it. Its red is hardcoded, deliberately — every theme can
+  recolour `primary`, and a danger control that renders mint green under one theme stops
+  reading as danger at a glance. The Shop is **not** orphaned: it keeps its labelled pill on
+  the Features tab (`_buildShopButton`).
 
 **The volume-down hold trigger was removed**, along with the Silent SOS settings page and its
 Profile entry. It worked on some handsets and silently did nothing on others, because OEM skins
