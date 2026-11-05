@@ -19,6 +19,7 @@
 // app's stance elsewhere: nothing here identifies who did what.
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:client/utils/admin_error_text.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/services/admin_ble_hub.dart';
@@ -99,7 +100,7 @@ class _AdminDashboardTabState extends State<AdminDashboardTab> {
       if (silent) return;
       setState(() {
         _loading = false;
-        _error = "Couldn't load stats — check your connection.";
+        _error = describeAdminError(e, fallbackSubject: "the stats");
       });
     }
   }

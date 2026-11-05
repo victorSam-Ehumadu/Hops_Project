@@ -11,46 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/views/admin/admin_user_detail_screen.dart';
-
-/// Turns a failed moderation RPC into something that actually says what
-/// went wrong. Every action in this file used to report the same
-/// "Failed — check your connection", which was actively misleading: the
-/// most common real cause has nothing to do with connectivity. The RPCs
-/// raise named exceptions (see 0008/0010 migrations) precisely so the
-/// client can tell these apart.
-String describeModerationError(Object e) {
-  if (e is PostgrestException) {
-    final msg = e.message;
-    if (msg.contains('user_not_found')) {
-      return "No account by that name exists. If the message shows a sender like "
-          "\"ab12?\", that sender couldn't be matched to a real account — the "
-          "reporting device hadn't synced the user directory when it filed the report.";
-    }
-    if (msg.contains('no_attributable_sender')) {
-      return "This report has no sender attached (Vibe Check tags are anonymous), so there's nobody to warn.";
-    }
-    if (msg.contains('report_not_open')) {
-      return "This report was already resolved — refresh to update the list.";
-    }
-    if (msg.contains('report_not_found')) {
-      return "This report no longer exists — refresh to update the list.";
-    }
-    if (msg.contains('not_authorized')) {
-      return "Your admin session isn't valid anymore. Sign out and back in.";
-    }
-    if (msg.contains('cannot_delete_admin')) {
-      return "You can't delete an admin account — demote it first.";
-    }
-    // A missing function surfaces as PGRST202 — almost always means a
-    // migration hasn't been applied to this Supabase project yet, which
-    // is worth saying outright rather than blaming the network.
-    if (e.code == 'PGRST202' || msg.contains('does not exist')) {
-      return "This action isn't available on the server yet — the latest database migration hasn't been applied.";
-    }
-    return "Server rejected the action: $msg";
-  }
-  return "Couldn't reach the server — check your connection.";
-}
+import 'package:client/utils/admin_error_text.dart';
 
 class AdminModerationTab extends StatefulWidget {
   const AdminModerationTab({super.key});
@@ -99,7 +60,7 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
     } catch (e) {
       setState(() {
         _loading = false;
-        _error = "Couldn't load reports — check your connection.";
+        _error = describeAdminError(e, fallbackSubject: "reports");
       });
     }
   }

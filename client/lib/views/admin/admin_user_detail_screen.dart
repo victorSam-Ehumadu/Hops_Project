@@ -13,6 +13,7 @@
 // itself, not by this screen, so the audit trail can't be skipped by a
 // client that forgets to write it.
 import 'package:flutter/material.dart';
+import 'package:client/utils/admin_error_text.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -121,7 +122,7 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = "Couldn't load this account — check your connection.";
+        _error = describeAdminError(e, fallbackSubject: "this account");
       });
     }
   }

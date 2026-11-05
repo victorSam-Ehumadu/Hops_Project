@@ -13,6 +13,7 @@
 // dismissed (see 0015_admin_management.sql). That queue needs somewhere to
 // live and this is the tab about people.
 import 'package:flutter/material.dart';
+import 'package:client/utils/admin_error_text.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/views/admin/admin_user_detail_screen.dart';
@@ -88,7 +89,7 @@ class _AdminUsersTabState extends State<AdminUsersTab> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = "Couldn't load users — check your connection.";
+        _error = describeAdminError(e, fallbackSubject: "users");
       });
     }
   }

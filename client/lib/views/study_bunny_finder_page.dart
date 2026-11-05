@@ -56,6 +56,14 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
   // for no benefit.
   int? _selectedLocationIndex;
 
+  // Dismissing the "sessions happen now" notice is deliberately NOT
+  // persisted. This State is created fresh every time the page is opened,
+  // so an X hides it for the current visit and it is back on the next one
+  // — which is what was asked for, and is right for this particular
+  // notice: it corrects an expectation ("where do I set the time?") that
+  // a user forms again each time they come to post a session.
+  bool _noticeDismissed = false;
+
   final TextEditingController _subjectController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
 
@@ -343,9 +351,10 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
             // locally, deliberately a little longer than the on-air window
             // so a tag first heard near the end does not vanish moments
             // later. What a user is promised is the broadcast hour.
+            if (!_noticeDismissed)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
               decoration: BoxDecoration(
                 color: colors.primary.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(10),
@@ -385,10 +394,32 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                       ],
                     ),
                   ),
+                  // Dismiss for this visit. 32x32 is below the 48dp
+                  // recommendation on purpose — this sits inside an
+                  // informational strip, and a full-size target here would
+                  // compete with the Start button for attention. The strip
+                  // is not interactive otherwise, so there is nothing
+                  // adjacent to mis-hit.
+                  Semantics(
+                    button: true,
+                    label: 'Dismiss this note',
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () => setState(() => _noticeDismissed = true),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(
+                          Icons.close,
+                          size: 15,
+                          color: colors.onSurface.withValues(alpha: 0.55),
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            if (!_noticeDismissed) const SizedBox(height: 16),
             if (_myActiveId != null) ...[
               HopsCard(
                 radius: 14,

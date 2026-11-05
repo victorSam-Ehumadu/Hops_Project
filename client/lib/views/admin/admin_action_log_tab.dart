@@ -13,6 +13,7 @@
 // _mayBeClipped() says so out loud instead of quietly showing less.
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:client/utils/admin_error_text.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:client/services/admin_stats_service.dart';
@@ -101,7 +102,7 @@ class _AdminActionLogTabState extends State<AdminActionLogTab> {
       if (mounted && !silent) {
         setState(() {
           _loading = false;
-          _error = "Couldn't load the action log — check your connection.";
+          _error = describeAdminError(e, fallbackSubject: "the action log");
         });
       }
     }
