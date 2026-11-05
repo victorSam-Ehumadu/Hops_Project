@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **297 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **301 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -211,6 +211,16 @@ What is and isn't covered, so you know what a green run actually proves:
   bypasses `_releaseRadioToPresenceBeacon()`, or if a guard checks `_isFlareActive` without
   also checking `_ownFlareHoldsRadio`. Added because this bug class had already recurred and
   is otherwise only reachable with two physical devices — see "Concurrent alerts" below.
+- `test/views/flare_button_gesture_test.dart` (4) — behavioural, and the reproduction
+  harness for a red screen reported on the Home flare button:
+  `'_dependents.isEmpty': is not true`, which is
+  `InheritedElement.debugDeactivated()` and therefore **debug-only** — it cannot fire in a
+  release APK, so a red screen means a debug build. Pins that a tap never raises a flare
+  (it only shows the hold hint), that a hold fires the callback exactly once (two would mean
+  something is double-binding the gesture again, which is what `Tooltip`'s default
+  `triggerMode: longPress` was doing), that an active flare's hold stands down rather than
+  raising a second, and that tearing the screen down after several holds throws nothing.
+  All four pass, which is what ruled the button widget out as the cause.
 - `test/views/handshake_freshness_invariant_test.dart` (11) — another *source-level*
   guard. `FlutterBluePlus.scanResults` emits the whole accumulated list on every update and
   `removeIfGone` is **not** passed, so an entry never leaves it for the life of the scan —
