@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **344 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **352 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -796,10 +796,11 @@ Flare took that slot back — see "Emergency Flare" below.
 - `flutter_foreground_task` + `flutter_local_notifications` keep a foreground service alive so BLE
   scanning keeps running in the background for emergency-flare alerts. The service is configured
   and started **inline in `main.dart` / `main_admin.dart`**; `notification_service.dart` owns the
-  alert registry. Note `services/foreground_service.dart` is **dead code** — nothing imports it,
-  and its `MyTaskHandler` is never registered. The only thing matching `foreground_service`
-  elsewhere is the notification *channel id* string, which is unrelated. Same for
-  `views/half_wheel.dart`. Delete both or wire them up; don't assume they run.
+  alert registry.
+  `services/foreground_service.dart` WAS dead code (nothing imported it, so its `MyTaskHandler`
+  was never registered and the service ran no Dart at all) and is **deleted**, replaced by
+  `services/background_flare_task.dart` — see "Hearing a flare with the app closed" below.
+  `views/half_wheel.dart` is still dead; delete it or wire it up, don't assume it runs.
 - Theming is data-driven: `theme/app_theme.dart` defines an `AppTheme` model and `AppThemes.all`
   catalog; the active theme index lives in a global `themeNotifier` (`main.dart`) persisted to
   `SharedPreferences`. Both entry points read it.
@@ -841,6 +842,48 @@ The dialog lives on `HopsApp` itself (`_showFlareConfirmDialog`), not on any tab
 `Navigator.of(context)` resolves to the **root** navigator and the prompt renders over whatever
 route is on top. It must not change tabs — yanking the user to Home was both disorienting and slow
 in the one situation this exists for.
+
+### 8b. Hearing a flare with the app closed
+
+`services/background_flare_task.dart` is the only thing in this app that runs with no UI. Read
+this before touching it.
+
+**Why it exists.** Every BLE scan lives in `_HopsAppState`, a widget. Swiping the app away
+destroys the Activity, the engine and the only listener, so the foreground notification went on
+claiming "Scanning for emergency flares" while nothing was. `flutter_foreground_task` can run a
+handler in a separate isolate that survives that, but `startService` was being called with **no
+`callback:`** — so no handler was ever registered.
+
+**It runs ALONGSIDE the UI isolate, not instead of it.** The task isolate starts with the
+service, i.e. at app launch. Two scans from one app fight over the radio and two listeners mean
+two alarms for one flare, so the handler only takes over once the UI has gone quiet:
+`HopsRoot` stamps `ui_isolate_heartbeat_ms` every 5s and the handler listens only when that is
+more than 20s stale. A **heartbeat, not a lifecycle callback** — a swipe-away or a low-memory
+kill gives no reliable callback, and a flag set on `paused` would wrongly fire for a
+backgrounded-but-alive app that is still scanning fine. The reader MUST call `prefs.reload()`:
+each isolate caches SharedPreferences, so without it the handler reads the value from when it
+started, forever.
+
+**It cannot use `NotificationService`.** That class's state (the alert registry,
+`isAlarmRinging`, the `AudioPlayer`) lives in the UI isolate. The handler has its own channel,
+`emergency_flare_background`, with `playSound: true` and alarm `audioAttributesUsage` — the
+in-app channel sets `playSound: false` because the app drives audio itself, which is not
+dependable headless. **The trade: the OS plays the tone ONCE rather than looping it.** A single
+loud alarm plus a full-screen intent is what is reliably achievable with no UI isolate.
+
+**Scope is deliberately tiny**: raise and stand down, nothing else. No relaying, no signature
+check, no Watch Me, no chat. Everything else can wait for the app to be opened; an alarm cannot.
+
+It applies the same freshness rule as the UI dispatch (`scanResults` never drops entries, so a
+flare heard once would otherwise re-raise forever) and the same trailing-colon stand-down
+scoping. `flareKeysStoodDownBy` is pulled out as a pure function precisely so that rule is
+testable — `test/services/background_flare_task_test.dart` (8).
+
+**NOT device-verified.** It compiles and the pure logic is covered, but whether
+`flutter_blue_plus` actually scans from this isolate on a given handset, and whether Samsung's
+battery management lets the service live after a swipe-away, can only be answered on hardware.
+Set the app to **Battery — Unrestricted** and exclude it from "Put unused apps to sleep" before
+concluding anything.
 
 ### 9. Concurrent alerts
 

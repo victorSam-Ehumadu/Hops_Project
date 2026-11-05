@@ -13,6 +13,7 @@ import 'package:client/views/hops_app.dart';
 import 'package:client/views/hops_splash_screen.dart';
 import 'package:client/services/account_standing.dart';
 import 'package:client/services/notification_service.dart';
+import 'package:client/services/background_flare_task.dart';
 import 'package:client/widgets/alarm_ringing_banner.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:client/services/sos_service.dart';
@@ -137,12 +138,24 @@ void main() async {
     foregroundTaskOptions: const ForegroundTaskOptions(
       autoRunOnBoot: true,
       allowWakeLock: true,
+      // Drives BackgroundFlareTaskHandler.onRepeatEvent, which is what
+      // decides whether the UI isolate is still alive and therefore whether
+      // the background listener should take over the radio. 5s is a
+      // compromise: the handover has to be quick enough to cover a phone
+      // going into a pocket, and this isolate does almost nothing on a tick
+      // where the app is running normally.
+      interval: 5000,
     ),
   );
 
   await FlutterForegroundTask.startService(
     notificationTitle: 'Hops is active',
     notificationText: 'Scanning for emergency flares…',
+    // THE WHOLE POINT. Without a callback the service runs no Dart at all:
+    // it kept the process alive and showed this exact notification while
+    // nothing listened, because every scan lived in a widget that died with
+    // the Activity. See services/background_flare_task.dart.
+    callback: startBackgroundFlareTask,
   );
 
   await dotenv.load(fileName: ".env");
@@ -201,6 +214,19 @@ class _HopsRootState extends State<HopsRoot> {
   // the background.
   bool _splashDone = false;
 
+  /// Tells the background flare listener that this isolate is alive.
+  ///
+  /// Hosted here because HopsRoot is built once for the process lifetime,
+  /// so the heartbeat covers every screen and survives sign-out, theme
+  /// changes and returning from the background. It must keep ticking while
+  /// the app is merely BACKGROUNDED — that case is still scanning for
+  /// itself, and the background handler must not compete with it.
+  ///
+  /// It stops on its own when the isolate dies, which is the signal the
+  /// handler actually waits for. Nothing needs to announce the death; a
+  /// swipe-away or a low-memory kill gives no reliable callback anyway.
+  Timer? _uiHeartbeatTimer;
+
   @override
   void initState() {
     super.initState();
@@ -210,10 +236,28 @@ class _HopsRootState extends State<HopsRoot> {
     themeNotifier.addListener(_onThemeChanged);
     fontNotifier.addListener(_onFontChanged);
     fontScaleNotifier.addListener(_onFontScaleChanged);
+    // Stamped immediately as well as on the interval, so a cold start is
+    // never briefly mistaken for a dead UI.
+    _stampUiHeartbeat();
+    _uiHeartbeatTimer =
+        Timer.periodic(kUiHeartbeatInterval, (_) => _stampUiHeartbeat());
+  }
+
+  Future<void> _stampUiHeartbeat() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+          kUiHeartbeatPrefsKey, DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {
+      // A failed stamp just means the background handler may take over a
+      // scan this isolate is also running. A duplicate notification is the
+      // worst case; a missed emergency is not.
+    }
   }
 
   @override
   void dispose() {
+    _uiHeartbeatTimer?.cancel();
     themeNotifier.removeListener(_onThemeChanged);
     fontNotifier.removeListener(_onFontChanged);
     fontScaleNotifier.removeListener(_onFontScaleChanged);
