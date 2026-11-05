@@ -130,7 +130,19 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // (a day before, 2 hours before, 1 hour before, and at the time) —
   // a per-task-only set would let the first stage's notification block
   // every later one for that same task.
+  //
+  // PERSISTED, and it has to be. This set is the only thing stopping a
+  // stage firing twice, and the fire condition is "the threshold is in the
+  // past and this task is still incomplete" — which stays true forever
+  // once the deadline passes. Held only in memory, every app launch
+  // re-fired every threshold that had already gone by, so a single
+  // overdue task produced four fresh notifications on each start, and
+  // reopening the app a few times buried the user in reminders for things
+  // they already knew about. Keyed "$taskId:$stage", so completing or
+  // deleting a task simply leaves dead keys behind rather than
+  // mis-suppressing a live one.
   Timer? _taskReminderTimer;
+  static const String _remindedTaskStagesPrefsKey = 'remindedTaskStages';
   final Set<String> _remindedTaskStages = {};
 
   // Periodic "did anything about my identity change remotely" check —
@@ -263,6 +275,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
   // At the top, next to the other sets
   final Set<String> _handledWatchAcks = {};
+
+  /// How recently a one-shot handshake advertisement must have been heard
+  /// for us to act on it. See the `heardRecently` comment in the scan
+  /// handler for why this is needed at all — the short version is that
+  /// entries never leave `FlutterBluePlus.scanResults`, so without a
+  /// freshness test a handshake can be re-processed indefinitely.
+  static const Duration _kHandshakeAdFreshness = Duration(seconds: 20);
   final Set<String> _handledEmgNames = {};    // dedup for incoming EMG: alerts
   final Set<String> _handledEmgOffNames = {}; // dedup for incoming EMG_OFF: cancels_cance
   // Dedup for fully-reassembled Lost & Found posts (keyed by postId — see
@@ -1568,6 +1587,14 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   void clearAllWatchState() {
     setState(() {
       _watchingBuddies.clear();
+      // BOTH halves of the pair. _watchedBy was added later (so the watched
+      // side could end a watch too) and was missed here, which meant
+      // "clear all watch state" cleared only half of it — and because
+      // _saveWatchState() writes both lists, the surviving half was then
+      // persisted straight back. The signal-strength view is driven off
+      // _watchedBy, so it stayed on screen after a clear that was supposed
+      // to remove it.
+      _watchedBy.clear();
       pendingWatchRequests.clear();
       _recentWatchSenders.clear();
       for (final timer in _recentWatchTimers.values) {
@@ -1576,6 +1603,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       _recentWatchTimers.clear();
       _saveWatchState();
       _notifyWatchingBuddiesChanged();
+      _notifyWatchedByChanged();
       _notifyWatchRequestsChanged();
       _handledWatchAcks.clear();
     });
@@ -1914,6 +1942,13 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final wasWatching = _watchingBuddies.remove(other);
     final wasWatched = _watchedBy.remove(other);
     if (!wasWatching && !wasWatched) return;
+    // Both sides that END a watch locally already do this; the side that
+    // learns about it over the radio needs it too. Ending the watch removes
+    // this person from _watchingBuddies, which is one of the guards that
+    // was suppressing their old request — so without a cooldown here, the
+    // moment a cancel lands any still-in-window "WR:" from them is free to
+    // raise a brand new request for the watch that was just ended.
+    _addRecentWatchSender(other);
     _saveWatchState();
     if (wasWatching) _notifyWatchingBuddiesChanged();
     if (wasWatched) _notifyWatchedByChanged();
@@ -2091,8 +2126,26 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
   // DATE, only gets the first of those — fired at 12:00 AM the day
   // before, since "2 hours before" means nothing without a time to count
   // down to.
-  void _startTaskReminderCheck() {
+  Future<void> _loadRemindedTaskStages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList(_remindedTaskStagesPrefsKey) ?? [];
+    _remindedTaskStages.addAll(saved);
+  }
+
+  Future<void> _saveRemindedTaskStages() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+        _remindedTaskStagesPrefsKey, _remindedTaskStages.toList());
+  }
+
+  Future<void> _startTaskReminderCheck() async {
     _taskReminderTimer?.cancel();
+    // Awaited BEFORE the timer starts, not alongside it. The first sweep
+    // would otherwise race the load and run against an empty set, which is
+    // precisely the duplicate-notification case the persistence exists to
+    // prevent.
+    await _loadRemindedTaskStages();
+    if (!mounted) return;
     _taskReminderTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
       if (!mounted) return;
       final now = DateTime.now();
@@ -2165,6 +2218,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     final key = '$taskId:$stage';
     if (_remindedTaskStages.contains(key) || now.isBefore(fireAt)) return;
     _remindedTaskStages.add(key);
+    _saveRemindedTaskStages();
     UnreadTracker.instance.mark(UnreadSource.taskReminder);
     NotificationService.showTaskReminderNotification(
       taskTitle: title,
@@ -2553,6 +2607,33 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
       for (final r in results) {
         final name = r.advertisementData.advName;
+        // Is this advertisement something we are hearing NOW, or a corpse
+        // still sitting in flutter_blue_plus's accumulated result list?
+        //
+        // `scanResults` emits the whole accumulated list on every update and
+        // we are not passing `removeIfGone`, so an entry NEVER leaves it for
+        // the life of the scan. Worse, as the HPS: dedup comment above
+        // records, Android hands back a new random advertising address on
+        // each re-advertise — so when a device finishes a transient
+        // handshake advertisement and reverts to its HPS: beacon, the beacon
+        // usually arrives as a *different* entry. The handshake entry is
+        // never overwritten. It just stays there, with its old name, being
+        // re-delivered forever.
+        //
+        // For one-shot handshakes that is a live bug rather than noise: the
+        // only thing stopping a months-old "WR:" from being re-accepted is a
+        // 30-second dedup set, and once that expires the request reappears
+        // out of nowhere. That is exactly the "a watch request I never sent"
+        // report. Name-based dedup cannot fix it, because a genuine repeat
+        // request is byte-identical to the stale one — the only thing that
+        // distinguishes them is WHEN it was last heard.
+        //
+        // 20s is deliberately longer than the longest transient
+        // advertisement any sender holds (WR: is 10s, WX: 6s, WA: 5s), so a
+        // genuinely live handshake is never rejected as stale, while a
+        // corpse from minutes or hours ago always is.
+        final heardRecently =
+            DateTime.now().difference(r.timeStamp) <= _kHandshakeAdFreshness;
         // 1:1 direct message (BLE fallback for RFCOMM) — checked first and
         // `continue`d because, unlike the prefix checks below, its payload
         // is base64 that could otherwise coincidentally match another
@@ -2718,7 +2799,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         // Friend request — targeted at a rotating token now, not a
         // username, so matching means "is this token mine right now"
         // rather than a plain string comparison.
-        if (name.startsWith("FR:")) {
+        if (name.startsWith("FR:") && heardRecently) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 &&
               _myRotatingSeed != null &&
@@ -2733,7 +2814,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           }
         }
         // Friend ACK
-        if (name.startsWith("FA:")) {
+        if (name.startsWith("FA:") && heardRecently) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
@@ -2768,11 +2849,18 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
         }
 
         // Watch request
-        if (name.startsWith("WR:")) {
+        if (name.startsWith("WR:") && heardRecently) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
+            // `_watchingBuddies` is checked here as well as the dedup sets:
+            // if we are already watching this person, a "please watch me"
+            // from them is redundant by definition — sendWatchRequest()
+            // refuses the mirror case for the same reason. Without it, any
+            // re-delivery during an established watch raises a second
+            // request for a watch that is already running.
             if (!_recentWatchSenders.contains(sender) &&
+                !_watchingBuddies.contains(sender) &&
                 !pendingWatchRequests.contains(sender) &&
                 !_processingWatchAccepts.contains(sender)) {
               _addRecentWatchSender(sender);
@@ -2786,7 +2874,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
         // Watch ACK – permanent one‑time snackbar
         // Watch cancelled, from either side of the pair.
-        if (name.startsWith("WX:")) {
+        if (name.startsWith("WX:") && heardRecently) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final other = parts[1];
@@ -2801,12 +2889,22 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           }
         }
 
-        if (name.startsWith("WA:")) {
+        if (name.startsWith("WA:") && heardRecently) {
           final parts = name.substring(3).split(":");
           if (parts.length == 2 && parts[0] == _adUser(myUsername)) {
             final sender = parts[1];
-            if (!_handledWatchAcks.contains(sender)) {
-              _handledWatchAcks.add(sender);
+            // Keyed on the whole advertisement and EXPIRED, matching WX:
+            // above. It used to add the bare sender name and never remove
+            // it, which meant the first accept from someone poisoned this
+            // set against them permanently: end that watch, ask them
+            // again, and their acceptance was silently discarded for the
+            // rest of the session. Since the two branches share this set,
+            // using the same key shape in both also stops a sender tag
+            // ever colliding with an advertisement name.
+            if (!_handledWatchAcks.contains(name)) {
+              _handledWatchAcks.add(name);
+              Future.delayed(const Duration(seconds: 30),
+                  () => _handledWatchAcks.remove(name));
               _onWatchRequestAccepted(sender);
             }
           }

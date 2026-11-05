@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **281 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **292 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -206,6 +206,21 @@ What is and isn't covered, so you know what a green run actually proves:
   bypasses `_releaseRadioToPresenceBeacon()`, or if a guard checks `_isFlareActive` without
   also checking `_ownFlareHoldsRadio`. Added because this bug class had already recurred and
   is otherwise only reachable with two physical devices — see "Concurrent alerts" below.
+- `test/views/handshake_freshness_invariant_test.dart` (11) — another *source-level*
+  guard. `FlutterBluePlus.scanResults` emits the whole accumulated list on every update and
+  `removeIfGone` is **not** passed, so an entry never leaves it for the life of the scan —
+  and because Android hands back a new random advertising address per re-advertise, a device
+  reverting to its `HPS:` beacon usually arrives as a *different* entry, leaving the old
+  handshake name in the list being re-delivered forever. For one-shot handshakes that is a
+  live bug: a `WR:` sent days ago can be re-raised as a brand new watch request once the
+  30-second dedup set expires. Name-based dedup cannot fix it (a genuine repeat is
+  byte-identical), so `heardRecently` tests `ScanResult.timeStamp` against
+  `_kHandshakeAdFreshness`. This test fails the build if any of `FR:`/`FA:`/`WR:`/`WA:`/`WX:`
+  is dispatched without that check, if the window leaves the 15–120s range, if the `WR:`
+  guard stops checking `_watchingBuddies`, if `_applyWatchCancelled` stops starting a
+  cooldown, if `clearAllWatchState` clears only one half of the pair, or if the task-reminder
+  dedup stops being persisted. Deliberately NOT applied to `EMG:`/`ADM:` — an emergency
+  must never be dropped for being a few seconds stale.
 - `test/views/contact_seed_exchange_test.dart` (3) — guards the *absence* of
   seed-over-manufacturer-data, having previously asserted its presence. That mechanism
   cannot work: manufacturer data and a local name do not fit in one 31-byte scan response,
