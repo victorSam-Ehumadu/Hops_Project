@@ -148,8 +148,31 @@ the three functions were untouched.
       not spam**. That is the only check that matters — and the thing this
       whole step buys you, since Single Sender Verification has no domain
       authentication and OTPs currently get filtered.
-- [ ] Set `HOPS_APPEALS_EMAIL` to a mailbox someone actually reads. A
-      banned student needs somewhere to appeal to.
+- [ ] **Set `HOPS_APPEALS_EMAIL`** to the agreed mailbox. Decided 5 Nov 2026:
+      Victor's personal address. It belongs in a Supabase secret rather than
+      a source file, because secrets are not in the repository and the
+      repository is public.
+
+      Worth knowing: that address is ALREADY public here, in
+      `password_policy.dart`'s `kTestEmailAllowlist` and `0021`'s
+      `v_allowlist`. Emptying both is the item two above this one, and this
+      is a second reason to do it — a plain-text address in a public repo is
+      scraped for spam whatever it was put there for.
+      ```
+      supabase secrets set HOPS_APPEALS_EMAIL=<the agreed address>
+      supabase functions deploy send-moderation-email
+      ```
+      The deploy is needed too: the function reads the secret at startup.
+
+      The over-promise this closes is fixed either way. The ban/suspend
+      email used to print "reply to appeal — a real person will read it"
+      unconditionally, while the `Reply-To` header it depends on was
+      optional — so with the secret unset a banned student was told their
+      appeal would be read and their reply went to the no-reply sender.
+      `moderationBodyHtml` now takes the address and falls back to "contact
+      your campus Hops administrator" when there is none, so the email can
+      never invite a reply it cannot route. Setting the secret is what turns
+      the real appeal path back on.
 - [ ] *Later:* move DMARC to `p=quarantine` after a week of clean reports.
       Do not jump to `p=reject` before the demo — it can silently drop your
       own OTP mail.

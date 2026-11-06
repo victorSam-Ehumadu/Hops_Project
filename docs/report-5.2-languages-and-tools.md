@@ -8,14 +8,14 @@ language was determined by a hard constraint of the platform the code has to run
 
 | Language | Where it runs | Files | Lines | Share |
 |---|---|---:|---:|---:|
-| **Dart** | The Flutter application (student + admin) | 100 | 35,380 | 80.8% |
-| **SQL (PL/pgSQL)** | PostgreSQL migrations and stored procedures | 19 | 3,785 | 8.6% |
-| **HTML / CSS** | Marketing and download website | 6 | 1,445 | 3.3% |
-| **Dart (tests)** | Automated test suite | 7 | 1,347 | 3.1% |
-| **Kotlin** | Android native layer | 4 | 716 | 1.6% |
-| **TypeScript** | Supabase Edge Functions (email delivery) | 7 | 602 | 1.4% |
-| **PowerShell** | Database backup and recovery scripts | 3 | 486 | 1.1% |
-| **Total** | | **146** | **43,761** | 100% |
+| **Dart** | The Flutter application (student + admin) | 107 | 40,994 | 74.2% |
+| **SQL (PL/pgSQL)** | PostgreSQL migrations and stored procedures | 26 | 6,097 | 11.0% |
+| **Dart (tests)** | Automated test suite | 23 | 3,878 | 7.0% |
+| **HTML / CSS** | Marketing, download and privacy website | 7 | 2,433 | 4.4% |
+| **Kotlin** | Android native layer | 4 | 713 | 1.3% |
+| **TypeScript** | Supabase Edge Functions (email delivery) | 7 | 630 | 1.1% |
+| **PowerShell** | Database backup and recovery scripts | 3 | 508 | 0.9% |
+| **Total** | | **177** | **55,253** | 100% |
 
 Measured by line count across the repository. Dart dominates because the application
 itself is the system; everything else exists to support it.
@@ -73,7 +73,7 @@ phone during an emergency alert.
 
 ## 5.2.3 Kotlin — the Android native layer
 
-**Scope:** 683 lines across four files — `MainActivity.kt`, `RfcommChatService.kt`,
+**Scope:** 713 lines across four files — `MainActivity.kt`, `RfcommChatService.kt`,
 `HopsSosTileService.kt`, `FoundDeviceReceiver.kt`.
 
 ### Why Kotlin is necessary rather than merely convenient
@@ -109,7 +109,7 @@ drawn to keep as much logic as possible on the Dart side, where it is testable.
 
 ## 5.2.4 SQL / PL/pgSQL — the database layer
 
-**Scope:** 3,785 lines across 19 numbered migration files, defining 8 tables and 65
+**Scope:** 6,097 lines across 26 numbered migration files, defining 9 tables and 57
 `SECURITY DEFINER` stored procedures.
 
 ### Why the database logic is written in SQL rather than in the application
@@ -141,7 +141,7 @@ moderation state.
 
 ## 5.2.5 TypeScript — Supabase Edge Functions
 
-**Scope:** 602 lines across 7 files, handling outbound email only — verification codes,
+**Scope:** 630 lines across 7 files, handling outbound email only — verification codes,
 password-reset codes, moderation notices.
 
 Supabase Edge Functions run on **Deno**, which executes TypeScript natively. The language
@@ -157,7 +157,7 @@ function explicit at both ends.
 
 ## 5.2.6 HTML and CSS — the project website
 
-**Scope:** 907 lines across 5 files. Static marketing and download pages, no build step,
+**Scope:** 2,433 lines across 7 files. Static marketing, download and privacy pages, no build step,
 no framework, no JavaScript dependencies.
 
 Feasible precisely *because* it is minimal. The site's job is to describe the project and
@@ -169,7 +169,7 @@ anywhere at no cost and will still work unchanged years from now.
 
 ## 5.2.7 PowerShell — operational scripts
 
-**Scope:** 486 lines across 3 scripts — `backup-db.ps1`, `verify-backup.ps1`,
+**Scope:** 508 lines across 3 scripts — `backup-db.ps1`, `verify-backup.ps1`,
 `reset-local-pg-password.ps1`.
 
 PowerShell is the native shell of the development platform (Windows), so it needs no
@@ -204,7 +204,7 @@ that carry real architectural weight:
 | Tool | Use |
 |---|---|
 | `flutter analyze` | Static analysis against `flutter_lints`; the primary gate for radio-related changes, which cannot be unit-tested |
-| `flutter_test` | 125 automated tests covering the wire format, credential rules, currency, the Bluetooth name guard, the emergency-flare radio invariant, and the accessibility toggles |
+| `flutter_test` | 344 automated tests covering the wire format and its byte budgets, credential rules, currency, the offline assistant, the statistics window arithmetic and chart painter, moderation verdicts, auth error wording, local backup and restore, and two source-level radio invariants |
 | Git / GitHub | Version control, branch-per-feature |
 | Android Studio | Android toolchain, emulator, device deployment |
 | PostgreSQL 17 client tools | `pg_dump` for backup, `psql` for verified restore (§4.8.5) |

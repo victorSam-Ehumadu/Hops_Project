@@ -83,6 +83,16 @@ export function moderationBodyHtml(opts: {
   kind: "ban" | "suspend" | "unban" | "unsuspend";
   reason?: string | null;
   suspendedUntil?: string | null; // ISO, "suspend" only
+  /// The mailbox a reply will actually reach, from HOPS_APPEALS_EMAIL.
+  ///
+  /// Required to print the appeal instruction, and that is the point. The
+  /// "reply to appeal" paragraph used to be unconditional while the
+  /// Reply-To header it depends on was optional, so with the secret unset
+  /// a banned student was told a real person would read their appeal and
+  /// their reply went to the no-reply sending address. Promising a route
+  /// that does not exist is worse than offering none: it costs the person
+  /// the effort of writing it and the belief that it was read.
+  appealsEmail?: string | null;
 }): string {
   const reasonHtml = opts.reason && opts.reason.trim().length > 0
     ? `<p style="margin:0 0 16px 0;"><strong>Reason given:</strong> ${escapeHtml(opts.reason)}</p>`
@@ -106,13 +116,24 @@ export function moderationBodyHtml(opts: {
     ? "Your Hops account has been permanently suspended (banned)."
     : "Your Hops account has been temporarily suspended.";
 
+  // Only offered when a reply can actually land somewhere. With no mailbox
+  // configured the email still says what happened and why — it just does
+  // not invite a reply that would go nowhere.
+  const appeal = (opts.appealsEmail ?? "").trim();
+  const appealHtml = appeal
+    ? `<div style="margin:20px 0;padding:16px;background:#f4f6f5;border-radius:12px;">
+      <p style="margin:0;font-weight:700;color:#111827;">Think this is a mistake?</p>
+      <p style="margin:6px 0 0 0;color:#374151;">Reply directly to this email to appeal — a real person on the Hops admin team will read it and follow up with you.</p>
+    </div>`
+    : `<div style="margin:20px 0;padding:16px;background:#f4f6f5;border-radius:12px;">
+      <p style="margin:0;font-weight:700;color:#111827;">Think this is a mistake?</p>
+      <p style="margin:6px 0 0 0;color:#374151;">Contact your campus Hops administrator to have this reviewed.</p>
+    </div>`;
+
   return `
     <p style="margin:0 0 16px 0;">${headline}</p>
     ${reasonHtml}
     ${untilHtml}
-    <div style="margin:20px 0;padding:16px;background:#f4f6f5;border-radius:12px;">
-      <p style="margin:0;font-weight:700;color:#111827;">Think this is a mistake?</p>
-      <p style="margin:6px 0 0 0;color:#374151;">Reply directly to this email to appeal — a real person on the Hops admin team will read it and follow up with you.</p>
-    </div>
+    ${appealHtml}
   `;
 }

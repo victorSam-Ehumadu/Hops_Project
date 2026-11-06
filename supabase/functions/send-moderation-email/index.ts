@@ -109,6 +109,9 @@ Deno.serve(async (req) => {
           kind: kind as "ban" | "suspend" | "unban" | "unsuspend",
           reason: typeof reason === "string" ? reason : null,
           suspendedUntil: typeof suspended_until === "string" ? suspended_until : null,
+          // Same value as replyTo above, so the body can never invite a
+          // reply the header will not route.
+          appealsEmail: APPEALS_REPLY_TO,
         }),
       }),
     });
