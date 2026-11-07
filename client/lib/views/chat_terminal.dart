@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:client/database/database_helper.dart';
+import 'package:client/utils/report_content.dart';
 import 'package:client/services/bluetooth_permissions.dart';
 import 'package:client/services/rfcomm_chat_service.dart';
 import 'package:client/services/notification_service.dart';
@@ -333,6 +334,26 @@ class _IndividualChatTerminalViewState
       thinking: thinking,
     );
     if (mounted) setState(() => _peerAvatarPath = savedAvatarPath);
+  }
+
+  /// Reports one of the peer's messages.
+  ///
+  /// Passes [widget.peerName] as the target, which is what makes the report
+  /// actionable: the admin queue can only warn, suspend or ban someone it
+  /// can name, and for every anonymous feature that name does not exist.
+  /// Here it does.
+  Future<void> _reportPeerMessage(Map<String, dynamic> msg) async {
+    if (widget.isBot) return;
+    final text = msg[DatabaseHelper.columnMessage] as String? ?? '';
+    final ts = msg[DatabaseHelper.columnTimestamp] as int?;
+    await showReportContentSheet(
+      context,
+      contentType: 'chat_message',
+      targetUsername: widget.peerName,
+      snapshotText: text,
+      contentCreatedAt:
+          ts == null ? null : DateTime.fromMillisecondsSinceEpoch(ts),
+    );
   }
 
   Future<void> _pingPeerToWakeUp() async {
@@ -834,11 +855,23 @@ class _IndividualChatTerminalViewState
                                 msg[DatabaseHelper.columnMessage]
                                 as String)
                                 : null,
-                            onLongPress: (isMe && !widget.isBot)
-                                ? () => _confirmDeleteMessage(
-                                msg[DatabaseHelper.columnId]
-                                as String)
-                                : null,
+                            // Long-press does the thing appropriate to
+                            // whose message it is: delete your own, report
+                            // theirs. 1:1 chat had NO report path at all,
+                            // which left the moderation queue almost
+                            // unusable in practice — every other
+                            // reportable surface (Vibe Check, Study Bunny,
+                            // Lost & Found) is anonymous by design and
+                            // carries no sender, so a report from one
+                            // arrives with nobody to act on. A chat message
+                            // is the one place the sender is known for
+                            // certain, because you are talking to them.
+                            onLongPress: widget.isBot
+                                ? null
+                                : (isMe
+                                    ? () => _confirmDeleteMessage(
+                                        msg[DatabaseHelper.columnId] as String)
+                                    : () => _reportPeerMessage(msg)),
                             child: Container(
                               margin: const EdgeInsets.only(top: 4),
                               padding: const EdgeInsets.symmetric(

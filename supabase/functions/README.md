@@ -114,6 +114,7 @@ it; password reset is not.
    suspend notice is a promise nobody's checking:
    ```
    supabase secrets set HOPS_APPEALS_EMAIL=appeals@yourdomain.com
+   # and HOPS_EMAIL_REPLY_TO for every other kind of mail - see "Mail landing in spam" below
    ```
 
 4. Deploy all three functions:
@@ -157,3 +158,53 @@ DMARC: PASS
 All three passing is the goal. "It arrived" can be true of mail that only
 just escaped the spam folder, and a DKIM failure alongside an SPF pass
 points straight at a `_domainkey` record.
+
+## Mail landing in spam
+
+Reported 8 Nov 2026: appeal replies and notices arriving in Gmail's spam.
+
+**The DNS authentication is correct** — that was checked before changing
+anything, and it is worth knowing so nobody re-audits it:
+
+| Record | State |
+|---|---|
+| `hopsapp.me` TXT | `v=spf1 include:spf.efwd.registrar-servers.com ~all` — Namecheap forwarding, **not** Resend. That is fine: Resend signs from the `send.` subdomain. |
+| `send.hopsapp.me` | CNAME to `send.forge.rmta.net`, whose SPF carries Resend's sending IPs. This is the envelope sender, so SPF passes and aligns with `hopsapp.me` under DMARC's default relaxed alignment. |
+| `resend._domainkey.hopsapp.me` | DKIM public key present. Signs as `d=hopsapp.me`, so DKIM aligns too. |
+| `_dmarc.hopsapp.me` | `v=DMARC1; p=none; rua=mailto:dmarc@hopsapp.me` |
+
+So SPF, DKIM and DMARC all pass. **The problem is reputation, not
+configuration**, and that cannot be fixed in code: `hopsapp.me` is weeks
+old, sends a handful of messages a day, and Gmail distrusts exactly that
+profile. No header, template or API setting overrides it — anyone claiming
+otherwise is selling something.
+
+What actually moves it, in order of effect:
+
+1. **Train the receiving account.** In Gmail, open the message in Spam →
+   **Report not spam**, then **reply to it**. A reply is the strongest
+   positive signal Gmail has, and this works within one or two messages for
+   that recipient. Do this on the appeals inbox before the demo. Add
+   `no-reply@hopsapp.me` as a contact as well.
+2. **Make sure nothing is unreplyable.** Done in code: `send_email.ts` now
+   applies `HOPS_EMAIL_REPLY_TO` to every message, so the OTP and
+   password-reset mail is no longer from a black hole. Set it:
+   ```
+   supabase secrets set HOPS_EMAIL_REPLY_TO=<a monitored mailbox>
+   supabase functions deploy send-verification-email
+   supabase functions deploy send-password-reset-otp
+   supabase functions deploy send-moderation-email
+   ```
+   All three need redeploying — each reads the secret at startup.
+3. **Confirm the Resend dashboard shows the domain fully verified**, every
+   row green. A single amber record is enough to drop a message.
+4. **Tighten DMARC once a week of reports is clean**: `p=none` tells
+   receivers you are not yet enforcing, which is itself a weak signal. Move
+   to `p=quarantine`. Do NOT jump to `p=reject` before the demo.
+5. **`rua=mailto:dmarc@hopsapp.me` must exist**, or the reports that would
+   tell you what is failing go nowhere.
+
+**Do not promise a judge that mail never goes to spam.** Inbox placement is
+the receiving provider's decision. The defensible claim is that Hops
+authenticates correctly on all three mechanisms, which is the part a sender
+controls, and that the domain is simply new.

@@ -37,6 +37,22 @@
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 const FROM_ADDRESS = Deno.env.get("HOPS_EMAIL_FROM");
 
+// Default Reply-To for EVERY email, when set.
+//
+// Deliverability, not convenience. A From address that accepts no reply is
+// one of the signals a receiving provider weighs against a young domain,
+// and hopsapp.me has no sending reputation yet — so every Hops email
+// arriving from a black hole made an already-marginal case worse. A
+// monitored reply address also means a confused user can simply answer the
+// mail instead of being stuck.
+//
+// An explicit per-call replyTo still wins (moderation email passes the
+// appeals mailbox). This is only the fallback for the mail that previously
+// had none at all, which was the OTP and password-reset mail.
+//
+//   supabase secrets set HOPS_EMAIL_REPLY_TO=someone@example.com
+const DEFAULT_REPLY_TO = Deno.env.get("HOPS_EMAIL_REPLY_TO") ?? undefined;
+
 // Every email this project sends is small, controlled HTML (our own
 // templates in email_template.ts — never raw user input as the top-level
 // markup, though a report reason/ban reason can appear escaped inside it),
@@ -70,11 +86,10 @@ export async function sendEmail(opts: {
   to: string;
   subject: string;
   html: string;
-  // Where a reply actually goes. Unset for OTP mail (nobody should reply to
-  // a verification code). Moderation email sets this to a real inbox so
-  // "reply to appeal" in the email body is a genuine instruction, not a
-  // dead end — see send-moderation-email, which is the one caller that
-  // passes it.
+  // Where a reply actually goes. Moderation email passes the appeals
+  // mailbox so "reply to appeal" in the body is a genuine instruction.
+  // Everything else falls back to HOPS_EMAIL_REPLY_TO — see the note on
+  // DEFAULT_REPLY_TO above for why no Hops email should be unreplyable.
   replyTo?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   if (!RESEND_API_KEY) {
@@ -106,7 +121,10 @@ export async function sendEmail(opts: {
       subject: opts.subject,
       html: opts.html,
       text: stripHtmlToText(opts.html),
-      ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
+      // Per-call wins; the default covers everything else.
+      ...((opts.replyTo ?? DEFAULT_REPLY_TO)
+        ? { reply_to: opts.replyTo ?? DEFAULT_REPLY_TO }
+        : {}),
     }),
   });
 

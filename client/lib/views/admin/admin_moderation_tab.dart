@@ -160,6 +160,74 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
     }
   }
 
+  /// Take Action on a report with NO attributable sender.
+  ///
+  /// Vibe Check tags, Study Bunny tags and Lost & Found posts carry no
+  /// sender by design, so there is genuinely nobody to warn, suspend or
+  /// ban. The one account a moderator can still act on is the person who
+  /// filed it — which matters, because an anonymous surface is exactly
+  /// where a malicious report costs the reporter nothing. So this opens the
+  /// sheet for the REPORTER, with its flag entry pointed at them.
+  ///
+  /// On return it offers to close the report as "actioned" rather than
+  /// doing it automatically: opening the sheet is not the same as having
+  /// decided something, and an admin who backs out should not find the
+  /// report silently closed behind them.
+  Future<void> _takeActionOnReporter(Map<String, dynamic> report) async {
+    final reporter = report['reporter_username'] as String?;
+    if (reporter == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('This report has neither a sender nor a reporter '
+                'on record, so there is nobody to act on. Dismiss it.')));
+      }
+      return;
+    }
+
+    setState(() => _actingOn.add(report['id'] as String));
+    try {
+      final reporterId = await _lookUpUserId(reporter);
+      if (reporterId == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text("No account named $reporter exists "
+                  "- it may already have been deleted.")));
+        }
+        return;
+      }
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => AdminUserDetailScreen(
+          userId: reporterId,
+          username: reporter,
+          autoOpenActions: true,
+          // The sheet is already theirs, so the flag entry targets the
+          // same account rather than a second one.
+          flagTargetUserId: reporterId,
+          flagTargetUsername: reporter,
+        ),
+      ));
+      if (!mounted) return;
+      _load();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Close this report as actioned?'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'CLOSE',
+          onPressed: () => _markReviewed(report),
+        ),
+      ));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(describeModerationError(e)),
+            duration: const Duration(seconds: 8)));
+      }
+    } finally {
+      if (mounted) setState(() => _actingOn.remove(report['id'] as String));
+    }
+  }
+
   Future<void> _dismiss(Map<String, dynamic> report) =>
       _resolve(report['id'] as String, 'dismissed', 'Dismissed');
 
@@ -396,11 +464,74 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
                                   ),
                                 ],
                                 const SizedBox(height: 8),
-                                Text(
-                                  targetUsername != null
-                                      ? "From: $targetUsername · reported by ${r['reporter_username']}"
-                                      : "Reported by ${r['reporter_username']} (no attributable sender — see file header comment)",
-                                  style: TextStyle(fontSize: 11, color: colors.onSurface.withValues(alpha: 0.5)),
+                                // WHO WAS REPORTED, said plainly. This was
+                                // an 11px line at half opacity reading
+                                // "From: <name>", which is the one fact a
+                                // moderator needs first and the easiest
+                                // label to misread as a chat sender rather
+                                // than the subject of the report.
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: targetUsername != null
+                                        ? Colors.red.shade900
+                                            .withValues(alpha: 0.07)
+                                        : colors.onSurface
+                                            .withValues(alpha: 0.05),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        targetUsername != null
+                                            ? Icons.person_outline
+                                            : Icons.person_off_outlined,
+                                        size: 15,
+                                        color: targetUsername != null
+                                            ? Colors.red.shade900
+                                            : colors.onSurface
+                                                .withValues(alpha: 0.45),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              targetUsername != null
+                                                  ? 'Reported user: $targetUsername'
+                                                  : 'Reported user: not identified',
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.bold,
+                                                color: targetUsername != null
+                                                    ? Colors.red.shade900
+                                                    : colors.onSurface
+                                                        .withValues(
+                                                            alpha: 0.7),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              targetUsername != null
+                                                  ? 'Filed by ${r['reporter_username']}'
+                                                  : 'Filed by ${r['reporter_username']} · this content type carries no sender, so there is nobody to act against',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: colors.onSurface
+                                                    .withValues(alpha: 0.6),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                                 const SizedBox(height: 6),
                                 // Two distinct times that are easy to
@@ -463,9 +594,25 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
                                           label: const Text("Take action"),
                                         ),
                                       ] else
-                                        TextButton(
-                                          onPressed: () => _markReviewed(r),
-                                          child: const Text("Mark reviewed"),
+                                        // "Mark reviewed" is gone. It was
+                                        // the only control on a report with
+                                        // no attributable sender, which made
+                                        // the queue look like it could do
+                                        // nothing — and it closed the report
+                                        // without recording a decision about
+                                        // anyone. Take action is now on every
+                                        // report. With no sender to act
+                                        // against it opens the sheet for the
+                                        // REPORTER instead, which is the one
+                                        // account a moderator can still do
+                                        // something about: flag them for
+                                        // wrongful reporting, or warn them.
+                                        TextButton.icon(
+                                          onPressed: () =>
+                                              _takeActionOnReporter(r),
+                                          icon: const Icon(Icons.more_horiz,
+                                              size: 18),
+                                          label: const Text("Take action"),
                                         ),
                                     ],
                                   ),
