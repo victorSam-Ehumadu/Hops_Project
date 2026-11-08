@@ -9,6 +9,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:client/database/database_helper.dart';
+import 'package:client/utils/report_content.dart';
 import 'package:client/views/chat_terminal.dart';
 import 'package:client/widgets/thought_bubble.dart';
 
@@ -209,6 +210,42 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                     : const Icon(Icons.delete_outline, size: 18),
                 label: const Text("Delete Contact"),
                 onPressed: _deleting ? null : _confirmDelete,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Reporting a PERSON, as distinct from reporting one message.
+            //
+            // content_reports has had a 'contact_profile' type since 0008
+            // and admin_moderation_tab.dart has always had a display case
+            // for it, but nothing in the student app ever created one — so
+            // the only reports that could name anybody were message-level.
+            // Of the five message surfaces, three (Vibe Check, Study
+            // Bunny, Lost & Found) carry no sender on the wire at all, so
+            // in practice most reports reached a moderator attributed to
+            // nobody. This is the one surface where the username is known
+            // for certain, because it is the contact's own profile.
+            SizedBox(
+              width: double.infinity,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(
+                  foregroundColor: colors.onSurface.withValues(alpha: 0.6),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(100)),
+                ),
+                icon: const Icon(Icons.flag_outlined, size: 17),
+                label: const Text("Report this user",
+                    style: TextStyle(fontSize: 13)),
+                onPressed: () => showReportContentSheet(
+                  context,
+                  contentType: 'contact_profile',
+                  targetUsername: widget.peerUsername,
+                  // The snapshot is what a moderator sees as the reported
+                  // content. There is no single message here, so it is the
+                  // profile itself — the bio is the part a person can
+                  // actually put something reportable in.
+                  snapshotText: hasBio ? _bio!.trim() : '(no bio set)',
+                ),
               ),
             ),
           ],

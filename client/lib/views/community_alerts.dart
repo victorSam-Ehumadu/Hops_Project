@@ -895,6 +895,17 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
             ),
           ),
           const SizedBox(width: 8),
+          // The filled circle has to be painted in BOTH states.
+          //
+          // IconButton.styleFrom's backgroundColor applies only while the
+          // button is enabled — a disabled one falls back to
+          // disabledBackgroundColor, which defaults to transparent. Since
+          // this button is disabled whenever the field is empty, which is
+          // how the screen looks most of the time, the result was a bare
+          // white arrow on a pale surface: present, but near-invisible.
+          // Naming the disabled colours explicitly is what fixes it; the
+          // enabled/disabled distinction then comes from contrast rather
+          // than from the background appearing at all.
           IconButton(
             icon: _isSending
                 ? const SizedBox(
@@ -903,13 +914,16 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
               child: CircularProgressIndicator(
                   strokeWidth: 2, color: Colors.white),
             )
-                : const Icon(Icons.send,
-                color: Colors.white, size: 20),
+                : const Icon(Icons.send, size: 20),
             style: IconButton.styleFrom(
-              backgroundColor: _controller.text.isNotEmpty
-                  ? colors.primary
-                  : colors.primary.withValues(alpha: 0.3),
+              backgroundColor: colors.primary,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor:
+                  colors.onSurface.withValues(alpha: 0.12),
+              disabledForegroundColor:
+                  colors.onSurface.withValues(alpha: 0.38),
               padding: const EdgeInsets.all(12),
+              shape: const CircleBorder(),
             ),
             onPressed:
             _controller.text.isNotEmpty ? _send : null,

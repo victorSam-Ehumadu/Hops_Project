@@ -6,15 +6,22 @@
 //
 // Deliberately not a copy of the student app's settings: an admin device is
 // a shift tool, so this covers the things that actually go wrong on one —
-// which account is signed in, whether the alarm can reach you, whether the
-// Bluetooth listener is alive, and getting out of a session cleanly.
+// which account is signed in, whether the alarm can reach you, and getting
+// out of a session cleanly.
+//
+// The "Bluetooth listener" row was removed on request. Note what went with
+// it: that row's Restart button was the ONLY place in the admin app that
+// called BluetoothPermissions.requestStatuses() and could send an admin to
+// openAppSettings() for a permanently-denied Bluetooth or location
+// permission. Android stops showing its own dialog once a permission is
+// permanently denied, so on such a device there is now no in-app route to
+// fix it. If that becomes a problem, put the permission check on a row of
+// its own rather than restoring the listener status display.
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:client/main.dart' show themeNotifier, fontScaleNotifier;
 import 'package:client/theme/app_theme.dart';
-import 'package:client/services/bluetooth_permissions.dart';
-import 'package:client/services/admin_ble_hub.dart';
 import 'package:client/services/notification_service.dart';
 import 'package:client/views/admin/admin_shell.dart' show signOutOfAdminApp;
 
@@ -124,8 +131,6 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
     if (mounted) setState(() {});
   }
 
-  bool _restartingBle = false;
-
   /// Requests notification permission, and only falls back to the system
   /// settings app if the OS won't prompt (permanently denied). The old
   /// version jumped straight to app settings, which is the slow path and
@@ -164,60 +169,6 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
     await _load();
   }
 
-  /// Restarts the scan, having first made sure it's allowed to run.
-  ///
-  /// The permission request used to live in a separate "Re-check
-  /// permissions" row, which was removed: it duplicated the notification
-  /// request above it, and a generic permissions catch-all is the wrong
-  /// shape anyway. Each permission now sits with the feature it powers —
-  /// notifications on the alerting row, Bluetooth and location here — so
-  /// there's no button whose effect you have to guess at.
-  ///
-  /// This ordering also fixes the common case honestly: a listener that
-  /// hears nothing is usually a permission problem, and restarting a scan
-  /// that isn't permitted to find anything just fails again more quietly.
-  Future<void> _restartBleListener() async {
-    setState(() => _restartingBle = true);
-    try {
-      // Version-gated, and returns the raw statuses so the permanent-denial
-      // branch below still works. Asking for the Android 12 trio by name on
-      // an older device marks all three denied with no dialog shown, which
-      // would send the admin to a settings page with nothing on it to fix.
-      final statuses = await BluetoothPermissions.requestStatuses();
-
-      // Android stops showing the dialog once something is permanently
-      // denied, so request() returns instantly and the tap looks like it
-      // did nothing — the exact failure the notification button had. Send
-      // them somewhere that can actually change it.
-      if (statuses.values.any((s) => s.isPermanentlyDenied)) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Bluetooth or location is blocked in Android settings — "
-              "opening them now."),
-          duration: Duration(seconds: 4),
-        ));
-        await openAppSettings();
-        return; // didChangeAppLifecycleState re-reads on return
-      }
-
-      // A real stop-and-start (see AdminBleHub.restart). This used to call
-      // ensureStarted(), which returns immediately once the hub is already
-      // running — so the button showed a success message having done
-      // precisely nothing.
-      await AdminBleHub.instance.restart();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Permissions checked, Bluetooth listener restarted."),
-      ));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Couldn't restart — check Bluetooth is on."),
-      ));
-    } finally {
-      if (mounted) setState(() => _restartingBle = false);
-    }
-  }
 
   Future<void> _setTextScale(double value) async {
     fontScaleNotifier.value = value;
@@ -357,28 +308,6 @@ class _AdminSettingsScreenState extends State<AdminSettingsScreen>
                 trailing: TextButton(
                   onPressed: _fixNotifications,
                   child: Text(_notificationsAllowed ? "Test" : "Fix"),
-                ),
-              ),
-              ValueListenableBuilder<Map<String, LiveAlert>>(
-                valueListenable: AdminBleHub.instance.liveAlerts,
-                builder: (context, alerts, _) => ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.sensors, color: Colors.green),
-                  title: const Text("Bluetooth listener"),
-                  subtitle: Text(
-                    "Scanning in the background · ${alerts.length} active nearby\n"
-                    "Restart also re-checks Bluetooth & location access",
-                    style: TextStyle(fontSize: 12, color: colors.onSurface.withValues(alpha: 0.6)),
-                  ),
-                  isThreeLine: true,
-                  trailing: _restartingBle
-                      ? const SizedBox(
-                          width: 16, height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : TextButton(
-                          onPressed: _restartBleListener,
-                          child: const Text("Restart"),
-                        ),
                 ),
               ),
             ],
