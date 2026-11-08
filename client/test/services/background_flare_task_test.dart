@@ -146,6 +146,61 @@ void main() {
     });
   });
 
+  group('the phone that raised a flare does not alarm itself', () {
+    // The UI isolate has always filtered its own flares; this handler
+    // never did. Raise a flare, let the app sit backgrounded for 20
+    // seconds, and the handler took the radio and alarmed the sender's
+    // own phone — which could not then be stood down, because reopening
+    // the app to try stops this handler scanning before the EMG_OFF:
+    // arrives. That is the "alarm only stops when I close the app" report
+    // from 8 Nov 2026.
+    test('our own flare is recognised', () {
+      expect(isOwnAlert('EMG:Victor:fire', 'Victor'), isTrue);
+    });
+
+    test('someone else\'s flare is not', () {
+      expect(isOwnAlert('EMG:Amishka:fire', 'Victor'), isFalse);
+    });
+
+    test('a sender whose tag merely STARTS with ours still gets through', () {
+      // The exact bug the UI isolate fixed with an exact-match check. Two
+      // test accounts on one campus collide like this easily, and the
+      // consequence is silently dropping a real emergency.
+      expect(isOwnAlert('EMG:Victor12:fire', 'Vic'), isFalse);
+      expect(isOwnAlert('EMG:Vic:fire', 'Vic'), isTrue);
+    });
+
+    test('a reason containing a colon does not confuse the sender split', () {
+      // "Lab 3: fire" is an ordinary thing to type under pressure.
+      expect(isOwnAlert('EMG:Victor:Lab 3: fire', 'Victor'), isTrue);
+    });
+
+    test('an unknown tag filters nothing', () {
+      // Fail toward alarming. A spurious alarm on your own phone is a
+      // nuisance; a dropped flare from someone else is the failure this
+      // file exists to prevent.
+      expect(isOwnAlert('EMG:Victor:fire', null), isFalse);
+      expect(isOwnAlert('EMG:Victor:fire', ''), isFalse);
+    });
+
+    test('official alerts are filtered by the same rule', () {
+      expect(isOwnAlert('ADM:Victor:closure', 'Victor'), isTrue);
+    });
+
+    test('a long username is compared at its truncated length', () {
+      // Tags are cut to 8 on the wire. Comparing the full username would
+      // never match, disabling the filter for exactly the longer names.
+      expect(senderTagFor('Victorious1'), 'Victorio');
+      expect(isOwnAlert('EMG:Victorio:fire', senderTagFor('Victorious1')),
+          isTrue);
+    });
+
+    test('a malformed name is not claimed as ours', () {
+      expect(isOwnAlert('EMG', 'Victor'), isFalse);
+      expect(isOwnAlert('', 'Victor'), isFalse);
+    });
+  });
+
   group('handover timings are sane relative to each other', () {
     test('the UI is considered gone only after several missed heartbeats', () {
       expect(kUiConsideredGoneAfter, greaterThan(kUiHeartbeatInterval * 2),

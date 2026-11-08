@@ -122,7 +122,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **359 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **367 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -884,6 +884,16 @@ started, forever.
 in-app channel sets `playSound: false` because the app drives audio itself, which is not
 dependable headless. **The trade: the OS plays the tone ONCE rather than looping it.** A single
 loud alarm plus a full-screen intent is what is reliably achievable with no UI isolate.
+
+**Three things it must keep doing that are each a bug it already had.** It filters our
+**own** flares (`isOwnAlert`, exact sender match, tag truncated to 8) — the UI isolate always
+did and this did not, so raising a flare and backgrounding for 20s alarmed the sender's own
+phone, unstoppably, since reopening the app to cancel stops this handler scanning before the
+`EMG_OFF:` arrives. It keeps `_raisedRecently` **across** a stand-down for
+`kEmergencyFlareDuration + 5s`, because `scanResults` still holds the flare's own entry inside
+the freshness window and re-raised it a millisecond after cancelling. And on handing the radio
+back to the UI it **cancels its own notifications** (`_clearOwnAlerts`), which it can no longer
+stand down once it stops scanning.
 
 **Scope is deliberately tiny**: raise and stand down, nothing else. No relaying, no signature
 check, no Watch Me, no chat. Everything else can wait for the app to be opened; an alarm cannot.

@@ -126,6 +126,14 @@ class BackgroundFlareTaskHandler extends TaskHandler {
 
   int _nextId = 7300;
 
+  /// Our own sender tag as it appears on the wire, or null until read.
+  ///
+  /// Refreshed from prefs on every tick rather than cached once: this
+  /// isolate outlives sign-outs and account switches, and a stale tag here
+  /// means either alarming on our own flare or — worse — silently dropping
+  /// a real one from whoever now holds the old name.
+  String? _myTag;
+
   @override
   void onStart(DateTime timestamp, SendPort? sendPort) {
     debugPrint('BackgroundFlareTask: started');
@@ -146,6 +154,7 @@ class BackgroundFlareTaskHandler extends TaskHandler {
   }
 
   Future<void> _tick() async {
+    await _refreshMyTag();
     final uiGone = await _isUiGone();
     if (uiGone && !_scanning) {
       await _startScan();
@@ -154,8 +163,49 @@ class BackgroundFlareTaskHandler extends TaskHandler {
       // compete for the radio or double-notify.
       debugPrint('BackgroundFlareTask: UI is back, handing the radio over');
       await _stopScan();
+      // Hand the ALERTS back too, not just the radio.
+      //
+      // Once scanning stops this handler can never hear the matching
+      // EMG_OFF:, so anything it raised would hang in the shade — still
+      // ringing, impossible to stand down, and only cleared by killing
+      // the app. The UI isolate is scanning now and raises its own alert
+      // for any flare still on the air, so dropping these loses nothing
+      // and leaves exactly one owner for every alarm.
+      await _clearOwnAlerts();
     }
     _expireStaleAlerts();
+  }
+
+  /// Re-reads our username from prefs and truncates it the way the wire
+  /// format does.
+  ///
+  /// `my_username` is the key root_gatekeeper.dart writes on sign-in. A
+  /// failure leaves [_myTag] as it was rather than nulling it, since the
+  /// safe direction here is to keep filtering our own flares.
+  Future<void> _refreshMyTag() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final name = prefs.getString('my_username');
+      if (name != null && name.isNotEmpty) _myTag = senderTagFor(name);
+    } catch (_) {
+      // Keep whatever we had.
+    }
+  }
+
+  /// Cancels every notification this handler currently owns.
+  ///
+  /// Leaves [_raisedRecently] alone: the advertisement is still on the air,
+  /// so forgetting it here would let this handler re-raise the moment the
+  /// UI goes away again, on top of the UI's own alert.
+  Future<void> _clearOwnAlerts() async {
+    if (_shown.isEmpty) return;
+    for (final entry in _shown.entries) {
+      await _notifications.cancel(entry.value);
+      debugPrint('BackgroundFlareTask: handed "${entry.key}" to the UI');
+    }
+    _shown.clear();
+    _lastHeard.clear();
   }
 
   Future<bool> _isUiGone() async {
@@ -232,6 +282,13 @@ class BackgroundFlareTaskHandler extends TaskHandler {
       if (name.startsWith('EMG_OFF:') || name.startsWith('ADM_OFF:')) {
         _handleStandDown(name);
       } else if (name.startsWith('EMG:') || name.startsWith('ADM:')) {
+        // Never alarm the phone that raised it. The UI isolate has always
+        // had this check and this handler never did, so a flare raised and
+        // then backgrounded for 20 seconds came back as an alarm on the
+        // sender's own phone — which they then could not stand down,
+        // because reopening the app to try stops this handler scanning
+        // before the EMG_OFF: ever arrives.
+        if (isOwnAlert(name, _myTag)) continue;
         _handleAlert(name);
       }
     }
@@ -408,6 +465,35 @@ class BackgroundFlareTaskHandler extends TaskHandler {
 ///
 /// Returns an empty list for anything malformed rather than guessing, since
 /// the alternative when in doubt is silencing someone else's emergency.
+/// A username truncated to the 8 characters the wire format carries.
+///
+/// Sender tags are cut to 8 on the way out, so comparing a full username
+/// against one straight off the air never matches for anyone with a longer
+/// name — which would disable the own-flare filter precisely for the users
+/// most likely to collide.
+String senderTagFor(String username) =>
+    username.length > 8 ? username.substring(0, 8) : username;
+
+/// Whether an `EMG:`/`ADM:` advertisement is this device's own.
+///
+/// Compares the sender segment EXACTLY, not by prefix. A `startsWith`
+/// here would make "Vic" swallow a real flare from "Victor12" — the same
+/// bug the UI isolate had and fixed, and a realistic collision between two
+/// test accounts on one campus.
+///
+/// Returns false when [myTag] is unknown: an unexpected alarm on your own
+/// phone is a nuisance, a dropped flare from someone else is the failure
+/// this whole file exists to prevent.
+bool isOwnAlert(String advertisementName, String? myTag) {
+  if (myTag == null || myTag.isEmpty) return false;
+  final colon = advertisementName.indexOf(':');
+  if (colon < 0) return false;
+  final body = advertisementName.substring(colon + 1);
+  final end = body.indexOf(':');
+  final sender = end < 0 ? body : body.substring(0, end);
+  return sender == myTag;
+}
+
 /// Whether an alert heard again should be raised, or is still inside the
 /// cooldown from the last time it was raised.
 ///
