@@ -1005,6 +1005,21 @@ and **zero policies** (deny-all by design — everything goes through 65 `SECURI
 functions), 74 `REVOKE`s, 61 `GRANT EXECUTE`s. If a dump comes back with policies in it, something
 changed. The ninth table is `community_alerts`, added by `0024` — so a restore reporting only 8 is itself evidence that `0024` never applied, which is a cheaper check than reading the function list. The `SECURITY DEFINER` count also moves with each migration (`0024` adds three functions, `0025` one), so treat 65 as the figure at `0023` rather than a constant.
 
+`0027_standalone_user_warning.sql` adds `warn_user(token, target_id, note)` — a warning
+addressed to an ACCOUNT rather than to a report. The only existing warning path,
+`warn_user_for_report`, takes a report id, requires it to be open, and closes it as
+`actioned`; so a warning was only issuable as the disposal of one report, and the Take Action
+sheet — where every other moderation decision is made — had no Warn at all. Since Hops policy
+is three warnings before anything harsher, the ladder was missing its first two rungs exactly
+where an admin climbs it. The function **returns the account's warning count after this one**,
+derived the same way `admin_get_user_detail.warning_count` is (rows in `user_notifications`
+with `type = 'warning'`), so the confirmation and the Record section can never disagree.
+**Three warnings does not auto-ban anyone** — the threshold is shown, never enforced; a ban
+nobody decided to issue is precisely what moderation must not do by itself.
+`warn_user_for_report` is left alone, since closing the report IS correct on the report card.
+Needs the `send-moderation-email` function redeployed too — it gained a `warn` kind, which is
+appealable (reply-to set) for the same reason a ban is.
+
 `0026_retire_plaintext_email.sql` is written but **deliberately unapplied** — it drops
 `profiles.email` and rewrites the eight functions that read or write it. It is irreversible and
 gated on both Vault keys being stored off the database; its header carries the prerequisites and

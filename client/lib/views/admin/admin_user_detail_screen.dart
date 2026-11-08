@@ -184,6 +184,8 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
     String kind, {
     String? reason,
     DateTime? suspendedUntil,
+    int? warningNumber,
+    int? warningLimit,
   }) async {
     try {
       final token = await _token();
@@ -196,6 +198,11 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
           'kind': kind,
           if (reason != null && reason.isNotEmpty) 'reason': reason,
           if (suspendedUntil != null) 'suspended_until': suspendedUntil.toIso8601String(),
+          // 'warn' only — lets the email say "warning 2 of 3" rather than
+          // just "you have been warned", which is the part that lets
+          // someone correct course before the third one.
+          if (warningNumber != null) 'warning_number': warningNumber,
+          if (warningLimit != null) 'warning_limit': warningLimit,
         },
       );
       final data = res.data;
@@ -313,6 +320,111 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
               'p_reason': reason.isEmpty ? null : reason,
             }));
     if (succeeded) _sendModerationEmail('ban', reason: reason);
+  }
+
+  /// How many warnings Hops policy allows before harsher action.
+  ///
+  /// Shown, never enforced. Reaching it does not auto-ban anyone: that is a
+  /// judgement an admin makes, and a ban nobody decided to issue is exactly
+  /// the kind of thing moderation must not do by itself. The number exists
+  /// so neither the admin nor the student has to go and count.
+  static const int _kWarningLimit = 3;
+
+  /// Issue a warning against this account.
+  ///
+  /// Not routed through [_run] because the RPC's return value is the whole
+  /// point — warn_user returns the account's warning count *after* this one,
+  /// so the confirmation can say "warning 2 of 3" at the moment of acting.
+  ///
+  /// Distinct from the report card's "Send warning", which calls
+  /// warn_user_for_report and closes that report as actioned. This one
+  /// deliberately touches no report: deciding a report's disposal is a
+  /// separate judgement from warning someone, and tying them together is why
+  /// a warning could not be issued from here at all.
+  Future<void> _warn() async {
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("Warn ${widget.username}?"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+                "Their account keeps working. They get this in the app under "
+                "Notifications, and by email if they have one on file."),
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteController,
+              textCapitalization: TextCapitalization.sentences,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: "What they did (shown to them)",
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancel")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber.shade900,
+                foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Send warning"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final note = noteController.text.trim();
+
+    setState(() => _acting = true);
+    try {
+      final token = await _token();
+      if (token == null) return;
+      final count = await Supabase.instance.client.rpc('warn_user', params: {
+        'p_hops_token': token,
+        'p_target_id': widget.userId,
+        'p_note': note.isEmpty ? null : note,
+      });
+      final number = count is int ? count : int.tryParse('$count') ?? 0;
+      _changed = true;
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(number > 0
+              ? "Warning $number of $_kWarningLimit sent to ${widget.username}."
+              : "Warning sent to ${widget.username}."),
+          duration: const Duration(seconds: 5),
+        ));
+      }
+      // After the in-app record exists, so a failed email never means the
+      // warning itself did not happen — same ordering as ban/suspend.
+      await _sendModerationEmail('warn',
+          reason: note, warningNumber: number, warningLimit: _kWarningLimit);
+    } on PostgrestException catch (e) {
+      if (!mounted) return;
+      final message = e.message.contains('cannot_warn_self')
+          ? "You can't warn your own account."
+          : e.message.contains('does not exist')
+              ? "Server missing this action — run migration 0027."
+              : "Couldn't send the warning.";
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Couldn't send the warning.")));
+      }
+    } finally {
+      if (mounted) setState(() => _acting = false);
+    }
   }
 
   Future<void> _suspend() async {
@@ -602,6 +714,26 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                 _flagReporter();
               })
             else ...[
+              // First rung of the ladder, so it sits above Ban/Suspend.
+              // Warning three times before anything harsher is the policy,
+              // and until now the sheet where every other moderation
+              // decision is made had no way to do it at all.
+              _action(
+                  ctx,
+                  Icons.warning_amber,
+                  "Send warning",
+                  () {
+                    final n = (_detail?['warning_count'] as int?) ?? 0;
+                    if (n == 0) return "Their first — $_kWarningLimit before action";
+                    if (n >= _kWarningLimit) {
+                      return "They already have $n — at or past the limit";
+                    }
+                    return "They have $n — this would be ${n + 1} of $_kWarningLimit";
+                  }(),
+                  Colors.amber.shade900, () {
+                Navigator.pop(ctx);
+                _warn();
+              }),
               if (banned)
                 _action(ctx, Icons.lock_open, "Unban", "Restores full access", Colors.green, () {
                   Navigator.pop(ctx);

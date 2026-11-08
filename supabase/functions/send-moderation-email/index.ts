@@ -34,6 +34,7 @@ const KIND_SUBJECTS: Record<string, string> = {
   suspend: "Your Hops account has been suspended",
   unban: "Your Hops account access has been restored",
   unsuspend: "Your Hops suspension has been lifted",
+  warn: "A warning on your Hops account",
 };
 
 const KIND_HEADINGS: Record<string, string> = {
@@ -41,13 +42,15 @@ const KIND_HEADINGS: Record<string, string> = {
   suspend: "Account suspended",
   unban: "Account restored",
   unsuspend: "Suspension lifted",
+  warn: "Warning issued",
 };
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { admin_hops_token, target_id, kind, reason, suspended_until } = await req.json();
+    const { admin_hops_token, target_id, kind, reason, suspended_until,
+            warning_number, warning_limit } = await req.json();
 
     if (
       typeof admin_hops_token !== "string" || admin_hops_token.length === 0 ||
@@ -102,11 +105,18 @@ Deno.serve(async (req) => {
     const { ok, error } = await sendEmail({
       to: target.email,
       subject: KIND_SUBJECTS[kind],
-      replyTo: (kind === "ban" || kind === "suspend") ? APPEALS_REPLY_TO : undefined,
+      // A warning counts toward a ban, so it is appealable for the same
+      // reason a ban is — disputing the third one after the fact is far
+      // worse than disputing the first one now.
+      replyTo: (kind === "ban" || kind === "suspend" || kind === "warn")
+        ? APPEALS_REPLY_TO
+        : undefined,
       html: renderHopsEmail({
         heading: KIND_HEADINGS[kind],
         bodyHtml: moderationBodyHtml({
-          kind: kind as "ban" | "suspend" | "unban" | "unsuspend",
+          kind: kind as "ban" | "suspend" | "unban" | "unsuspend" | "warn",
+          warningNumber: typeof warning_number === "number" ? warning_number : null,
+          warningLimit: typeof warning_limit === "number" ? warning_limit : null,
           reason: typeof reason === "string" ? reason : null,
           suspendedUntil: typeof suspended_until === "string" ? suspended_until : null,
           // Same value as replyTo above, so the body can never invite a

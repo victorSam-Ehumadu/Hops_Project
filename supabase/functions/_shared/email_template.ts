@@ -80,7 +80,10 @@ function escapeHtml(s: string): string {
 }
 
 export function moderationBodyHtml(opts: {
-  kind: "ban" | "suspend" | "unban" | "unsuspend";
+  kind: "ban" | "suspend" | "unban" | "unsuspend" | "warn";
+  /// "warn" only: which warning this is, and the policy limit.
+  warningNumber?: number | null;
+  warningLimit?: number | null;
   reason?: string | null;
   suspendedUntil?: string | null; // ISO, "suspend" only
   /// The mailbox a reply will actually reach, from HOPS_APPEALS_EMAIL.
@@ -97,6 +100,32 @@ export function moderationBodyHtml(opts: {
   const reasonHtml = opts.reason && opts.reason.trim().length > 0
     ? `<p style="margin:0 0 16px 0;"><strong>Reason given:</strong> ${escapeHtml(opts.reason)}</p>`
     : "";
+
+  // A warning is not a restriction — nothing about the account changes —
+  // so it gets its own body rather than being bent into the suspension
+  // wording. It leads with where they stand, because "you have had a
+  // warning" and "you have had your second of three" are very different
+  // messages and only the second one lets someone correct course.
+  if (opts.kind === "warn") {
+    const n = opts.warningNumber ?? 0;
+    const limit = opts.warningLimit ?? 0;
+    const standingHtml = n > 0 && limit > 0
+      ? `<div style="margin:20px 0;padding:16px;background:#f4f6f5;border-radius:12px;">
+      <p style="margin:0;font-weight:700;color:#111827;">This is warning ${n} of ${limit}.</p>
+      <p style="margin:6px 0 0 0;color:#374151;">${
+          n >= limit
+            ? "Further reports may lead to your account being suspended or banned."
+            : `After ${limit} warnings, your account may be suspended or banned.`
+        }</p>
+    </div>`
+      : "";
+    return `
+      <p style="margin:0 0 16px 0;">A Hops administrator has issued a warning on your account. Your account is still active and you can keep using Hops normally.</p>
+      ${reasonHtml}
+      ${standingHtml}
+      <p style="margin:0;color:#6b7280;">You can see this warning in the app under Notifications.</p>
+    `;
+  }
 
   if (opts.kind === "unban" || opts.kind === "unsuspend") {
     const what = opts.kind === "unban" ? "ban" : "suspension";
