@@ -40,9 +40,30 @@
 -- new version — that is the only way to tell a replaced function's
 -- version apart, since the name and signature are unchanged.
 --
--- A 'no' on anything other than the last row means the database is behind
--- this repository, and the gap is worth closing before trusting any
--- feature that depends on it.
+-- READING THE RESULT
+--
+-- Rows needing action sort to the top and are marked '>> TODO'. If the
+-- first row says 'ok', nothing is missing. Everything below the TODO block
+-- is already in place.
+--
+-- The `applied` column means "the database is in the state this repository
+-- expects", which is not always "this migration ran": 0026 is written but
+-- DELIBERATELY unapplied (it drops profiles.email irreversibly and is gated
+-- on both Vault keys living off the database — see its header), so its
+-- healthy state is the column still being there. Keeping the column's
+-- meaning uniform is what makes the TODO sort trustworthy.
+--
+-- COVERAGE
+--
+-- 0001-0027. Three throwaway scripts used to cover the tail of this range
+-- (check-0023-0024-0025.sql, check-migrations-quick.sql) and were deleted
+-- once this file caught up — two probes that can disagree about the same
+-- database is worse than one that is occasionally behind.
+--
+-- WHEN YOU ADD A MIGRATION, ADD A PROBE HERE. A migration with no row in
+-- this file is invisible to the only tool that can tell you it is missing,
+-- and "a missing migration mistaken for an app bug" has already cost real
+-- time more than once.
 
 -- ===========================================================================
 -- QUERY 1 OF 2 — THE MIGRATION REPORT.  Select from here to the first
@@ -215,8 +236,52 @@ with probe(seq, migration, applied, evidence) as (
                           'get_admin_most_active_users',
                           'assert_caller_is_admin')) = 4,
     'all four statistics functions present'
+  union all select 29, '0023 salt lookup search_path',
+    exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'public'
+               and p.proname = 'get_password_salt_by_email'
+               and array_to_string(p.proconfig, ',') like '%extensions%'),
+    'get_password_salt_by_email has extensions on its search_path'
+  union all select 30, '0024 (a) community_alerts table',
+    to_regclass('public.community_alerts') is not null,
+    'table community_alerts — the 9th table; a backup reporting 8 means this never ran'
+  union all select 31, '0024 (b) community alert functions',
+    (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname in ('post_community_alert',
+                          'fetch_community_alerts',
+                          'delete_community_alert')) = 3,
+    'all three community alert functions present'
+  union all select 32, '0025 manual reporter flag',
+    exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'public' and p.proname = 'admin_flag_reporter'),
+    'function admin_flag_reporter'
+  union all select 33, '0027 standalone user warning',
+    exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'public' and p.proname = 'warn_user'),
+    'function warn_user — the Take Action sheet''s Send warning needs this'
+  -- 0026 is INVERTED on purpose. It is written but deliberately unapplied
+  -- (it drops profiles.email irreversibly and is gated on both Vault keys
+  -- being stored off the database — see its header). So the healthy state
+  -- is NOT applied, and this row says so rather than reporting a scary
+  -- 'NO' on the one migration you are not supposed to have run.
+  union all select 34, '0026 retire plaintext email (must NOT be applied)',
+    exists (select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'profiles'
+               and column_name = 'email'),
+    'profiles.email still present — correct, 0026 is deliberately unapplied'
 )
+-- Rows that need action sort to the TOP, so the answer to "what am I
+-- missing" is simply the first block of the result rather than something
+-- you scan 30 rows for.
+--
+-- `applied` means "the database is in the state this repository expects",
+-- not literally "this migration ran" — the two differ for 0026, which is
+-- written but deliberately unapplied, so its healthy state is the column
+-- still being there. Keeping the column's meaning uniform is what lets
+-- this sort be trusted.
 select
+  case when applied is not true then '>> TODO' else 'ok' end as action,
   migration,
   case
     when applied is null then 'UNKNOWN (object missing entirely)'
@@ -225,7 +290,7 @@ select
   end as applied,
   evidence
 from probe
-order by seq;
+order by (applied is not true) desc, seq;
 
 -- ===========================================================================
 -- QUERY 2 OF 2 — DUPLICATE USERNAMES.  Select from here down and Run.

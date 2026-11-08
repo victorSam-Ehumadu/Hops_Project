@@ -11,6 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   the SQL editor, so nothing records what went in; `check-applied-migrations.sql` is a read-only
   probe that reports which ones are actually live. Run it before trusting any server-side
   feature — a missing migration has already been mistaken for an app bug more than once.
+  It covers **0001-0027** and sorts anything needing action to the top as `>> TODO`, so the
+  answer to "what am I missing" is the first block of the result. Its `applied` column means
+  "the database is in the state this repo expects", which is **not** always "this migration
+  ran" — `0026` is deliberately unapplied, so its healthy state is `profiles.email` still
+  being present, and it is probed inverted to keep that sort meaningful. **Add a probe row
+  whenever you add a migration**: one with no row is invisible to the only tool that can
+  report it missing.
 - `website/` — the static marketing/download site at `hopsapp.me` (plain HTML/CSS, no build step,
   unrelated to the app's code). Six pages share the single `styles.css`, so **a class renamed
   there fails silently on whichever page you didn't open** — grep before renaming.
