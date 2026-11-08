@@ -113,12 +113,10 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
     final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Flexible(
-          child: Text(
-            "Received Files",
-            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
-            overflow: TextOverflow.ellipsis,
-          ),
+        title: Text(
+          "Received Files",
+          style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+          overflow: TextOverflow.ellipsis,
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,

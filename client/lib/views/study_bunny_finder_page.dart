@@ -312,12 +312,10 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
           icon: Icon(Icons.arrow_back, color: colors.primary),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Flexible(
-          child: Text(
-            "Study Bunny Finder",
-            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
-            overflow: TextOverflow.ellipsis,
-          ),
+        title: Text(
+          "Study Bunny Finder",
+          style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+          overflow: TextOverflow.ellipsis,
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,

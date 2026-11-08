@@ -100,14 +100,12 @@ class _HopsProfileScreenState extends State<HopsProfileScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Flexible(
-          child: Text(
-            "Profile",
-            style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: colors.primary),
-            overflow: TextOverflow.ellipsis,
-          ),
+        title: Text(
+          "Profile",
+          style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: colors.primary),
+          overflow: TextOverflow.ellipsis,
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,

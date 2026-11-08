@@ -549,12 +549,10 @@ class _TaskTrackerPageState extends State<TaskTrackerPage> {
     final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Flexible(
-          child: Text(
-            "Task Tracker",
-            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
-            overflow: TextOverflow.ellipsis,
-          ),
+        title: Text(
+          "Task Tracker",
+          style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+          overflow: TextOverflow.ellipsis,
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,

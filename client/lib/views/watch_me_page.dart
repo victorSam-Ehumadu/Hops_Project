@@ -480,12 +480,10 @@ class _WatchMePageState extends State<WatchMePage> {
   final colors = theme.colorScheme;     // ← here
     return Scaffold(
       appBar: AppBar(
-        title: Flexible(
-          child: Text(
-            "Watch Me",
-            style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
-            overflow: TextOverflow.ellipsis,
-          ),
+        title: Text(
+          "Watch Me",
+          style: TextStyle(fontWeight: FontWeight.bold, color: colors.primary),
+          overflow: TextOverflow.ellipsis,
         ),
         elevation: 0,
         backgroundColor: Colors.transparent,

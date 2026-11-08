@@ -2,7 +2,7 @@ name: client
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.4.6+13
+version: 1.4.7+14
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
