@@ -107,6 +107,23 @@ class BackgroundFlareTaskHandler extends TaskHandler {
   /// simply be missed; without this an orphan would ring until reboot.
   final Map<String, DateTime> _lastHeard = <String, DateTime>{};
 
+  /// When each alert was last *raised*, kept across a stand-down so the
+  /// same still-airborne advertisement cannot immediately re-raise it.
+  ///
+  /// Deliberately separate from [_shown], which a stand-down empties — see
+  /// the comment in _handleAlert for what went wrong when one map did both
+  /// jobs.
+  final Map<String, DateTime> _raisedRecently = <String, DateTime>{};
+
+  /// How long a stood-down or expired alert stays un-raisable.
+  ///
+  /// Matches the UI isolate's `_handledEmgNames` lifetime exactly
+  /// (`kEmergencyFlareDuration + 5s`) so a flare is forgotten at the same
+  /// moment on both paths. It must comfortably exceed [_kFreshness], or
+  /// the stale advertisement outlives the cooldown and the bug returns.
+  static final Duration _kRaiseCooldown =
+      kEmergencyFlareDuration + const Duration(seconds: 5);
+
   int _nextId = 7300;
 
   @override
@@ -233,8 +250,33 @@ class BackgroundFlareTaskHandler extends TaskHandler {
       kEmergencyFlareDuration + const Duration(seconds: 30);
 
   void _handleAlert(String name) {
-    _lastHeard[name] = DateTime.now();
-    if (_shown.containsKey(name)) return;
+    final now = DateTime.now();
+
+    // "Already showing" and "already raised" are DIFFERENT questions, and
+    // conflating them made the stand-down look broken.
+    //
+    // _handleStandDown removes the key from _shown — but the flare's own
+    // EMG: entry is still sitting in the accumulated scanResults list with
+    // a timestamp a second old, so it passes the freshness check above for
+    // up to _kFreshness longer. Keyed on _shown alone, the very next
+    // emission found no entry and raised the alert again under a new id:
+    // the alarm died and came straight back, which from the far end is
+    // indistinguishable from the stand-down never arriving.
+    //
+    // So remember what has been raised separately from what is on screen,
+    // and for the same window the UI isolate's _handledEmgNames uses, so
+    // both paths forget a flare at the same time.
+    if (!shouldRaiseFlare(
+        raisedAt: _raisedRecently[name], now: now, cooldown: _kRaiseCooldown)) {
+      // Only push the expiry deadline out while it is actually showing;
+      // a stood-down alert has no deadline left to extend.
+      if (_shown.containsKey(name)) _lastHeard[name] = now;
+      return;
+    }
+    _raisedRecently.remove(name);
+
+    _lastHeard[name] = now;
+    _raisedRecently[name] = now;
 
     final isOfficial = name.startsWith('ADM:');
     final body = name.substring(4); // both 'EMG:' and 'ADM:' are 4
@@ -259,6 +301,10 @@ class BackgroundFlareTaskHandler extends TaskHandler {
     for (final key in gone) {
       final id = _shown.remove(key);
       _lastHeard.remove(key);
+      // _raisedRecently is deliberately NOT touched: the flare's own
+      // advertisement is still in scanResults and still fresh, and
+      // forgetting it here is exactly what re-raised the alarm a
+      // millisecond after cancelling it.
       if (id != null) unawaited(_notifications.cancel(id));
       debugPrint('BackgroundFlareTask: stood down "$key"');
     }
@@ -276,6 +322,12 @@ class BackgroundFlareTaskHandler extends TaskHandler {
       if (id != null) unawaited(_notifications.cancel(id));
       debugPrint('BackgroundFlareTask: expired "$key"');
     }
+
+    // _raisedRecently is NOT cleared alongside the two above — that is the
+    // whole point of it. Pruned on its own schedule instead, or a long-run
+    // service would accumulate one entry per flare it ever heard.
+    _raisedRecently.removeWhere(
+        (_, at) => now.difference(at) > _kRaiseCooldown);
   }
 
   // ── Notifications ───────────────────────────────────────────────────────
@@ -356,6 +408,27 @@ class BackgroundFlareTaskHandler extends TaskHandler {
 ///
 /// Returns an empty list for anything malformed rather than guessing, since
 /// the alternative when in doubt is silencing someone else's emergency.
+/// Whether an alert heard again should be raised, or is still inside the
+/// cooldown from the last time it was raised.
+///
+/// Pulled out as a pure function for the same reason
+/// [flareKeysStoodDownBy] is: the bug it exists to prevent is otherwise
+/// only reachable with two physical devices and a stopwatch.
+///
+/// The rule: a flare is raised once, and not again until [cooldown] has
+/// passed — **whether or not it was stood down in between**. Standing down
+/// does not make it raisable again, because the advertisement that caused
+/// it is still on the air and still fresh for up to _kFreshness longer, so
+/// re-raising would undo the stand-down the instant it landed.
+bool shouldRaiseFlare({
+  required DateTime? raisedAt,
+  required DateTime now,
+  required Duration cooldown,
+}) {
+  if (raisedAt == null) return true;
+  return now.difference(raisedAt) >= cooldown;
+}
+
 List<String> flareKeysStoodDownBy(
   Iterable<String> active,
   String standDownName,

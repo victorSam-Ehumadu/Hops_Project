@@ -86,6 +86,66 @@ void main() {
     });
   });
 
+  group('a stood-down flare does not immediately re-raise itself', () {
+    // The bug this group exists for, reported from two phones on
+    // 8 Nov 2026: standing down cancelled the alarm and it came back a
+    // moment later, which is indistinguishable from the stand-down never
+    // having arrived.
+    //
+    // Cause: FlutterBluePlus.scanResults accumulates and never drops an
+    // entry, so the flare's own EMG: advertisement stays in the list,
+    // still inside the freshness window, after the stand-down has been
+    // handled. The handler keyed "have I raised this?" on the same map
+    // the stand-down empties, so the next emission raised it again.
+    final now = DateTime(2026, 11, 8, 20, 7, 50);
+    const cooldown = Duration(minutes: 5, seconds: 5);
+
+    test('a flare never heard before is raised', () {
+      expect(shouldRaiseFlare(raisedAt: null, now: now, cooldown: cooldown),
+          isTrue);
+    });
+
+    test('the same flare a moment later is not raised again', () {
+      // The exact failure: one second after it was raised and stood down.
+      expect(
+          shouldRaiseFlare(
+              raisedAt: now.subtract(const Duration(seconds: 1)),
+              now: now,
+              cooldown: cooldown),
+          isFalse);
+    });
+
+    test('the cooldown outlives the freshness window', () {
+      // This is what actually makes the fix work. If a stale advertisement
+      // can still be considered fresh after the cooldown lapses, the
+      // re-raise comes back exactly as before. 20s of freshness against a
+      // 5-minute cooldown is a wide margin; the test guards the ordering,
+      // not the specific numbers.
+      expect(cooldown, greaterThan(const Duration(seconds: 20) * 2),
+          reason: 'A cooldown shorter than the scan freshness window lets '
+              'the stale EMG: entry re-raise the alert it just cancelled.');
+    });
+
+    test('the same flare much later IS raised again', () {
+      // Being stood down must not blacklist a sender forever — a second,
+      // genuine emergency from the same person for the same reason has to
+      // get through.
+      expect(
+          shouldRaiseFlare(
+              raisedAt: now.subtract(const Duration(minutes: 6)),
+              now: now,
+              cooldown: cooldown),
+          isTrue);
+    });
+
+    test('the boundary counts as raisable, not as still-cooling', () {
+      expect(
+          shouldRaiseFlare(
+              raisedAt: now.subtract(cooldown), now: now, cooldown: cooldown),
+          isTrue);
+    });
+  });
+
   group('handover timings are sane relative to each other', () {
     test('the UI is considered gone only after several missed heartbeats', () {
       expect(kUiConsideredGoneAfter, greaterThan(kUiHeartbeatInterval * 2),
