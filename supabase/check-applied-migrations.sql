@@ -249,8 +249,12 @@ with probe(seq, migration, applied, evidence) as (
     (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public'
         and p.proname in ('post_community_alert',
-                          'fetch_community_alerts',
+                          'list_community_alerts',
                           'delete_community_alert')) = 3,
+    -- list_, NOT fetch_. This probe shipped with the wrong name and
+    -- reported a false NO against a database where 0024 was applied
+    -- perfectly well. Names here are now cross-checked against
+    -- supabase/migrations/ rather than recalled.
     'all three community alert functions present'
   union all select 32, '0025 manual reporter flag',
     exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
