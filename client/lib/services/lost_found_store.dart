@@ -35,13 +35,35 @@ class LostFoundPost {
   final String object;
   final String location;
   final DateTime timestamp;
+
+  /// Who posted this, as the truncated tag off the wire — or null when the
+  /// `LNO:` owner advertisement was never heard.
+  ///
+  /// Null is an ordinary state, not an error: the owner record is a
+  /// SEPARATE advertisement (see kLostFoundOwnerPrefix), so a post can
+  /// arrive perfectly well without it. Everything here must keep working
+  /// when it is null, because that is exactly how every post behaved
+  /// before this field existed. Its only job is to let a report name
+  /// somebody instead of reaching a moderator attributed to nobody.
+  final String? senderTag;
+
   const LostFoundPost({
     required this.postId,
     required this.type,
     required this.object,
     required this.location,
     required this.timestamp,
+    this.senderTag,
   });
+
+  LostFoundPost withSenderTag(String tag) => LostFoundPost(
+        postId: postId,
+        type: type,
+        object: object,
+        location: location,
+        timestamp: timestamp,
+        senderTag: tag,
+      );
 
   Map<String, dynamic> toJson() => {
         'postId': postId,
@@ -49,6 +71,7 @@ class LostFoundPost {
         'object': object,
         'location': location,
         'ts': timestamp.millisecondsSinceEpoch,
+        if (senderTag != null) 'sender': senderTag,
       };
 
   factory LostFoundPost.fromJson(Map<String, dynamic> j) => LostFoundPost(
@@ -57,6 +80,9 @@ class LostFoundPost {
         object: j['object'] as String,
         location: j['location'] as String,
         timestamp: DateTime.fromMillisecondsSinceEpoch(j['ts'] as int),
+        // Absent in anything stored before this field existed, which is
+        // why it is read defensively rather than cast.
+        senderTag: j['sender'] as String?,
       );
 }
 
@@ -118,13 +144,47 @@ class LostFoundStore {
     required String location,
   }) {
     final isNew = !posts.value.containsKey(postId);
+    // Carry any owner already learned for this id. The LNO: advertisement
+    // and the post's own chunks are separate broadcasts with no ordering
+    // between them, so the owner can easily land first — and a re-heard
+    // post (relay, or a later chunk completing) must not wipe it.
+    final known = posts.value[postId]?.senderTag ?? _pendingOwners.remove(postId);
     posts.value = {
       ...posts.value,
-      postId: LostFoundPost(postId: postId, type: type, object: object, location: location, timestamp: DateTime.now()),
+      postId: LostFoundPost(
+          postId: postId,
+          type: type,
+          object: object,
+          location: location,
+          timestamp: DateTime.now(),
+          senderTag: known),
     };
     _persist();
     return isNew;
   }
+
+  /// Records who posted [postId], from its `LNO:` advertisement.
+  ///
+  /// Tolerates arriving BEFORE the post itself — the two are independent
+  /// broadcasts — by parking the tag against an id with no post yet, so
+  /// record() above can pick it up. Never overwrites a tag already known:
+  /// the first owner record heard for an id wins, so a later malformed or
+  /// spoofed one cannot relabel a post that has already been attributed.
+  void recordOwner(String postId, String senderTag) {
+    final existing = posts.value[postId];
+    if (existing != null) {
+      if (existing.senderTag != null) return;
+      posts.value = {...posts.value, postId: existing.withSenderTag(senderTag)};
+      _persist();
+      return;
+    }
+    _pendingOwners[postId] = senderTag;
+  }
+
+  /// Owner tags heard before their post arrived. In memory only — an owner
+  /// with no post is worthless across a restart, and persisting it would
+  /// mean growing a map keyed by ids that may never show up.
+  final Map<String, String> _pendingOwners = {};
 
   /// Marks [postId] as this device's own post — called right after posting,
   /// so the board offers "Mark as Found"/"Delete" on it even after leaving

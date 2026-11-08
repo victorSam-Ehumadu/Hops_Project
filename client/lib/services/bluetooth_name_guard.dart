@@ -47,8 +47,8 @@ const List<String> kHopsAdvertisementPrefixes = <String>[
   'ACK:', 'HOP:', // manual pairing handshake
   'CHT:', // chat ping
   'VBT:', 'VBX:', // Vibe Check
-  'LNR:', 'LNF:', // Lost & Found
-  'SBF:', 'SBI:', 'SBC:', 'SBX:', // Study Bunny
+  'LNR:', 'LNF:', 'LNO:', // Lost & Found (LNO: = who posted it)
+  'SBF:', 'SBI:', 'SBC:', 'SBX:', 'SBO:', // Study Bunny (SBO: = who posted it)
   'CM:', 'CA:', 'CX:', // community alerts
   'DM:', // direct message
 ];

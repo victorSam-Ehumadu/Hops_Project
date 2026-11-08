@@ -27,6 +27,33 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:client/services/key_directory.dart';
+
+/// Turns a wire sender tag into a real account name for a report.
+///
+/// Tags are truncated to 8 characters and padded with '_', so the raw tag
+/// is not a username — putting it straight on a moderation report would
+/// name "vic_____" instead of "victoria". KeyDirectory already knows how
+/// to match both shapes, so this asks it.
+///
+/// Falls back to the raw tag when the directory cannot resolve it (never
+/// synced, or the account has since gone). That is deliberately not null:
+/// a report naming a truncated tag is still far more use to a moderator
+/// than one naming nobody, and it is honest about exactly what arrived.
+Future<String?> resolveReportTarget(String? senderTag) async {
+  if (senderTag == null || senderTag.isEmpty) return null;
+  try {
+    final candidates =
+        await KeyDirectory.candidatesForTruncatedUsername(senderTag);
+    // Exactly one match is the only safe case to collapse. Several
+    // accounts can share the first 8 characters, and picking one would put
+    // a name on a report that may belong to somebody else entirely.
+    if (candidates.length == 1) return candidates.first.key;
+  } catch (_) {
+    // Directory unavailable — fall through to the raw tag.
+  }
+  return senderTag;
+}
 
 const Map<String, String> reportCategories = {
   'spam': 'Spam',

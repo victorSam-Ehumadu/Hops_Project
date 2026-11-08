@@ -657,12 +657,21 @@ class _StudyBunnyFinderPageState extends State<StudyBunnyFinderPage> {
                               icon: Icon(Icons.flag_outlined, size: 18, color: colors.onSurface.withValues(alpha: 0.35)),
                               tooltip: "Report",
                               visualDensity: VisualDensity.compact,
-                              onPressed: () => showReportContentSheet(
-                                context,
-                                contentType: 'study_bunny',
-                                snapshotText: report.subject,
-                                contentCreatedAt: report.timestamp,
-                              ),
+                              onPressed: () async {
+                                // From the tag's SBO: owner record,
+                                // resolved to a real account name; null
+                                // when that was never heard.
+                                final who = await resolveReportTarget(
+                                    report.senderTag);
+                                if (!context.mounted) return;
+                                showReportContentSheet(
+                                  context,
+                                  contentType: 'study_bunny',
+                                  targetUsername: who,
+                                  snapshotText: report.subject,
+                                  contentCreatedAt: report.timestamp,
+                                );
+                              },
                             ),
                           ],
                         ],

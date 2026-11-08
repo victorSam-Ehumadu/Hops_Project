@@ -21,9 +21,10 @@ void main() {
   group('advertisement budgets', () {
     test('community text budget is the name budget minus its overhead', () {
       expect(kCommunityNameTextBudget, kCommunityNameBudget - kCommunityNameOverhead);
-      // 20 - 13. Lowered 11 -> 9 -> 7 as the budget dropped 24 -> 22 -> 20;
-      // see kCommunityNameBudget for the handset evidence each time.
-      expect(kCommunityNameTextBudget, 7);
+      // 22 - 13. Was 11 at a 24-byte budget. Briefly 7 at a 20-byte
+      // budget, reverted — see kCommunityNameBudget for why that was the
+      // wrong move.
+      expect(kCommunityNameTextBudget, 9);
     });
 
     test('a COMPLETELY FULL chunk still fits the budget', () {
@@ -61,11 +62,9 @@ void main() {
 
     test('direct message text budget is the name budget minus its overhead', () {
       expect(kDirectMessageTextBudget, kCommunityNameBudget - kDirectMessageOverhead);
-      // 20 - 11. Was 13 at a 24-byte name budget, then 11 at 22. It moves
-      // with the budget because a DM rides the same advertisement name, so
-      // the same handset ceiling applies to it — including the full-chunk
-      // boundary that made "attention" unsendable as a community alert.
-      expect(kDirectMessageTextBudget, 9);
+      // 22 - 11. Was 13 at a 24-byte name budget. Moves with the budget
+      // because a DM rides the same advertisement name.
+      expect(kDirectMessageTextBudget, 11);
     });
 
     test('direct message overhead matches the documented field layout', () {
@@ -78,8 +77,8 @@ void main() {
       const base64Chars = kDirectMessageMaxChunks * kDirectMessageTextBudget;
       expect(kDirectMessageMaxPlaintextBytes, ((base64Chars ~/ 4) * 3) - 6);
       // Falls out of the budget above rather than being chosen: 8 chunks x
-      // 9 characters of base64 = 72 -> 54 bytes, less the 6-byte nonce.
-      expect(kDirectMessageMaxPlaintextBytes, 48);
+      // 11 characters of base64 = 88 -> 66 bytes, less the 6-byte nonce.
+      expect(kDirectMessageMaxPlaintextBytes, 60);
     });
 
     test('alert part budget stays inside the reliable few-chunk band', () {
@@ -542,6 +541,75 @@ void main() {
       expect(decodeFlareSigChunk([kWatchSeedProtocolMarker, 0x00, 1, 2]), isNull);
       expect(decodeFlareSigChunk([kFlareSigProtocolMarker]), isNull);
       expect(decodeFlareSigChunk([]), isNull);
+    });
+  });
+
+  // ── Post ownership (LNO: / SBO:) ──────────────────────────────────────
+  //
+  // Lost & Found posts and Study Bunny tags carry no sender in their own
+  // names, so a report against one reached a moderator attributed to
+  // nobody. Ownership rides a separate short advertisement keyed on the id
+  // the post already has.
+  group('owner records', () {
+    test('both prefixes fit the budget with room to spare', () {
+      // Every previous miscalculation on this radio came from sitting
+      // exactly on a ceiling, so this asserts margin, not just a fit.
+      for (final prefix in [kLostFoundOwnerPrefix, kStudyOwnerPrefix]) {
+        final name = encodeOwnerRecord(
+            prefix: prefix, id: 'AB12', username: 'averylongusername');
+        expect(utf8.encode(name).length, kOwnerRecordLength);
+        expect(utf8.encode(name).length, lessThan(kCommunityNameBudget));
+      }
+    });
+
+    test('round trips, truncating a long username to the wire tag', () {
+      final name = encodeOwnerRecord(
+          prefix: kLostFoundOwnerPrefix, id: 'AB12', username: 'Victorious1');
+      final back = decodeOwnerRecord(name, kLostFoundOwnerPrefix)!;
+      expect(back.id, 'AB12');
+      expect(back.senderTag, communitySenderTag('Victorious1'));
+    });
+
+    test('a short username keeps its padding, as the wire carries it', () {
+      // NOT trimmed. communitySenderTag pads with '_', and '_' is a legal
+      // username character, so trimming cannot tell "vic" padded apart
+      // from a real account named "vic_____". The padded form is what
+      // KeyDirectory.candidatesForTruncatedUsername already expects, and
+      // it understands both shapes.
+      final name = encodeOwnerRecord(
+          prefix: kStudyOwnerPrefix, id: 'ZZ99', username: 'vic');
+      expect(utf8.encode(name).length, kOwnerRecordLength);
+      expect(decodeOwnerRecord(name, kStudyOwnerPrefix)!.senderTag,
+          communitySenderTag('vic'));
+    });
+
+    test('the two prefixes never decode as each other', () {
+      // They are the same shape, so only the prefix separates a study tag
+      // owner from a Lost & Found one. Crossing them would attribute a
+      // post to whoever happened to own a tag with a colliding id.
+      final lnf = encodeOwnerRecord(
+          prefix: kLostFoundOwnerPrefix, id: 'AB12', username: 'vic');
+      expect(decodeOwnerRecord(lnf, kStudyOwnerPrefix), isNull);
+      expect(decodeOwnerRecord(lnf, kLostFoundOwnerPrefix), isNotNull);
+    });
+
+    test('anything malformed decodes to null rather than a guess', () {
+      // A WRONG attribution is worse than none here: it would put an
+      // innocent account's name on a moderation report.
+      expect(decodeOwnerRecord('LNO:AB12', kLostFoundOwnerPrefix), isNull);
+      expect(decodeOwnerRecord('LNO:AB12vic12345678', kLostFoundOwnerPrefix),
+          isNull);
+      expect(decodeOwnerRecord('LNF:AB12vic_____', kLostFoundOwnerPrefix), isNull);
+      expect(decodeOwnerRecord('', kLostFoundOwnerPrefix), isNull);
+      // All padding, no name.
+      expect(decodeOwnerRecord('SBO:AB12________', kStudyOwnerPrefix), isNull);
+    });
+
+    test('the id width matches what both features actually generate', () {
+      // Lost & Found post ids and Study Bunny tag ids are generated in
+      // different files; this is the assumption that lets one encoder
+      // serve both.
+      expect(kOwnerRecordIdChars, kLostFoundPostIdChars);
     });
   });
 

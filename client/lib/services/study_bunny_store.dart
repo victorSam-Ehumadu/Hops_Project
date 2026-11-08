@@ -42,12 +42,22 @@ class StudyReport {
   // manufacturer data rather than the name — see hops_constants.dart's
   // kStudyLocationProtocolMarker for why.
   final int? locationIndex;
+
+  /// Who posted this tag, as the truncated tag from its `SBO:` owner
+  /// advertisement — null when that was never heard.
+  ///
+  /// Null is an ordinary state: the owner record is a separate broadcast
+  /// (see kStudyOwnerPrefix), so a tag arrives fine without it. Its only
+  /// job is to let a report name somebody.
+  final String? senderTag;
+
   const StudyReport({
     required this.id,
     required this.subject,
     required this.timestamp,
     this.interestCount = 0,
     this.locationIndex,
+    this.senderTag,
   });
 
   /// Display name for this tag's location, or null when it has none.
@@ -60,6 +70,7 @@ class StudyReport {
     // alone" apart from "set it to null"; nothing needs to clear it, so
     // this only ever sets or preserves.
     int? locationIndex,
+    String? senderTag,
   }) =>
       StudyReport(
         id: id,
@@ -67,6 +78,7 @@ class StudyReport {
         locationIndex: locationIndex ?? this.locationIndex,
         timestamp: timestamp ?? this.timestamp,
         interestCount: interestCount ?? this.interestCount,
+        senderTag: senderTag ?? this.senderTag,
       );
 
   Map<String, dynamic> toJson() => {
@@ -75,6 +87,7 @@ class StudyReport {
         'ts': timestamp.millisecondsSinceEpoch,
         'ic': interestCount,
         'loc': locationIndex,
+        if (senderTag != null) 'sender': senderTag,
       };
 
   factory StudyReport.fromJson(Map<String, dynamic> j) => StudyReport(
@@ -86,6 +99,7 @@ class StudyReport {
         interestCount: j['ic'] as int? ?? 0,
         // Absent on anything persisted before this field existed.
         locationIndex: j['loc'] as int?,
+        senderTag: j['sender'] as String?,
       );
 }
 
@@ -150,11 +164,38 @@ class StudyBunnyStore {
         timestamp: DateTime.now(),
         interestCount: existingCount,
         locationIndex: locationIndex ?? existing?.locationIndex,
+        // Same preservation reasoning as the two above: SBO: is its own
+        // advertisement with no ordering against SBF:, so a re-heard tag
+        // must not wipe an owner already learned.
+        senderTag: existing?.senderTag ?? _pendingOwners.remove(id),
       ),
     };
     _persist();
     return isNew;
   }
+
+  /// Records who posted [id], from its `SBO:` advertisement.
+  ///
+  /// Tolerates arriving before the tag itself, and never overwrites an
+  /// owner already known — the first record heard for an id wins, so a
+  /// later malformed or spoofed one cannot relabel an attributed tag.
+  void recordOwner(String id, String senderTag) {
+    final existing = reports.value[id];
+    if (existing != null) {
+      if (existing.senderTag != null) return;
+      reports.value = {
+        ...reports.value,
+        id: existing.copyWith(senderTag: senderTag),
+      };
+      _persist();
+      return;
+    }
+    _pendingOwners[id] = senderTag;
+  }
+
+  /// Owners heard before their tag. In memory only — an owner with no tag
+  /// is worthless across a restart.
+  final Map<String, String> _pendingOwners = {};
 
   /// Applies an interest-count update heard over the air (SBC:) — a no-op
   /// if this device never heard the tag's own SBF: in the first place

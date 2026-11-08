@@ -129,7 +129,7 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **368 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **374 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -324,6 +324,11 @@ lives in `lib/views/hops_app.dart` (`_HopsAppState`):
   handshake), `CHT:` (chat ping — addressed to a peer by *truncated plaintext username*, not a
   rotating token, since you can't know a contact's token before a chat has ever connected),
   `VBT:`/`VBX:` (Vibe Check tag/expiry), `LNR:` (Lost & Found resolution),
+  `LNO:`/`SBO:` (who posted a Lost & Found entry / Study Bunny tag — a
+  **separate** 16-byte advertisement, because neither post's own name has room for a
+  sender, and without one every report against those surfaces reached a moderator as
+  "Reported user: not identified". Degrades, never blocks: miss it and the post still
+  arrives, just unattributed. Vibe Check deliberately has no equivalent),
   `SBF:`/`SBI:`/`SBC:`/`SBX:` (Study Bunny). A Study Bunny tag's **location** rides
   manufacturer data rather than the name (`kStudyLocationProtocolMarker`), because
   `SBF:<id>:` already costs 9 of the 26 bytes — and as a one-byte index into

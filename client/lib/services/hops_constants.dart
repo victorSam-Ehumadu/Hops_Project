@@ -116,31 +116,26 @@ const int kCommunityChunkBudgetBytes = 20;
 // needs two physical phones. If an alert still fails to send, the admin
 // app now says so out loud (AdminBleHub.lastAdvertisingError) instead of
 // failing silently, which is what made this take so long to find.
-// Lowered 22 -> 20 on 8 Nov 2026. THIRD time this number has been too high,
-// and the third time the symptom was identical: short alerts send, one
-// particular length onwards they silently do not.
+// Held at 22. It was briefly dropped to 20 on 8 Nov 2026 on the theory
+// that the full-chunk boundary was failing again — "attention" is nine
+// characters, which at 22 is exactly one full chunk, and the same boundary
+// had genuinely failed at 24 and at 23.
 //
-// The report was that the alert "attention" would not send. That is nine
-// characters — and at a 22-byte budget the text budget is 22 - 13 = 9, so
-// "attention" is the shortest message that completely fills a chunk,
-// producing a name of exactly 22 bytes. Every shorter message produces a
-// shorter name and goes out fine. That is the same boundary that failed at
-// 24 and then at 23: the cutoff always lands precisely where a chunk first
-// fills up, which is what makes it look like a problem with the message
-// rather than with the packet.
+// That was REVERTED, and the reasoning is worth keeping so nobody repeats
+// it. The theory contradicted direct evidence: the alert "attention" had
+// been observed sending correctly at 22, which means a 22-byte name does
+// leave this radio. Worse, the "fix" made things harder, not easier — at
+// 20 the same message needs TWO chunks, and a two-chunk message only
+// reassembles if BOTH advertisements land, where a one-chunk message needs
+// one. Lowering the budget trades a shorter packet for more packets, and
+// that is only a win when the packet length is actually the problem.
 //
-// So this handset's real ceiling is below 22, not merely below 23. 20 buys
-// another two bytes of margin; the cost is that a long alert takes more
-// chunks and arrives over a few more seconds.
-//
-// Worth stating because it was briefly suspected: this is NOT a regression
-// from the flare merge. git diff over the community path between the
-// pre-merge commit and now shows the encoder, the constants and the send
-// path byte-for-byte identical — the only change to community_alerts.dart
-// was the send button's colours. A length-dependent failure also rules out
-// the R8 keep rules added at the same time, which would have broken every
-// send rather than one length onwards.
-const int kCommunityNameBudget = 20;
+// So the cutoff is not the chunk boundary here, and the cause is still
+// open. Do not lower this again without a device-level observation —
+// AdminBleHub.lastAdvertisingError, or logcat — saying the radio rejected
+// the advertisement. Three prior revisions of this number were justified
+// that way; the fourth was not.
+const int kCommunityNameBudget = 22;
 
 /// Hard ceiling for ANY advertisement local name, in UTF-8 bytes.
 ///
@@ -1088,6 +1083,95 @@ String? studyLocationName(int? index) {
 // wrong — Vibe Check said 24, Study Bunny said 20 — which is exactly why
 // advertisementTextBudget() exists. Use it. See the "Advertisement size"
 // note in CLAUDE.md.
+// ── Post ownership: who posted a Lost & Found entry / Study Bunny tag ──
+//
+// WHY A SECOND ADVERTISEMENT RATHER THAN A FIELD
+//
+// Neither LNF: nor SBF: carries a sender, so a report filed against one
+// reached a moderator attributed to nobody — "Reported user: not
+// identified" on every single one. Three of the five reportable surfaces
+// behaved that way, which made the Reports queue close to useless for its
+// actual purpose.
+//
+// A sender cannot go INTO those names. Lost & Found overhead is already
+// kLostFoundOverhead (10) of a kCommunityNameBudget (20) name, leaving 10
+// characters of text per chunk; an 8-character tag in every chunk would
+// leave 2, cutting an 80-character post to 16. "SBF:" + id + ':' spends 9
+// of 20 before the subject starts, so it has even less room.
+//
+// So ownership rides its own small advertisement, keyed on the id the post
+// already has:
+//
+//   LNO:<postId:4><senderTag:8>   = 4 + 4 + 8 = 16 bytes
+//   SBO:<tagId:4><senderTag:8>    = 4 + 4 + 8 = 16 bytes
+//
+// Both are well inside the budget with room to spare, which matters —
+// every previous miscalculation on this radio came from sitting exactly on
+// a ceiling.
+//
+// DEGRADES, NEVER BREAKS. This is a separate advertisement, so a receiver
+// that misses it still gets the post and simply cannot attribute it — the
+// behaviour everything had before. Nothing waits on it, and a post is
+// never withheld pending its owner record. That is deliberate: a Lost &
+// Found post that arrives anonymously is far better than one that does not
+// arrive.
+//
+// PRIVACY. This is a real change in posture and was asked for explicitly.
+// These posts used to be unattributable to anyone in range; now a listener
+// can tie one to a truncated username. Vibe Check is deliberately NOT
+// given one — its crowd-density tags are the most sensitive of the three
+// (they say where a person is right now) and carry no id to key on anyway.
+const String kLostFoundOwnerPrefix = 'LNO:';
+const String kStudyOwnerPrefix = 'SBO:';
+
+/// Id length both owner records key on. Lost & Found post ids and Study
+/// Bunny tag ids are both 4 characters; asserted by a test rather than
+/// assumed, since the two are generated in different files.
+const int kOwnerRecordIdChars = 4;
+
+const int kOwnerRecordLength =
+    4 + kOwnerRecordIdChars + kCommunityNameSenderTagChars; // 16
+
+/// `LNO:`/`SBO:` advertisement naming who posted [id].
+///
+/// [prefix] is [kLostFoundOwnerPrefix] or [kStudyOwnerPrefix]. The sender
+/// tag is truncated AND padded by communitySenderTag, so the field is
+/// fixed width and the decoder can use offsets rather than a split — the
+/// same reason the Lost & Found chunk decoder does.
+String encodeOwnerRecord({
+  required String prefix,
+  required String id,
+  required String username,
+}) {
+  final safeId = id.length >= kOwnerRecordIdChars
+      ? id.substring(0, kOwnerRecordIdChars)
+      : id.padRight(kOwnerRecordIdChars, '0');
+  return '$prefix$safeId${communitySenderTag(username)}';
+}
+
+/// (id, senderTag) from an owner advertisement, or null if it is not one.
+///
+/// Returns null rather than guessing on anything malformed. A wrong
+/// attribution here is worse than none: it would name an innocent account
+/// on a moderation report.
+({String id, String senderTag})? decodeOwnerRecord(
+    String advName, String prefix) {
+  if (!advName.startsWith(prefix)) return null;
+  if (advName.length != kOwnerRecordLength) return null;
+  final id = advName.substring(4, 4 + kOwnerRecordIdChars);
+  final tag = advName.substring(4 + kOwnerRecordIdChars);
+  // The tag is returned EXACTLY as transmitted, padding included, because
+  // that is the form KeyDirectory.candidatesForTruncatedUsername expects —
+  // it already understands both the padded and unpadded shapes. Trimming
+  // here would be a second, lossier scheme: communitySenderTag pads with
+  // '_', and '_' is a legal username character, so "vic" padded and the
+  // real account "vic_____" are indistinguishable after a trim.
+  if (id.isEmpty) return null;
+  // All padding and no name is malformed, not a user called "________".
+  if (tag.replaceAll('_', '').trim().isEmpty) return null;
+  return (id: id, senderTag: tag);
+}
+
 const String kLostFoundPrefix = 'LNF:';
 const int kLostFoundPostIdChars = 4;
 const int kLostFoundOverhead = 4 + kLostFoundPostIdChars + 1 + 1; // 10

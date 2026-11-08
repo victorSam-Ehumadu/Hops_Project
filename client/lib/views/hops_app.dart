@@ -1850,6 +1850,24 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
     }
     _myActiveStudyTagId = id;
     await BlePeripheral.stopAdvertising();
+    // Owner record first, for the same reason Lost & Found sends one: the
+    // SBF: name has no room for a sender ("SBF:" + id + ':' is already 9
+    // of 20), so a report against a study tag could never name anybody.
+    // Best-effort — the tag itself goes out either way.
+    try {
+      await _advertiseWithName(
+        encodeOwnerRecord(
+          prefix: kStudyOwnerPrefix,
+          id: id,
+          username: myUsername,
+        ),
+        [],
+      );
+      await Future.delayed(const Duration(milliseconds: 900));
+      await BlePeripheral.stopAdvertising();
+    } catch (_) {
+      // Never block the tag on its owner record.
+    }
     // The location rides manufacturer data in the scan response, because
     // the name has no room for it — "SBF:" + id + ":" already costs 9 of
     // the 26-byte ceiling. See hops_constants.dart's
@@ -1979,6 +1997,26 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       const perChunkDuration = Duration(milliseconds: 1200);
       const totalCycles = 2; // repeated once for reliability, same reasoning as Community Alerts' chunk cycling
       for (var cycle = 0; cycle < totalCycles; cycle++) {
+        // Who posted it, as its own short advertisement — the post's own
+        // chunks have no room for a sender (see kLostFoundOwnerPrefix).
+        // Sent once per cycle rather than once overall, so a listener that
+        // tuned in mid-cycle still gets it; and BEFORE the chunks, so the
+        // owner is usually already parked by the time the post completes.
+        // Failure here is deliberately ignored: a post that arrives
+        // unattributed beats one that does not arrive.
+        try {
+          await _advertiseWithName(
+            encodeOwnerRecord(
+              prefix: kLostFoundOwnerPrefix,
+              id: postId,
+              username: myUsername,
+            ),
+            [],
+          );
+          await Future.delayed(const Duration(milliseconds: 900));
+        } catch (_) {
+          // See above — never block the post on its owner record.
+        }
         for (var i = 0; i < chunks.length; i++) {
           if (!mounted) return;
           try {
@@ -2872,6 +2910,28 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
           if (parts.length == 2) {
             final count = int.tryParse(parts[1]);
             if (count != null) StudyBunnyStore.instance.setInterestCount(parts[0], count);
+          }
+        }
+        // Who posted a Lost & Found entry / Study Bunny tag. Both are
+        // their own advertisement because neither post's name has room
+        // for a sender — see kLostFoundOwnerPrefix for the arithmetic.
+        //
+        // No freshness gate, deliberately, and no dedup: these are
+        // idempotent (the stores ignore a second owner for an id they
+        // have already attributed) and a stale re-delivery is harmless,
+        // whereas dropping one means a report that cannot name anybody.
+        // Our OWN records are skipped — attributing our own post to
+        // ourselves is noise, and the poster already knows.
+        if (name.startsWith(kLostFoundOwnerPrefix)) {
+          final rec = decodeOwnerRecord(name, kLostFoundOwnerPrefix);
+          if (rec != null && rec.senderTag != communitySenderTag(myUsername)) {
+            LostFoundStore.instance.recordOwner(rec.id, rec.senderTag);
+          }
+        }
+        if (name.startsWith(kStudyOwnerPrefix)) {
+          final rec = decodeOwnerRecord(name, kStudyOwnerPrefix);
+          if (rec != null && rec.senderTag != communitySenderTag(myUsername)) {
+            StudyBunnyStore.instance.recordOwner(rec.id, rec.senderTag);
           }
         }
         // Poster deleting their own Study Bunny tag early.

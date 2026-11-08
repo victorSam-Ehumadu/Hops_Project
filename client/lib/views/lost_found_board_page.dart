@@ -311,12 +311,25 @@ class _LostFoundBoardPageState extends State<LostFoundBoardPage> {
                                 icon: Icon(Icons.flag_outlined, size: 18, color: colors.onSurface.withValues(alpha: 0.35)),
                                 tooltip: "Report",
                                 visualDensity: VisualDensity.compact,
-                                onPressed: () => showReportContentSheet(
-                                  context,
-                                  contentType: 'lost_found',
-                                  snapshotText: "${post.object} @ ${post.location}",
-                                  contentCreatedAt: post.timestamp,
-                                ),
+                                onPressed: () async {
+                                  // From the post's LNO: owner record,
+                                  // resolved to a real account name. Null
+                                  // when that advertisement was never
+                                  // heard, in which case this behaves
+                                  // exactly as it did before: an
+                                  // unattributed report, not a refused one.
+                                  final who = await resolveReportTarget(
+                                      post.senderTag);
+                                  if (!context.mounted) return;
+                                  showReportContentSheet(
+                                    context,
+                                    contentType: 'lost_found',
+                                    targetUsername: who,
+                                    snapshotText:
+                                        "${post.object} @ ${post.location}",
+                                    contentCreatedAt: post.timestamp,
+                                  );
+                                },
                               ),
                           ],
                         ),
