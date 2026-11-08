@@ -395,6 +395,52 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
     } catch (_) {}
   }
 
+  /// Clears this DEVICE's copy of the feed. Nothing else.
+  ///
+  /// Deliberately local-only, and the dialog says so plainly, because the
+  /// obvious misreading is dangerous in both directions: an admin who
+  /// thinks this removed an alert from everyone would stop chasing a bad
+  /// message that is still on every other phone, and a student who thinks
+  /// it deletes for everyone would hesitate to tidy their own feed.
+  ///
+  /// Removing a message for everyone is a different, deliberate action —
+  /// an admin long-presses it and removes it, which broadcasts CX: and
+  /// deletes the server row. This exists because that is one message at a
+  /// time, and a feed full of test traffic needs a broom.
+  ///
+  /// Nothing is lost that cannot come back: alerts still on the server are
+  /// re-fetched by the next poll, which is also why this is not a way to
+  /// hide an alert from yourself permanently.
+  Future<void> _confirmClearLocal() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear this feed?'),
+        content: Text(
+          'Removes all ${_messages.length} alerts from THIS device only. '
+          'Everyone else keeps theirs, and anything still on the server '
+          'comes back on the next sync.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(_messages.clear);
+    await _persist();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Feed cleared on this device.'),
+    ));
+  }
+
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
     final trimmed = _messages.length > _maxStored
@@ -740,6 +786,14 @@ class _CommunityAlertsState extends State<CommunityAlerts> {
             ),
           ],
         ),
+        actions: [
+          if (_messages.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.delete_sweep_outlined),
+              tooltip: 'Clear this feed',
+              onPressed: _confirmClearLocal,
+            ),
+        ],
       ),
       body: HopsBackgroundPattern(child: Column(
         children: [

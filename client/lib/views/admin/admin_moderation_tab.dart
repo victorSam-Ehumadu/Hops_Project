@@ -301,65 +301,6 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
     }
   }
 
-  Future<void> _banSender(Map<String, dynamic> report) async {
-    final username = report['target_username'] as String?;
-    if (username == null) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text("Ban $username?"),
-        content: const Text("This bans the account that sent the reported content and resolves this report as actioned."),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text("Ban"),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    setState(() => _actingOn.add(report['id'] as String));
-    final token = await _token();
-    if (token == null) return;
-    try {
-      // Look up the target's id via search (reports only store the
-      // username, not the id — see 0008_admin_moderation.sql's
-      // content_reports shape) before banning.
-      final rows = await Supabase.instance.client.rpc('admin_search_users', params: {
-        'p_hops_token': token,
-        'p_query': username,
-      });
-      final match = (rows as List).cast<Map<String, dynamic>>().firstWhere(
-            (u) => u['username'] == username,
-            orElse: () => {},
-          );
-      if (match.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("Couldn't find an account named \"$username\" — it may have already been deleted.")));
-        }
-        return;
-      }
-      await Supabase.instance.client.rpc('ban_user', params: {
-        'p_hops_token': token,
-        'p_target_id': match['id'],
-        'p_reason': "Reported content",
-      });
-      await _resolve(report['id'] as String, 'actioned', 'Sender banned');
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(describeModerationError(e)),
-            duration: const Duration(seconds: 8)));
-      }
-    } finally {
-      if (mounted) setState(() => _actingOn.remove(report['id']));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -577,11 +518,25 @@ class _AdminModerationTabState extends State<AdminModerationTab> {
                                           style: TextButton.styleFrom(foregroundColor: Colors.amber.shade800),
                                           child: const Text("Send warning"),
                                         ),
-                                        TextButton(
-                                          onPressed: () => _banSender(r),
-                                          style: TextButton.styleFrom(foregroundColor: Colors.red.shade900),
-                                          child: const Text("Ban sender"),
-                                        ),
+                                        // "Ban sender" was here. Removed:
+                                        // a permanent ban was one tap from
+                                        // a list you scroll, with none of
+                                        // the record that should inform it
+                                        // — the same reasoning that moved
+                                        // Ban off the Users tab and into
+                                        // the detail screen in the first
+                                        // place. Ban still exists, one tap
+                                        // further on, under "Take action",
+                                        // where their warning count, past
+                                        // bans and report history are on
+                                        // screen while you decide.
+                                        //
+                                        // "Send warning" stays on the card:
+                                        // it is the first rung, it is
+                                        // reversible in practice, and it is
+                                        // what a moderator should reach for
+                                        // most often.
+                                        //
                                         // Everything else on this row is a
                                         // single decision. This opens the
                                         // full sheet for the reported user
