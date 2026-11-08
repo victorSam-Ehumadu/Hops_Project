@@ -32,6 +32,15 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+            // Flutter turns R8 on for release builds. Without these rules
+            // it strips the generic signatures flutter_local_notifications
+            // reflects on, and every notification cancel() throws at
+            // runtime — in release only. See proguard-rules.pro; that
+            // comment is worth reading before changing anything here.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

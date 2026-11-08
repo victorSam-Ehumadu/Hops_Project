@@ -201,11 +201,26 @@ class BackgroundFlareTaskHandler extends TaskHandler {
   Future<void> _clearOwnAlerts() async {
     if (_shown.isEmpty) return;
     for (final entry in _shown.entries) {
-      await _notifications.cancel(entry.value);
+      await _dismissQuietly(entry.value);
       debugPrint('BackgroundFlareTask: handed "${entry.key}" to the UI');
     }
     _shown.clear();
     _lastHeard.clear();
+  }
+
+  /// Cancels a notification without letting a platform failure escape.
+  ///
+  /// An uncaught throw here is worse than in the UI isolate: it aborts
+  /// _tick(), so the expiry sweep never runs and the handover never
+  /// completes. R8 with no keep rules made every cancel() throw (see
+  /// android/app/proguard-rules.pro) and this handler stopped mid-tick
+  /// every time it tried to hand alerts back.
+  Future<void> _dismissQuietly(int id) async {
+    try {
+      await _notifications.cancel(id);
+    } catch (e) {
+      debugPrint('BackgroundFlareTask: could not dismiss $id ($e)');
+    }
   }
 
   Future<bool> _isUiGone() async {
@@ -362,7 +377,7 @@ class BackgroundFlareTaskHandler extends TaskHandler {
       // advertisement is still in scanResults and still fresh, and
       // forgetting it here is exactly what re-raised the alarm a
       // millisecond after cancelling it.
-      if (id != null) unawaited(_notifications.cancel(id));
+      if (id != null) unawaited(_dismissQuietly(id));
       debugPrint('BackgroundFlareTask: stood down "$key"');
     }
   }
@@ -376,7 +391,7 @@ class BackgroundFlareTaskHandler extends TaskHandler {
     for (final key in stale) {
       final id = _shown.remove(key);
       _lastHeard.remove(key);
-      if (id != null) unawaited(_notifications.cancel(id));
+      if (id != null) unawaited(_dismissQuietly(id));
       debugPrint('BackgroundFlareTask: expired "$key"');
     }
 

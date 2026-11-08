@@ -641,24 +641,52 @@ class NotificationService {
   // must do: one sender standing down has no business silencing anybody
   // else's still-live emergency.
 
-  static Future<void> cancelEmergencyNotification({String? alertKey}) async {
-    if (alertKey == null) {
-      final ids = _activeAlertIds.values.toList();
-      _activeAlertIds.clear();
-      for (final timer in _alertExpiryTimers.values) {
-        timer.cancel();
-      }
-      _alertExpiryTimers.clear();
-      for (final id in ids) {
-        await _plugin.cancel(id);
-      }
-    } else {
-      final id = _activeAlertIds.remove(alertKey);
-      if (id == null) return; // not live — nothing to do, and don't touch the siren
-      _alertExpiryTimers.remove(alertKey)?.cancel();
+  /// Dismisses one notification, swallowing a platform failure.
+  ///
+  /// NOTHING about stopping an alarm may depend on this succeeding. It
+  /// already failed once, for every cancel in the app at once: R8 had no
+  /// keep rules, so flutter_local_notifications' Gson TypeToken threw on
+  /// every `cancel()` in release builds (see android/app/proguard-rules.pro).
+  /// Because the throw happened mid-loop and before _syncAlarmStateAsync,
+  /// an Emergency Flare's stand-down arrived, removed the alert from the
+  /// registry, and then left the siren looping with the notification stuck
+  /// on screen until the process was killed.
+  ///
+  /// The keep rules fix the cause. This makes the *consequence* impossible:
+  /// a cancel that cannot dismiss the notification must still silence the
+  /// phone, because the sound is the part that cannot be ignored.
+  static Future<void> _dismissQuietly(int id) async {
+    try {
       await _plugin.cancel(id);
+    } catch (e) {
+      debugPrint('NotificationService: could not dismiss notification $id '
+          '($e) — the alarm is still being stopped.');
     }
-    await _syncAlarmStateAsync();
+  }
+
+  static Future<void> cancelEmergencyNotification({String? alertKey}) async {
+    try {
+      if (alertKey == null) {
+        final ids = _activeAlertIds.values.toList();
+        _activeAlertIds.clear();
+        for (final timer in _alertExpiryTimers.values) {
+          timer.cancel();
+        }
+        _alertExpiryTimers.clear();
+        for (final id in ids) {
+          await _dismissQuietly(id);
+        }
+      } else {
+        final id = _activeAlertIds.remove(alertKey);
+        if (id == null) return; // not live — nothing to do, and don't touch the siren
+        _alertExpiryTimers.remove(alertKey)?.cancel();
+        await _dismissQuietly(id);
+      }
+    } finally {
+      // In a finally so the siren stops even if the registry bookkeeping
+      // above throws for a reason nobody has thought of yet.
+      await _syncAlarmStateAsync();
+    }
   }
 
   /// Cancels every live alert whose key starts with [prefix].
@@ -675,12 +703,17 @@ class NotificationService {
         .where((k) => k.startsWith(prefix))
         .toList(growable: false);
     if (matched.isEmpty) return;
-    for (final key in matched) {
-      final id = _activeAlertIds.remove(key);
-      _alertExpiryTimers.remove(key)?.cancel();
-      if (id != null) await _plugin.cancel(id);
+    try {
+      for (final key in matched) {
+        final id = _activeAlertIds.remove(key);
+        _alertExpiryTimers.remove(key)?.cancel();
+        if (id != null) await _dismissQuietly(id);
+      }
+    } finally {
+      // See _dismissQuietly. This is the exact call that stranded a
+      // looping siren after a stand-down had been correctly received.
+      await _syncAlarmStateAsync();
     }
-    await _syncAlarmStateAsync();
   }
 
   // ── Internal alarm-state helpers ──────────────────────────────────────────
