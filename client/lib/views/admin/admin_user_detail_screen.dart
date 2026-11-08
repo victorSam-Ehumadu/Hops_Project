@@ -238,12 +238,32 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
         };
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
       }
-    } catch (_) {
-      // Not surfaced — see doc comment. The edge function may not even be
-      // deployed yet on a project that's only applied the SQL migrations.
-      // This branch is for the call itself failing (offline, function not
-      // found); a call that succeeds but returns {ok:false} is handled
-      // above instead.
+    } catch (e) {
+      // This branch is the call itself failing — offline, function not
+      // deployed, or the deployed copy REJECTING the request. A call that
+      // succeeds and returns {ok:false} is handled above instead.
+      //
+      // It used to be `catch (_) {}` with no log and no message, on the
+      // reasoning that a project with only the SQL applied may have no
+      // edge function at all. That reasoning covered one case and hid
+      // every other: adding the 'warn' kind means an older deployed copy
+      // answers 400 invalid_request, which lands here — so the admin saw
+      // "Warning 1 of 3 sent", no error of any kind, and no email. Silence
+      // about a courtesy email is one thing; silence about one we TRIED
+      // and failed to send is how you end up believing a person was told
+      // something they never were.
+      debugPrint('send-moderation-email failed (kind=$kind): $e');
+      if (!mounted) return;
+      final text = e.toString();
+      final message = text.contains('invalid_request')
+          // The deployed function validates `kind` against its own list,
+          // so this specific rejection means the copy on the server
+          // predates this action.
+          ? "Done, but no email: the send-moderation-email function needs "
+              "redeploying — the deployed copy doesn't know \"$kind\" yet."
+          : "Done, but the notification email couldn't be sent.";
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), duration: const Duration(seconds: 7)));
     }
   }
 
