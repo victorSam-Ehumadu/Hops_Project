@@ -457,9 +457,29 @@ class BackgroundFlareTaskHandler extends TaskHandler {
           // Wakes and shows over the lock screen. The whole point is that
           // this reaches someone whose phone is in a pocket.
           fullScreenIntent: true,
-          ongoing: true,
-          autoCancel: false,
+          // Swipeable, and dismissible by hand. ongoing:true left an alert
+          // raised here with no way to clear it at all: this isolate has
+          // no "Stop for me" handler to tap, so the only exit was killing
+          // the app.
+          ongoing: false,
+          autoCancel: true,
           audioAttributesUsage: AudioAttributesUsage.alarm,
+          actions: [
+            // cancelNotification: true makes ANDROID dismiss this, with no
+            // Dart callback involved. That is the difference from
+            // NotificationService's copy of this button, and it is
+            // deliberate: a tap handler registered in the UI isolate does
+            // not exist while the app is closed, which is precisely when
+            // this notification is shown. The OS plays this channel's tone
+            // once rather than looping it, so dismissing the notification
+            // IS "stop for me" here — there is no siren left running
+            // behind it.
+            AndroidNotificationAction(
+              'dismiss',
+              'Stop for me',
+              cancelNotification: true,
+            ),
+          ],
         ),
       ),
     );

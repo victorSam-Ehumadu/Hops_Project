@@ -1390,6 +1390,17 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
 
     setState(() => _isFlareActive = false);
 
+    // Take the "Emergency flare active" bar down with it.
+    //
+    // It is shown for the full kEmergencyFlareDuration and nothing used to
+    // dismiss it early, so after standing down the red bar and its CANCEL
+    // button sat there for the rest of the window — reported as "it looks
+    // like the alarm is still being broadcast", and pressing that stale
+    // CANCEL then cancelled a flare that had already ended, which looked
+    // like the button working intermittently. At 60 seconds this was
+    // survivable; at five minutes it is not.
+    if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
     if (!silent && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

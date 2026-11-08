@@ -444,14 +444,26 @@ class NotificationService {
           playSound: !customSoundPlaying, // fallback if our player failed
           fullScreenIntent: true,
           category: AndroidNotificationCategory.alarm,
-          ongoing: true,     // keeps the notification alive
-          autoCancel: false, // only dismissed by our cancel call
+          // Swipeable, deliberately. ongoing:true made these impossible
+          // to clear by hand, so a notification left behind by any failure
+          // was stuck until the app died. The in-app AlarmRingingBanner is
+          // the backstop for stopping the siren itself if someone swipes
+          // this away instead of using "Stop for me".
+          ongoing: false,
+          autoCancel: false, // tapping routes through our handler first
           actions: [
             const AndroidNotificationAction(
               'dismiss',
               'Stop for me',
               showsUserInterface: true,
-              cancelNotification: false, // we cancel manually below
+              // Let Android dismiss it as well as calling us back.
+              // cancelNotification:false meant the button did NOTHING
+              // visible unless our Dart handler ran and its cancel()
+              // succeeded — and that cancel was throwing on every release
+              // build (see proguard-rules.pro). The handler still runs and
+              // still stops the siren; this just guarantees the one thing
+              // the user can see.
+              cancelNotification: true
             ),
           ],
         ),
@@ -496,14 +508,14 @@ class NotificationService {
           enableVibration: false, // already vibrated on the initial show
           playSound: false, // audio is already looping from the initial show
           category: AndroidNotificationCategory.alarm,
-          ongoing: true,
+          ongoing: false,
           autoCancel: false,
           actions: [
             const AndroidNotificationAction(
               'dismiss',
               'Stop for me',
               showsUserInterface: true,
-              cancelNotification: false,
+              cancelNotification: true,
             ),
           ],
         ),
@@ -562,14 +574,14 @@ class NotificationService {
           playSound: !customSoundPlaying,
           fullScreenIntent: true,
           category: AndroidNotificationCategory.alarm,
-          ongoing: true,
+          ongoing: false,
           autoCancel: false,
           actions: [
             const AndroidNotificationAction(
               'dismiss',
               'Stop for me',
               showsUserInterface: true,
-              cancelNotification: false,
+              cancelNotification: true,
             ),
           ],
         ),
@@ -615,14 +627,14 @@ class NotificationService {
           enableVibration: false,
           playSound: false,
           category: AndroidNotificationCategory.alarm,
-          ongoing: true,
+          ongoing: false,
           autoCancel: false,
           actions: [
             const AndroidNotificationAction(
               'dismiss',
               'Stop for me',
               showsUserInterface: true,
-              cancelNotification: false,
+              cancelNotification: true,
             ),
           ],
         ),
