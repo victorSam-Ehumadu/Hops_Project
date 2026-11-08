@@ -12,10 +12,18 @@ import 'package:client/widgets/hops_background_pattern.dart';
 // original ask, implemented as: send a 6-digit code (send-verification-
 // email Edge Function), let them enter it (verify_signup_email_otp RPC).
 //
-// Deliberately skippable — this app works entirely offline once signed
-// in, and hard-blocking account creation on an email round-trip would be
-// a worse trade-off than just nudging. HopsProfileScreen/Account
-// Management can offer "resend verification" later for anyone who skips.
+// Presented as part of signing up, not as an optional extra: the
+// always-available "Skip for now" was removed so verifying reads as the
+// expected path.
+//
+// It is NOT hard-blocking, and must not become so. The account is created
+// BEFORE this screen is pushed (see root_gatekeeper.dart), and the code is
+// sent by an Edge Function with real failure modes of its own — a Resend
+// quota, a missing RESEND_API_KEY. Demanding a code that our own server
+// never managed to send would lock someone out of an account that already
+// exists. So the escape still appears, but only once sending has actually
+// failed, and it says so. Account Management offers "resend verification"
+// afterwards for anyone who takes it.
 class EmailVerificationScreen extends StatefulWidget {
   final String email;
   const EmailVerificationScreen({super.key, required this.email});
@@ -73,8 +81,8 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
       if (mounted && data is Map && data['ok'] == false) {
         setState(() => _error = describeEmailSendFailure(
               data['error'],
-              skipHint: " You can Skip for now and verify later from "
-                  "Account Management.",
+              skipHint: " You can continue without verifying and finish "
+                  "this later from Account Management.",
             ));
       }
     } catch (e) {
@@ -205,13 +213,34 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
                           : const Text("Verify", style: TextStyle(fontWeight: FontWeight.bold)),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: TextButton(
-                      onPressed: _busy ? null : () => Navigator.of(context).pop(false),
-                      child: Text("Skip for now", style: TextStyle(color: colors.onSurface.withValues(alpha: 0.5), fontSize: 13)),
+                  // The unconditional "Skip for now" is gone — verifying
+                  // should read as part of signing up, not as one of two
+                  // equal options.
+                  //
+                  // What replaces it is deliberately NOT nothing. This
+                  // screen can fail through no fault of the person using
+                  // it: the code is sent by an Edge Function that can hit
+                  // a Resend quota or a misconfigured key, and _error is
+                  // set when that happens. Leaving someone on a screen
+                  // demanding a code that our own server never sent, with
+                  // no way forward, would trap them out of an account that
+                  // HAS ALREADY BEEN CREATED by the time they get here.
+                  //
+                  // So the escape appears only in that case, and says why.
+                  if (_error != null) ...[
+                    const SizedBox(height: 8),
+                    Center(
+                      child: TextButton(
+                        onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+                        child: Text(
+                          "Continue without verifying",
+                          style: TextStyle(
+                              color: colors.onSurface.withValues(alpha: 0.5),
+                              fontSize: 13),
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
