@@ -116,7 +116,31 @@ const int kCommunityChunkBudgetBytes = 20;
 // needs two physical phones. If an alert still fails to send, the admin
 // app now says so out loud (AdminBleHub.lastAdvertisingError) instead of
 // failing silently, which is what made this take so long to find.
-const int kCommunityNameBudget = 22;
+// Lowered 22 -> 20 on 8 Nov 2026. THIRD time this number has been too high,
+// and the third time the symptom was identical: short alerts send, one
+// particular length onwards they silently do not.
+//
+// The report was that the alert "attention" would not send. That is nine
+// characters — and at a 22-byte budget the text budget is 22 - 13 = 9, so
+// "attention" is the shortest message that completely fills a chunk,
+// producing a name of exactly 22 bytes. Every shorter message produces a
+// shorter name and goes out fine. That is the same boundary that failed at
+// 24 and then at 23: the cutoff always lands precisely where a chunk first
+// fills up, which is what makes it look like a problem with the message
+// rather than with the packet.
+//
+// So this handset's real ceiling is below 22, not merely below 23. 20 buys
+// another two bytes of margin; the cost is that a long alert takes more
+// chunks and arrives over a few more seconds.
+//
+// Worth stating because it was briefly suspected: this is NOT a regression
+// from the flare merge. git diff over the community path between the
+// pre-merge commit and now shows the encoder, the constants and the send
+// path byte-for-byte identical — the only change to community_alerts.dart
+// was the send button's colours. A length-dependent failure also rules out
+// the R8 keep rules added at the same time, which would have broken every
+// send rather than one length onwards.
+const int kCommunityNameBudget = 20;
 
 /// Hard ceiling for ANY advertisement local name, in UTF-8 bytes.
 ///
@@ -229,7 +253,14 @@ String communitySenderTag(String username) =>
         ? username.substring(0, kCommunityNameSenderTagChars)
         : username.padRight(kCommunityNameSenderTagChars, '_');
 const int kCommunityNameOverhead = 13;
-const int kCommunityNameTextBudget = kCommunityNameBudget - kCommunityNameOverhead; // 11
+/// Characters of message text one chunk can carry.
+///
+/// Derived, never written down. The trailing `// 11` this line used to
+/// carry was left over from a 24-byte budget and had been wrong by two
+/// for two revisions — exactly the kind of stale number that sends
+/// someone hunting in the wrong place.
+const int kCommunityNameTextBudget =
+    kCommunityNameBudget - kCommunityNameOverhead;
 
 // chunkIndex and (totalChunks-1) are packed into 3 bits each inside one
 // character, so 8 is the hard ceiling — 8 × 18 = 144 bytes per message.

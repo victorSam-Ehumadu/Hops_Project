@@ -49,6 +49,16 @@ class AppTheme {
   // already unique/stable across this catalog.
   final int? carrotCost;
 
+  /// Groups this theme under "Festive Themes" instead of Light or Dark.
+  ///
+  /// A festive theme still HAS a brightness — it has to, since every
+  /// contrast decision in toThemeData keys off it — but brightness stops
+  /// being how it is filed. Without this flag the four seasonal themes
+  /// would also appear in the Light and Dark lists, so the same theme
+  /// would be reachable from two places and the counts on the category
+  /// tiles would double-count it.
+  final bool festive;
+
   const AppTheme({
     required this.name,
     required this.primary,
@@ -60,6 +70,7 @@ class AppTheme {
     required this.onTertiaryContainer,
     this.brightness = Brightness.light,
     this.carrotCost,
+    this.festive = false,
   });
 
   // [font] is optional so every existing call site (this app has plenty
@@ -378,6 +389,80 @@ class AppThemes {
       onTertiaryContainer: Colors.white,
       brightness: Brightness.dark,
       carrotCost: 40,
+    ),
+    // ── Festive ──────────────────────────────────────────────────────────
+    // Appended, like the Shop block above, and for the same reason: saved
+    // selections are stored BY INDEX, so inserting anywhere else silently
+    // moves everyone onto a different theme at next launch.
+    //
+    // Free, deliberately — these are seasonal colour, not a Shop item, and
+    // locking a Diwali theme behind carrots earned from a word game is a
+    // trade nobody would feel good about.
+    //
+    // Each still declares a brightness, because every contrast rule in
+    // toThemeData keys off it; `festive: true` only changes which list
+    // they are filed under in the picker.
+    //
+    // Watch primaryContainer on the two dark ones. toThemeData sets
+    // onPrimaryContainer to BLACK for a dark theme, so a dark container
+    // there renders near-invisible text — which is why Halloween and
+    // Diwali use a LIGHT container colour and carry their deep shade on
+    // tertiaryContainer instead, where onTertiaryContainer is explicit.
+    // 17 – Halloween (Dark)
+    AppTheme(
+      name: 'Halloween',
+      primary: Color(0xFFFF8A3D),
+      background: Color(0xFF140D1C),
+      surface: Color(0xFF241733),
+      onBackground: Color(0xFFFFE9D6),
+      primaryContainer: Color(0xFFFFB066),
+      tertiaryContainer: Color(0xFF6A3FA0),
+      onTertiaryContainer: Colors.white,
+      brightness: Brightness.dark,
+      festive: true,
+    ),
+    // 18 – Diwali (Dark) — lamps against a night sky, so marigold and
+    // magenta on deep plum rather than a light ground.
+    AppTheme(
+      name: 'Diwali',
+      primary: Color(0xFFFFC53D),
+      background: Color(0xFF1A0B1E),
+      surface: Color(0xFF2C1230),
+      onBackground: Color(0xFFFFF3DA),
+      primaryContainer: Color(0xFFFFD98A),
+      tertiaryContainer: Color(0xFFB23A6F),
+      onTertiaryContainer: Colors.white,
+      brightness: Brightness.dark,
+      festive: true,
+    ),
+    // 19 – Christmas (Light) — pine as the primary, holly red kept to the
+    // containers. Red as primary would fight the Emergency Flare button,
+    // which hardcodes its own red precisely so danger still reads as
+    // danger under every theme.
+    AppTheme(
+      name: 'Christmas',
+      primary: Color(0xFF0F6B3A),
+      background: Color(0xFFF6FBF6),
+      surface: Color(0xFFDFF0E2),
+      onBackground: Color(0xFF10301D),
+      primaryContainer: Color(0xFFC62828),
+      tertiaryContainer: Color(0xFFB71C1C),
+      onTertiaryContainer: Colors.white,
+      festive: true,
+    ),
+    // 20 – Easter (Light) — pastels, but the containers are deepened past
+    // pastel on purpose: onPrimaryContainer is white on a light theme, and
+    // white on a true pastel is unreadable.
+    AppTheme(
+      name: 'Easter',
+      primary: Color(0xFF6A3C94),
+      background: Color(0xFFFFFCF4),
+      surface: Color(0xFFF0E6FA),
+      onBackground: Color(0xFF38254A),
+      primaryContainer: Color(0xFFC2185B),
+      tertiaryContainer: Color(0xFF2E9E6B),
+      onTertiaryContainer: Colors.white,
+      festive: true,
     ),
   ];
 

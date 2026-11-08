@@ -23,13 +23,25 @@ class _ColorThemePageState extends State<ColorThemePage> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
 
+    // Festive themes are excluded from both, not added to whichever
+    // brightness they happen to be. Otherwise Halloween would sit in the
+    // Dark list AND the Festive list — reachable twice, and counted twice
+    // on the tiles.
     final lightIndices = <int>[
       for (var i = 0; i < AppThemes.all.length; i++)
-        if (AppThemes.all[i].brightness == Brightness.light) i,
+        if (!AppThemes.all[i].festive &&
+            AppThemes.all[i].brightness == Brightness.light)
+          i,
     ];
     final darkIndices = <int>[
       for (var i = 0; i < AppThemes.all.length; i++)
-        if (AppThemes.all[i].brightness == Brightness.dark) i,
+        if (!AppThemes.all[i].festive &&
+            AppThemes.all[i].brightness == Brightness.dark)
+          i,
+    ];
+    final festiveIndices = <int>[
+      for (var i = 0; i < AppThemes.all.length; i++)
+        if (AppThemes.all[i].festive) i,
     ];
     final current = AppThemes.all[themeNotifier.value];
 
@@ -57,7 +69,11 @@ class _ColorThemePageState extends State<ColorThemePage> {
             icon: Icons.light_mode_outlined,
             title: 'Light Themes',
             count: lightIndices.length,
-            isCurrentCategory: current.brightness == Brightness.light,
+            // "Is my theme in here?" — a festive theme is in the Festive
+            // list, whatever its brightness, so neither of the two tiles
+            // below may claim it.
+            isCurrentCategory:
+                !current.festive && current.brightness == Brightness.light,
             currentName: current.name,
             onTap: () async {
               await Navigator.push(
@@ -77,7 +93,8 @@ class _ColorThemePageState extends State<ColorThemePage> {
             icon: Icons.dark_mode_outlined,
             title: 'Dark Themes',
             count: darkIndices.length,
-            isCurrentCategory: current.brightness == Brightness.dark,
+            isCurrentCategory:
+                !current.festive && current.brightness == Brightness.dark,
             currentName: current.name,
             onTap: () async {
               await Navigator.push(
@@ -86,6 +103,26 @@ class _ColorThemePageState extends State<ColorThemePage> {
                   builder: (_) => _ColorThemeGridPage(
                     title: 'Dark Themes',
                     indices: darkIndices,
+                  ),
+                ),
+              );
+              if (mounted) setState(() {});
+            },
+          ),
+          const SizedBox(height: 12),
+          _ThemeCategoryTile(
+            icon: Icons.celebration_outlined,
+            title: 'Festive Themes',
+            count: festiveIndices.length,
+            isCurrentCategory: current.festive,
+            currentName: current.name,
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => _ColorThemeGridPage(
+                    title: 'Festive Themes',
+                    indices: festiveIndices,
                   ),
                 ),
               );

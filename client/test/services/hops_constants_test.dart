@@ -21,9 +21,37 @@ void main() {
   group('advertisement budgets', () {
     test('community text budget is the name budget minus its overhead', () {
       expect(kCommunityNameTextBudget, kCommunityNameBudget - kCommunityNameOverhead);
-      // 22 - 13. Lowered from 11 when the budget dropped 24 -> 22;
-      // see kCommunityNameBudget for the handset evidence.
-      expect(kCommunityNameTextBudget, 9);
+      // 20 - 13. Lowered 11 -> 9 -> 7 as the budget dropped 24 -> 22 -> 20;
+      // see kCommunityNameBudget for the handset evidence each time.
+      expect(kCommunityNameTextBudget, 7);
+    });
+
+    test('a COMPLETELY FULL chunk still fits the budget', () {
+      // The one case that has broken three times, and it has never once
+      // looked like a packet problem from the outside: short alerts send,
+      // and from one particular length onwards they silently do not,
+      // because the cutoff lands exactly where a chunk first fills up.
+      //
+      // Most recently the alert "attention" would not send — nine
+      // characters, which at the then-budget was precisely a full chunk and
+      // therefore a name of exactly the ceiling. Asserting the derived
+      // arithmetic is not enough on its own (it was self-consistent every
+      // time); this builds the worst-case name and measures it.
+      final fullChunk = encodeCommunityNameChunk(
+        senderTag: 'Sender12',
+        msgId: 63,
+        chunkIndex: 7,
+        totalChunks: 8,
+        chunkText: 'x' * kCommunityNameTextBudget,
+      );
+      expect(utf8.encode(fullChunk).length, lessThanOrEqualTo(kCommunityNameBudget),
+          reason: 'A chunk filled to kCommunityNameTextBudget must still fit '
+              'kCommunityNameBudget. If this fails the two constants have '
+              'drifted and messages of one exact length will vanish.');
+      // And that the budget itself stays under the hard advertisement
+      // ceiling, with margin — the ceiling is theoretical and at least one
+      // handset honours something lower.
+      expect(kCommunityNameBudget, lessThan(kAdvertisementNameMaxBytes));
     });
 
     test('community overhead matches the documented field layout', () {
@@ -33,10 +61,11 @@ void main() {
 
     test('direct message text budget is the name budget minus its overhead', () {
       expect(kDirectMessageTextBudget, kCommunityNameBudget - kDirectMessageOverhead);
-      // 22 - 11. Was 13 when the name budget was 24; it moves with the
-      // budget because a DM rides the same advertisement name, and so the
-      // same handset ceiling applies to it.
-      expect(kDirectMessageTextBudget, 11);
+      // 20 - 11. Was 13 at a 24-byte name budget, then 11 at 22. It moves
+      // with the budget because a DM rides the same advertisement name, so
+      // the same handset ceiling applies to it — including the full-chunk
+      // boundary that made "attention" unsendable as a community alert.
+      expect(kDirectMessageTextBudget, 9);
     });
 
     test('direct message overhead matches the documented field layout', () {
@@ -49,8 +78,8 @@ void main() {
       const base64Chars = kDirectMessageMaxChunks * kDirectMessageTextBudget;
       expect(kDirectMessageMaxPlaintextBytes, ((base64Chars ~/ 4) * 3) - 6);
       // Falls out of the budget above rather than being chosen: 8 chunks x
-      // 11 characters of base64 = 88 -> 66 bytes, less the 6-byte nonce.
-      expect(kDirectMessageMaxPlaintextBytes, 60);
+      // 9 characters of base64 = 72 -> 54 bytes, less the 6-byte nonce.
+      expect(kDirectMessageMaxPlaintextBytes, 48);
     });
 
     test('alert part budget stays inside the reliable few-chunk band', () {

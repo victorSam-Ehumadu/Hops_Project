@@ -410,17 +410,24 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
           reason: note, warningNumber: number, warningLimit: _kWarningLimit);
     } on PostgrestException catch (e) {
       if (!mounted) return;
-      final message = e.message.contains('cannot_warn_self')
-          ? "You can't warn your own account."
-          : e.message.contains('does not exist')
-              ? "Server missing this action — run migration 0027."
-              : "Couldn't send the warning.";
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
-    } catch (_) {
+      // A missing RPC comes back as PGRST202 with "Could not find the
+      // function ...", NOT "does not exist" — which is exactly what the
+      // hand-rolled check here first looked for, so an unapplied 0027
+      // reported the generic "Couldn't send the warning" and read as a
+      // connectivity problem. describeModerationError already gets this
+      // right for every other action; this one just wasn't using it.
+      final message = (e.code == 'PGRST202' ||
+              e.message.contains('Could not find the function'))
+          ? "The server doesn't have this action yet — apply migration "
+              "0027_standalone_user_warning.sql in the Supabase SQL editor."
+          : describeModerationError(e);
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), duration: const Duration(seconds: 8)));
+    } catch (e) {
       if (mounted) {
+        debugPrint('warn_user failed: $e');
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't send the warning.")));
+            SnackBar(content: Text(describeModerationError(e))));
       }
     } finally {
       if (mounted) setState(() => _acting = false);
@@ -680,12 +687,28 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
 
     showModalBottomSheet(
       context: context,
+      // Scrollable, because this sheet's height is not knowable in advance.
+      //
+      // It was a bare Column in a default-height modal (capped at 9/16 of
+      // the screen), which fitted only as long as nobody added an action —
+      // adding "Send warning" overflowed it by 52px on a short screen. The
+      // count also varies by target (unban vs ban, promote vs demote, the
+      // two flag entries), and this app has a user-adjustable font scale,
+      // so a layout that merely fits today is a layout that breaks later.
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        child: ConstrainedBox(
+          // Short of full height on purpose: leaving the page visible
+          // behind it keeps "tap outside to dismiss" discoverable.
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
             const SizedBox(height: 12),
             Container(
               width: 40, height: 4,
@@ -806,8 +829,10 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                   _delete();
                 }),
             ],
-            const SizedBox(height: 12),
-          ],
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
         ),
       ),
     );

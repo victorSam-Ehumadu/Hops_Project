@@ -24,6 +24,9 @@ String describeModerationError(Object e) {
           "\"ab12?\", that sender couldn't be matched to a real account — the "
           "reporting device hadn't synced the user directory when it filed the report.";
     }
+    if (msg.contains('cannot_warn_self')) {
+      return "You can't warn your own account.";
+    }
     if (msg.contains('no_attributable_sender')) {
       return "This report has no sender attached (Vibe Check tags are anonymous), so there's nobody to warn.";
     }
