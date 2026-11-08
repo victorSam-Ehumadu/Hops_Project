@@ -523,9 +523,31 @@ void main() {
     expect(HOPS_SERVICE_UUID, "0000FA57-0000-1000-8000-00805F9B34FB");
   });
 
-  test('a personal flare stays live for a full minute', () {
-    // Receivers' auto-cancel, the sender's countdown, and the notification
-    // auto-expiry all key off this one value.
-    expect(kEmergencyFlareDuration, const Duration(seconds: 60));
+  group('how long a personal flare stays live', () {
+    // Receivers' auto-cancel, the sender's countdown, and both the
+    // in-app and background notification auto-expiries all key off this
+    // one value.
+    test('is five minutes', () {
+      expect(kEmergencyFlareDuration, const Duration(minutes: 5));
+    });
+
+    test('is long enough to cross a building, not just to be noticed', () {
+      // The point of the change from 60s: a minute is roughly how long it
+      // takes to register an alarm and work out where it came from, which
+      // left no time to actually get there. Guards against anyone
+      // "tidying" it back to seconds.
+      expect(kEmergencyFlareDuration.inMinutes, greaterThanOrEqualTo(3));
+    });
+
+    test('is spoken in whole minutes, not in seconds', () {
+      // The SnackBar interpolated .inSeconds, which read as "300 seconds".
+      expect(describeAlertDuration(kEmergencyFlareDuration), '5 minutes');
+      expect(describeAlertDuration(const Duration(seconds: 60)), '1 minute');
+      expect(describeAlertDuration(const Duration(seconds: 30)), '30 seconds');
+      // Not a whole number of minutes — stays in seconds rather than
+      // rounding, since rounding an emergency window down would misstate
+      // it in the one direction that matters.
+      expect(describeAlertDuration(const Duration(seconds: 90)), '90 seconds');
+    });
   });
 }

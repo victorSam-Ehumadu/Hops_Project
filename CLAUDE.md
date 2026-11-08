@@ -122,12 +122,12 @@ flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
 ```
 
-`flutter test` passes: **352 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **354 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
 
-- `test/services/hops_constants_test.dart` (57) — the advertisement wire format: budget
+- `test/services/hops_constants_test.dart` (59) — the advertisement wire format: budget
   arithmetic, community/DM chunk encode/decode round trips, `splitCommunityMessage` (including
   never splitting a multi-byte character across chunks), rotating presence tokens and their
   window-rollover tolerance, flare signature chunking reassembled at full RSA-2048 length. This is
@@ -842,6 +842,20 @@ The dialog lives on `HopsApp` itself (`_showFlareConfirmDialog`), not on any tab
 `Navigator.of(context)` resolves to the **root** navigator and the prompt renders over whatever
 route is on top. It must not change tabs — yanking the user to Home was both disorienting and slow
 in the one situation this exists for.
+
+**A flare stays live for five minutes** (`kEmergencyFlareDuration`). It was 30s, then 60s;
+a minute is about how long it takes to notice an alarm and work out which direction it came
+from, which left no time to actually reach the person. Everything derives from that one
+constant — the sender's auto-cancel timer and countdown SnackBar, `NotificationService`'s
+`_alertAutoExpiry`, and `background_flare_task.dart`'s `_kAlertExpiry` (both
+`+ 30s`). **Don't hardcode a second copy**: the background task's expiry *was* a literal
+3 minutes, which the moment this went to 5 would have let it drop an alert while the sender
+was still broadcasting. The flare advertises once and stays on air for the whole window —
+there is no re-advertise cycle — so this is five minutes of continuous transmit. An admin's
+Official Alert (`ADM:`) keeps its own separate 30-second window in
+`official_alert_service.dart` and is deliberately untouched by this. Use
+`describeAlertDuration()` for any user-facing wording; the SnackBar interpolated `.inSeconds`
+and read "300 seconds".
 
 ### 8b. Hearing a flare with the app closed
 

@@ -1506,7 +1506,7 @@ class _HopsAppState extends State<HopsApp> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-              "Emergency flare active for ${kEmergencyFlareDuration.inSeconds} seconds"),
+              "Emergency flare active for ${describeAlertDuration(kEmergencyFlareDuration)}"),
           backgroundColor: Colors.red,
           duration: kEmergencyFlareDuration,
           action: SnackBarAction(

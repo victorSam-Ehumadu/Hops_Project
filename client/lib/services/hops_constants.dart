@@ -757,13 +757,34 @@ const int kFlareSigProtocolMarker = 0x45; // ascii 'E'
 // How long a personal Emergency Flare (EMG:) stays live once triggered —
 // the broadcast auto-stops, the alarm on receivers' phones auto-cancels,
 // and the sender's own countdown all key off this one value. Was 30
-// seconds; raised to a full minute so there's more real time for someone
-// nearby to notice, react, and actually reach whoever triggered it, rather
-// than the window closing while they're still working out where the sound
-// came from. Doesn't apply to an admin's Official Alert (ADM:) — that one
-// keeps its own separate 30-second window in official_alert_service.dart,
-// which this constant deliberately leaves untouched.
-const Duration kEmergencyFlareDuration = Duration(seconds: 60);
+// seconds, then 60; now five minutes, because a minute is about how long
+// it takes to *notice* an alarm and work out which direction it came from,
+// which left no time at all to actually walk to the person. Five minutes
+// is a realistic distance across a campus building.
+//
+// What it costs: the sender's radio advertises continuously for the whole
+// window (there is no re-advertise cycle — the name is set once and stays
+// on air), so this is five minutes of transmit instead of one. That is
+// acceptable for an emergency and nowhere near the battery cost of the
+// passive scan every device is already running. The sender can always
+// stand down early from the Radar app-bar button.
+//
+// Doesn't apply to an admin's Official Alert (ADM:) — that one keeps its
+// own separate 30-second window in official_alert_service.dart, which this
+// constant deliberately leaves untouched.
+const Duration kEmergencyFlareDuration = Duration(minutes: 5);
+
+/// An alert window in words, for the sender's own confirmation message.
+///
+/// Exists because the flare SnackBar used to interpolate `.inSeconds`,
+/// which read fine at 60 ("60 seconds") and absurdly at 300 ("300
+/// seconds"). Whole minutes are spoken as minutes, anything else stays in
+/// seconds, so the wording survives the next change to the constant.
+String describeAlertDuration(Duration d) {
+  if (d.inSeconds % 60 != 0) return '${d.inSeconds} seconds';
+  final m = d.inMinutes;
+  return m == 1 ? '1 minute' : '$m minutes';
+}
 
 const int kFlareSigChunkBudgetBytes = kCommunityChunkBudgetBytes - 2;
 

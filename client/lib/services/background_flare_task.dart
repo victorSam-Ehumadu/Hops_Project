@@ -223,7 +223,14 @@ class BackgroundFlareTaskHandler extends TaskHandler {
   static const Duration _kFreshness = Duration(seconds: 20);
 
   /// How long an alert rings without being re-heard before it self-expires.
-  static const Duration _kAlertExpiry = Duration(minutes: 3);
+  ///
+  /// Derived rather than written down: this was a hardcoded 3 minutes, and
+  /// the moment kEmergencyFlareDuration went to 5 the handler would have
+  /// been willing to expire an alert while the sender was still
+  /// broadcasting it. The margin matches NotificationService's
+  /// _alertAutoExpiry, so the UI and background paths time out alike.
+  static final Duration _kAlertExpiry =
+      kEmergencyFlareDuration + const Duration(seconds: 30);
 
   void _handleAlert(String name) {
     _lastHeard[name] = DateTime.now();
