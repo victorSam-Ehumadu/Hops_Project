@@ -64,6 +64,20 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
     });
     try {
       final token = await _getToken();
+      // Guarded, rather than posting {'hops_token': null} and letting the
+      // function answer 400. That round trip came back as "Your session has
+      // expired — please sign in again", which is the wrong diagnosis AND
+      // the wrong advice: there is no session to expire, the token was
+      // never written. Signing in again is in fact the right fix here, but
+      // only by accident, and the user had no way to know that.
+      if (token == null || token.isEmpty) {
+        setState(() {
+          _sending = false;
+          _error = "This device isn't signed in, so the code can't be sent. "
+              "Sign in and verify from Account Management.";
+        });
+        return;
+      }
       final res = await Supabase.instance.client.functions.invoke(
         'send-verification-email',
         body: {'hops_token': token},
@@ -86,6 +100,12 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
             ));
       }
     } catch (e) {
+      // functions.invoke throws on any non-2xx, so every server-side
+      // rejection lands here as text rather than as the {ok:false} body
+      // handled above. Nothing logged it, which is why "session expired"
+      // could not be traced to which of the function's branches produced
+      // it.
+      debugPrint('send-verification-email failed: $e');
       if (mounted) setState(() => _error = describeAuthException(e));
     } finally {
       if (mounted) setState(() => _sending = false);

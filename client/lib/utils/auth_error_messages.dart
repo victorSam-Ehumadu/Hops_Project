@@ -38,6 +38,15 @@ String describeEmailSendFailure(Object? errorCode, {String skipHint = ''}) {
       // Resolves by itself, so say so — otherwise this reads as broken.
       return "The daily email limit has been reached, so the code couldn't "
           "be sent. Try again later.$skipHint";
+    // The session codes reach here when the function answered 200 with
+    // {ok:false}; the throwing path is handled in describeAuthException.
+    case 'missing_session':
+      return "This device isn't signed in, so the code couldn't be sent.";
+    case 'unknown_session':
+      return "This device's sign-in is no longer recognised — sign in again.";
+    case 'no_email_on_file':
+      return "There's no email address on this account, so a code can't be "
+          "sent.$skipHint";
     case 'sender_not_verified':
     case 'email_not_configured':
       // A real setup fault, and not one the user can fix.
@@ -144,6 +153,23 @@ String describeAuthException(Object e) {
   }
   if (text.contains('invalid_otp') || text.contains('otp_expired')) {
     return "That code is incorrect or has expired — request a new one and try again.";
+  }
+  // Ordered BEFORE invalid_session deliberately: 'missing_session' and
+  // 'unknown_session' both contain "session", and an earlier broad match
+  // would swallow them. send-verification-email used to answer
+  // "invalid_session" for all three, so every one of these read as "your
+  // session has expired" — wrong for two of them, and the advice it gave
+  // ("sign in again") fixed neither.
+  if (text.contains('missing_session')) {
+    return "This device isn't signed in, so that couldn't be sent. Sign in "
+        "and try again.";
+  }
+  if (text.contains('unknown_session')) {
+    return "This device's sign-in is no longer recognised — sign in again.";
+  }
+  if (text.contains('no_email_on_file')) {
+    return "There's no email address on this account, so a code can't be "
+        "sent. Add one in Account Management.";
   }
   if (text.contains('invalid_session')) {
     return "Your session has expired — please sign in again.";

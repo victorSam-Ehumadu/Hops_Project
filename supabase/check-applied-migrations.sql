@@ -55,7 +55,7 @@
 --
 -- COVERAGE
 --
--- 0001-0027. Three throwaway scripts used to cover the tail of this range
+-- 0001-0028. Three throwaway scripts used to cover the tail of this range
 -- (check-0023-0024-0025.sql, check-migrations-quick.sql) and were deleted
 -- once this file caught up — two probes that can disagree about the same
 -- database is worse than one that is occasionally behind.
@@ -269,11 +269,25 @@ with probe(seq, migration, applied, evidence) as (
   -- being stored off the database — see its header). So the healthy state
   -- is NOT applied, and this row says so rather than reporting a scary
   -- 'NO' on the one migration you are not supposed to have run.
-  union all select 34, '0026 retire plaintext email (must NOT be applied)',
+  -- 0026 WAS applied here, by accident, and 0028 put the column back. So
+  -- this row no longer means "0026 never ran" — it means "profiles.email
+  -- exists", which is what the three Edge Functions require and what 0028
+  -- guarantees. 0026's other effects (nine rewritten SQL functions, the
+  -- retired sync trigger) are still in place and are fine.
+  union all select 34, '0026 plaintext email column present',
     exists (select 1 from information_schema.columns
              where table_schema = 'public' and table_name = 'profiles'
                and column_name = 'email'),
-    'profiles.email still present — correct, 0026 is deliberately unapplied'
+    'profiles.email exists — the Edge Functions select it by name'
+  union all select 35, '0028 email backfill trigger',
+    exists (select 1 from pg_trigger
+             where tgrelid = 'public.profiles'::regclass
+               and tgname = 'profiles_sync_email_plaintext'),
+    'trigger profiles_sync_email_plaintext — without it, NEW signups get a '
+    'null email and the verification code cannot be sent'
+  union all select 36, '0028 every account has an address',
+    not exists (select 1 from public.profiles where email is null),
+    'no profile with a null email (a null one cannot be emailed at all)'
 )
 -- Rows that need action sort to the TOP, so the answer to "what am I
 -- missing" is simply the first block of the result rather than something

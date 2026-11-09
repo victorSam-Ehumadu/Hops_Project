@@ -16,8 +16,10 @@ Deno.serve(async (req) => {
 
   try {
     const { hops_token } = await req.json();
+    // The client sent no token at all — a bug on its side, not an expired
+    // session. Named differently so it cannot be mistaken for one.
     if (typeof hops_token !== "string" || hops_token.length === 0) {
-      return new Response(JSON.stringify({ ok: false, error: "invalid_session" }), {
+      return new Response(JSON.stringify({ ok: false, error: "missing_session" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -34,7 +36,32 @@ Deno.serve(async (req) => {
       .eq("hops_token", hops_token)
       .maybeSingle();
 
-    if (!profile || !profile.email || new Date(profile.token_expires_at).getTime() < Date.now()) {
+    // Three DIFFERENT failures, reported separately.
+    //
+    // These were one branch returning "invalid_session" for all of them.
+    // Because this returns a non-2xx, functions.invoke() throws rather
+    // than handing the body back, so the client's catch ran
+    // describeAuthException over the error text, matched "invalid_session"
+    // and told the user "Your session has expired — please sign in again."
+    //
+    // That sentence is wrong for two of the three, and the advice is
+    // useless for both: signing in again cannot conjure an email address
+    // onto an account that has none, and it cannot help a token that
+    // simply does not match any row. It also hid which one had happened,
+    // which is most of why this took so long to pin down.
+    if (!profile) {
+      return new Response(JSON.stringify({ ok: false, error: "unknown_session" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (!profile.email) {
+      return new Response(JSON.stringify({ ok: false, error: "no_email_on_file" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (new Date(profile.token_expires_at).getTime() < Date.now()) {
       return new Response(JSON.stringify({ ok: false, error: "invalid_session" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },

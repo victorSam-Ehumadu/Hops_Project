@@ -37,8 +37,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - **`shop.html` is DEMO MODE.** It simulates a donation, collects no card details, and its red
     banner must stay until a real provider is wired up — see the comment block at the top of the
     file and `website/README.md`. Amounts are in **rands** (R20/R50/R100, R10–R10 000).
-- `scripts/` — PowerShell operational scripts (currently database backup/restore; see "Database
-  backups" below). Not part of any build.
+- `scripts/` — PowerShell operational scripts (database backup/restore, and
+  `backup-everything.ps1` — see "Database backups" below). Not part of any build.
 - `docs/` — academic project documentation and presentation material, written against the module
   guidelines PDF that also lives there. Report prose and speaker material, not developer docs —
   this file remains the developer guide. Current contents:
@@ -983,6 +983,24 @@ The scratch database (`hops_restore_test`) is dropped in a `finally` block, so n
 `verify-backup.ps1` never contacts the cloud database and needs no network, so it is safe to run
 anywhere — including as a live demonstration (see `docs/backup-demo-runbook.md`).
 
+`backup-everything.ps1` is the wider one: the source tree **with its `.git`**, `client/.env`,
+the signing keystore, the newest database dumps and any built APKs, into one dated folder,
+with a `MANIFEST.txt` of SHA-256 hashes and restore steps. `-WithDatabase` takes a fresh dump
+first; `-Destination` picks where (default: a dated Desktop folder). Two things it exists to
+protect, both invisible until the day they matter:
+
+- **`client/.env` is gitignored**, so a GitHub clone does not build.
+- **Release APKs are signed with the DEBUG keystore** (`build.gradle.kts:34`,
+  `~/.android/debug.keystore`). Android refuses an update signed by a different key, and all
+  Hops data lives on the device — so losing that 2.6 KB file means every future release
+  requires an uninstall, destroying every user's messages, contacts and tasks. It is the most
+  valuable file in the project and nothing else backs it up.
+
+It deliberately does NOT capture the Supabase Edge Function secrets or the two Vault keys —
+neither is reachable from `pg_dump` — and names them in the manifest so their absence is
+recorded rather than discovered later. The output holds the anon key, the signing key and
+every password hash: store it like a password.
+
 Things that are non-obvious and cost time to rediscover:
 
 - **`pg_dump` is not on PATH.** The EDB installer doesn't add its `bin` directory, so the command
@@ -1032,7 +1050,22 @@ nobody decided to issue is precisely what moderation must not do by itself.
 Needs the `send-moderation-email` function redeployed too — it gained a `warn` kind, which is
 appealable (reply-to set) for the same reason a ban is.
 
-`0026_retire_plaintext_email.sql` is written but **deliberately unapplied** — it drops
+**`0026` WAS applied, by accident, and `0028_restore_plaintext_email.sql` undoes the part
+that broke things.** 0026 drops `profiles.email` and rewrites the nine SQL functions that
+read it — but it never touched the three **Edge Functions**, which still
+`select("email")` on `profiles`. PostgREST errors on a missing column, so each one got a
+null row, took its "no such profile" branch and returned `invalid_session` — which the app
+reported as *"Your session has expired."* Nothing was wrong with any session; what was
+actually broken was **signup's verification code, Forgot Password, and every moderation
+email**. Nothing was lost: `email_encrypted` still holds every address, and `0028` restores
+the column from it. `0028` also attaches `profiles_sync_email_plaintext`, which derives the
+plaintext FROM the ciphertext on write — the inverse of 0021's trigger — so 0026's live
+writers need no changes and a new signup cannot end up with a null email. **If the Edge
+Functions are ever rewritten to read via `decrypt_email`, 0026 becomes correct again and
+will need a 0029 dropping that trigger first.** The original note follows, still true of
+what 0026 does:
+
+`0026_retire_plaintext_email.sql` is written but was **meant to stay unapplied** — it drops
 `profiles.email` and rewrites the eight functions that read or write it. It is irreversible and
 gated on both Vault keys being stored off the database; its header carries the prerequisites and
 a rehearse-on-a-restored-copy procedure. Worth knowing if you touch anything on the email path:
