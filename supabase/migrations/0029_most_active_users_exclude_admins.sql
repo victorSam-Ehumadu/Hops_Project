@@ -32,6 +32,23 @@
 -- is still meaningful on its own.
 -- ---------------------------------------------------------------------------
 
+-- MATCH THE RETURN SHAPE EXACTLY. The first draft of this file renamed two
+-- output columns — `id` for `user_id` and `is_suspended` for `suspended` —
+-- transcribed from memory rather than read out of 0022. Postgres refused it
+-- outright:
+--
+--   42P13: cannot change return type of existing function
+--   DETAIL: Row type defined by OUT parameters is different.
+--
+-- That refusal was the safety net doing its job. The hint suggests DROP
+-- FUNCTION first, and following it would have "worked" — and then
+-- admin_stats_service.dart, which reads r['user_id'] and r['suspended'] by
+-- name, would have got null for both and the Most Active Users list would
+-- have gone quietly blank with no error anywhere.
+--
+-- So: never DROP to get past 42P13 on a function the app reads by column
+-- name. Read the live signature and match it.
+--
 begin;
 
 create or replace function public.get_admin_most_active_users(
@@ -40,11 +57,11 @@ create or replace function public.get_admin_most_active_users(
   p_to timestamptz,
   p_limit int default 10
 ) returns table (
-  id uuid,
+  user_id uuid,
   username text,
   role text,
   banned boolean,
-  is_suspended boolean,
+  suspended boolean,
   reports_filed bigint,
   reports_received bigint,
   warnings_received bigint,
@@ -54,6 +71,7 @@ create or replace function public.get_admin_most_active_users(
   account_created timestamptz
 )
 language plpgsql
+stable
 security definer
 set search_path = public
 as $fn$
@@ -114,6 +132,11 @@ begin
         p.role,
         p.banned,
         (p.suspended_until is not null
+          -- Named is_suspended, NOT suspended, matching 0022. The OUT
+          -- parameter is called `suspended`, and in PL/pgSQL a column of
+          -- the same name is ambiguous against it — which fails at call
+          -- time, not at create time. 0022 sidestepped it this way and
+          -- this must keep doing so.
           and p.suspended_until > (now() at time zone 'utc')) as is_suspended,
         coalesce(f.n, 0) as n_filed,
         coalesce(r.n, 0) as n_received,
