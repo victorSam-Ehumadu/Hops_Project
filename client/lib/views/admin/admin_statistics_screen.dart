@@ -214,7 +214,8 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
               ),
               _metricGrid(colors, _stats!.standingMetrics),
               const SizedBox(height: 18),
-              _sectionTitle('Most active users', colors),
+              _sectionTitle('Most active users', colors,
+                  onInfo: () => _showScoringInfo(colors)),
               _activeUsers(colors, _stats!.activeUsers),
               const SizedBox(height: 20),
               _dataScopeNote(colors),
@@ -272,18 +273,166 @@ class _AdminStatisticsScreenState extends State<AdminStatisticsScreen> {
     );
   }
 
-  Widget _sectionTitle(String text, ColorScheme colors) => Padding(
+  /// [onInfo] adds a trailing info button. Only the ranking has one — a
+  /// count needs no explanation, but a SCORE is meaningless without the
+  /// weights behind it, and an unexplained number invites an admin to read
+  /// significance into an ordering they have no way to check.
+  Widget _sectionTitle(String text, ColorScheme colors,
+          {VoidCallback? onInfo}) =>
+      Padding(
         padding: const EdgeInsets.only(bottom: 10),
-        child: Text(
-          text.toUpperCase(),
-          style: TextStyle(
-            fontSize: 11,
-            letterSpacing: 0.9,
-            fontWeight: FontWeight.w800,
-            color: colors.primary,
-          ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                text.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 11,
+                  letterSpacing: 0.9,
+                  fontWeight: FontWeight.w800,
+                  color: colors.primary,
+                ),
+              ),
+            ),
+            if (onInfo != null)
+              InkWell(
+                onTap: onInfo,
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(Icons.info_outline,
+                      size: 17,
+                      color: colors.onSurface.withValues(alpha: 0.55)),
+                ),
+              ),
+          ],
         ),
       );
+
+  /// How the activity score is built.
+  ///
+  /// These weights are defined server-side in get_admin_most_active_users
+  /// (0022, revised by 0029). THEY ARE DUPLICATED HERE and nothing enforces
+  /// that the two agree — if the SQL weights change, this sheet must change
+  /// in the same commit. A scoring explanation that quietly goes stale is
+  /// worse than none, because an admin will trust it.
+  void _showScoringInfo(ColorScheme colors) {
+    const rows = [
+      ('Reports they filed', '1', 'Using the report button at all.'),
+      ('Reports against them', '3',
+          'Weighted above filing: being reported repeatedly is the stronger '
+          'signal for a moderator.'),
+      ('Warnings received', '5',
+          'The heaviest, because a warning is a decision an admin has '
+          'already made about this account.'),
+      ('Official Alerts sent', '2',
+          'Admin-only, so always 0 for anyone in this list.'),
+      ('Emergency Flares raised', '2',
+          'The only genuine student-activity signal the server holds.'),
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('How the activity score works',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: colors.primary)),
+              const SizedBox(height: 6),
+              Text(
+                'Each signal below is counted over the selected date range, '
+                'multiplied by its weight, and added up.',
+                style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.45,
+                    color: colors.onSurface.withValues(alpha: 0.7)),
+              ),
+              const SizedBox(height: 14),
+              for (final (label, weight, why) in rows)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 32,
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: colors.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text('x$weight',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: colors.primary)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(label,
+                                style: const TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w600)),
+                            const SizedBox(height: 2),
+                            Text(why,
+                                style: TextStyle(
+                                    fontSize: 11.5,
+                                    height: 1.4,
+                                    color: colors.onSurface
+                                        .withValues(alpha: 0.6))),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const Divider(height: 22),
+              Text('What it does not measure',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: colors.onSurface.withValues(alpha: 0.75))),
+              const SizedBox(height: 5),
+              Text(
+                'Chats, Lost & Found posts, Study Bunny tags, Vibe Check and '
+                'the games never reach the server, so none of them can count '
+                'here. A low score means little activity Hops can SEE, not '
+                'little activity.',
+                style: TextStyle(
+                    fontSize: 11.5,
+                    height: 1.45,
+                    color: colors.onSurface.withValues(alpha: 0.6)),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Admins are left out of this list. Two of the signals are '
+                'things only an admin can do, so including them would rank '
+                'moderators against students.',
+                style: TextStyle(
+                    fontSize: 11.5,
+                    height: 1.45,
+                    color: colors.onSurface.withValues(alpha: 0.6)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Short x-axis label for one bucket.
   ///

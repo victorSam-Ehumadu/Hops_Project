@@ -9,6 +9,82 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:client/utils/password_policy.dart';
 
 void main() {
+  group('usernames that look like an email address', () {
+    // The character class already rejects '@' and '.', so the only way an
+    // address gets through is with its punctuation swapped out — and the
+    // username rides the BLE advertisement name to everyone in range.
+    test('an address wearing underscores is refused', () {
+      expect(validateUsername('victor_gmail_com'), isNotNull);
+      expect(validateUsername('me_yahoo_co_za'), isNotNull);
+    });
+
+    test('a literal address was already impossible', () {
+      // Belt and braces: if the character class is ever loosened, this
+      // fails rather than silently admitting addresses again.
+      expect(validateUsername('victor@gmail.com'), isNotNull);
+    });
+
+    test('an ordinary name containing a provider word is allowed', () {
+      expect(validateUsername('gmailuser'), isNull);
+      expect(validateUsername('mailroom'), isNull);
+    });
+  });
+
+  group('usernames containing profanity', () {
+    test('are refused, including leetspeak', () {
+      expect(validateUsername('fucker'), isNotNull);
+      expect(validateUsername('sh1thead'), isNotNull);
+    });
+
+    test('but an ordinary name containing a listed term is not', () {
+      // Same Scunthorpe reasoning as profanity_filter_test.dart.
+      expect(validateUsername('classic'), isNull);
+      expect(validateUsername('Cassidy'), isNull);
+    });
+  });
+
+  group('student number prefixes at signup', () {
+    test('an allowed prefix on the institutional domain passes', () {
+      for (final p in kAllowedStudentNumberPrefixes) {
+        expect(validateAccountEmail('${p}12345$kInstitutionalEmailDomain'), isNull,
+            reason: 'prefix $p should be accepted');
+      }
+    });
+
+    test('a wrong prefix is refused, and the message says so', () {
+      final err = validateAccountEmail('39912345$kInstitutionalEmailDomain');
+      expect(err, isNotNull);
+      // The complaint must be about the PREFIX, not the domain — the
+      // domain is correct here, and telling them otherwise sends them
+      // looking at the wrong half of their own address.
+      expect(err, contains('399'));
+      expect(err!.toLowerCase(), isNot(contains('ending in')));
+    });
+
+    test('the wrong domain is still reported as a domain problem', () {
+      final err = validateAccountEmail('40212345@gmail.com');
+      expect(err, isNotNull);
+      expect(err, contains(kInstitutionalEmailDomain));
+    });
+
+    test('the test allowlist bypasses both checks', () {
+      // Those addresses have no student number at all. They must keep
+      // working until the list is emptied for launch.
+      for (final addr in kTestEmailAllowlist) {
+        expect(validateAccountEmail(addr), isNull);
+      }
+    });
+
+    test('the wording lists exactly the prefixes that are enforced', () {
+      // Guards the drift where a prefix is added to the list but the
+      // message still names the old set.
+      final err = validateAccountEmail('39912345$kInstitutionalEmailDomain')!;
+      for (final p in kAllowedStudentNumberPrefixes) {
+        expect(err, contains(p));
+      }
+    });
+  });
+
   group('validateUsername', () {
     test('accepts an ordinary username', () {
       expect(validateUsername('Kwame123'), isNull);
@@ -201,13 +277,13 @@ void main() {
 
   group('validateAccountEmail (institutional domain)', () {
     test('accepts a Richfield student address', () {
-      expect(validateAccountEmail('victor@my.richfield.ac.za'), isNull);
+      expect(validateAccountEmail('40212345@my.richfield.ac.za'), isNull);
     });
 
     test('accepts it case-insensitively', () {
       // Signup lowercases before storing, so rejecting on case here would
       // refuse an address the server would happily accept.
-      expect(validateAccountEmail('Victor@My.Richfield.AC.ZA'), isNull);
+      expect(validateAccountEmail('40212345@My.Richfield.AC.ZA'), isNull);
     });
 
     test('rejects an outside domain', () {

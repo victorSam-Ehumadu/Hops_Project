@@ -768,13 +768,69 @@ class _HopsSharePageState extends State<HopsSharePage> {
         ],
       ),
       body: HopsBackgroundPattern(
-        child: _checkingPermissions
-            ? const Center(child: CircularProgressIndicator())
-            : !_hasPermissions
-            ? _buildPermissionDeniedView(colors)
-            : _isConnected
-            ? _buildConnectedView()
-            : _buildDiscoveryView(),
+        child: Column(
+          children: [
+            // Shown on every state of this screen, including while
+            // permissions are still being checked.
+            //
+            // Hops Share moves arbitrary files between two phones over a
+            // direct link with no server in between — which means no virus
+            // scanning, no reputation check, and nothing between the sender
+            // and your storage but this sentence. The app genuinely cannot
+            // tell a lecture PDF from a malicious APK, and saying so is
+            // more honest than implying a check that does not exist.
+            _buildSafetyNotice(colors),
+            Expanded(
+              child: _checkingPermissions
+                  ? const Center(child: CircularProgressIndicator())
+                  : !_hasPermissions
+                  ? _buildPermissionDeniedView(colors)
+                  : _isConnected
+                  ? _buildConnectedView()
+                  : _buildDiscoveryView(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Standing warning across the top of Hops Share.
+  ///
+  /// Deliberately NOT dismissible. It is one line, it sits above a feature
+  /// whose whole purpose is accepting files from strangers in Bluetooth
+  /// range, and the moment somebody most needs to read it is the moment
+  /// they are least likely to go looking for it. Amber rather than red:
+  /// this is a caution on an ordinary action, not an error, and a red bar
+  /// permanently on screen stops being read within a day.
+  Widget _buildSafetyNotice(ColorScheme colors) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9A825).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF9A825).withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.shield_outlined, size: 18, color: Color(0xFFB26A00)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              "Only share and accept files from people you trust. Hops "
+              "transfers files directly between phones and cannot scan them "
+              "for viruses or harmful content.",
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: colors.onSurface.withValues(alpha: 0.78),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

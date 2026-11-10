@@ -121,7 +121,14 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
         elevation: 0,
         backgroundColor: Colors.transparent,
       ),
-      body: _records.isEmpty
+      body: Column(
+        children: [
+          // Only shown once there is something to open. On an empty list
+          // there is nothing to be careful about yet, and a warning with
+          // no subject is the kind that trains people to ignore warnings.
+          if (_records.isNotEmpty) _buildOpenWarning(colors),
+          Expanded(
+            child: _records.isEmpty
           ? const Center(
         child: Text(
           "No files received yet.",
@@ -197,6 +204,52 @@ class _ReceivedFilesPageState extends State<ReceivedFilesPage> {
             ),
           );
         },
+      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Caution strip above the list of received files.
+  ///
+  /// This screen is the one place in Hops that opens a file somebody else
+  /// chose. Nothing scanned it on the way here — the transfer is phone to
+  /// phone with no server in the middle — and the row's own Open button
+  /// hands it straight to whatever app Android has registered for that
+  /// extension. The filename is also the SENDER's text, so an icon that
+  /// says "PDF" only means the name ends in .pdf.
+  ///
+  /// Not dismissible, for the same reason as the one on Hops Share: it
+  /// guards an action that is available every time this screen is open.
+  Widget _buildOpenWarning(ColorScheme colors) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9A825).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF9A825).withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded, size: 18, color: Color(0xFFB26A00)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              "These files came from other phones and were not checked for "
+              "viruses. Only open one if you know who sent it and were "
+              "expecting it.",
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: colors.onSurface.withValues(alpha: 0.78),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

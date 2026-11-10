@@ -520,6 +520,18 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
     }
   }
 
+  /// Promotes an account to admin.
+  ///
+  /// Currently unreferenced: the "Make admin" entry was removed from the
+  /// action sheet on request, since granting full moderation powers is not
+  /// a decision that belongs one tap from a list you scroll. Admins are
+  /// provisioned out of band instead.
+  ///
+  /// Kept rather than deleted because the promote_admin RPC still exists
+  /// server-side and this is the correct, confirmed, audit-logged way to
+  /// call it — if an in-app route is ever wanted again it should be this
+  /// one, not a fresh implementation that forgets the confirmation.
+  // ignore: unused_element
   Future<void> _promote() async {
     if (!await _confirm(
       title: "Make ${widget.username} an admin?",
@@ -813,17 +825,27 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                   Navigator.pop(ctx);
                   _suspend();
                 }),
+              // "Make admin" was here. Removed on request: handing out full
+              // moderation powers — banning accounts, broadcasting
+              // campus-wide alerts, seeing real usernames on reports — is
+              // not a decision that belongs on the same sheet as routine
+              // moderation, one tap from a list you scroll.
+              //
+              // Admin accounts are provisioned out of band instead, which
+              // is what CLAUDE.md already describes the admin app as
+              // assuming ("admin accounts are provisioned out-of-band").
+              // The promote_admin RPC is untouched and still callable from
+              // the SQL editor, so this removes a route, not a capability.
+              //
+              // "Remove admin" DELIBERATELY STAYS. Taking powers away is
+              // the safe direction, and an admin whose access must be
+              // revoked quickly should not need a database console to do
+              // it. _promote() is kept for the same reason the RPC is.
               if (isAdmin)
                 _action(ctx, Icons.remove_moderator, "Remove admin", "Back to a normal account",
                     Colors.orange.shade800, () {
                   Navigator.pop(ctx);
                   _demote();
-                })
-              else
-                _action(ctx, Icons.add_moderator, "Make admin", "Full moderation powers",
-                    Theme.of(ctx).colorScheme.primary, () {
-                  Navigator.pop(ctx);
-                  _promote();
                 }),
               // Targets the REPORTER when this sheet was opened from a
               // report, and the viewed account otherwise — see

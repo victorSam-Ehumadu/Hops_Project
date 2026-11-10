@@ -1,3 +1,5 @@
+import 'package:client/utils/profanity_filter.dart';
+
 // Shared password/username rules — used by both sign-up (auth_screen.dart)
 // and the in-app "Change Password" flow (account_management_screen.dart)
 // so the two can never drift out of sync with each other.
@@ -38,6 +40,20 @@ String? validateUsername(String username) {
   }
   if (!RegExp(r'^[A-Za-z0-9_]+$').hasMatch(trimmed)) {
     return "Username can only contain letters, numbers, and underscores.";
+  }
+  // A literal address is already impossible — '@' and '.' are both outside
+  // the character class above. This catches the same address with its
+  // punctuation swapped for underscores, which is not: "victor_gmail_com"
+  // passes every rule so far and then rides the BLE advertisement name to
+  // everyone in range, handing out a contactable address with it.
+  if (looksLikeEmailAddress(trimmed)) {
+    return "Usernames can't be built from an email address — everyone "
+        "nearby can see your username.";
+  }
+  // Your username is attached to every flare, post and message you send,
+  // so it is the single most-broadcast piece of text in the app.
+  if (containsProfanity(trimmed)) {
+    return "That username contains language Hops doesn't allow.";
   }
   return null;
 }
@@ -93,11 +109,53 @@ String? validateAccountEmail(String email) {
   if (generic != null) return generic;
 
   final trimmed = email.trim().toLowerCase();
-  if (trimmed.endsWith(kInstitutionalEmailDomain)) return null;
   if (kTestEmailAllowlist.contains(trimmed)) return null;
+
+  if (trimmed.endsWith(kInstitutionalEmailDomain)) {
+    // Institutional addresses are the student number, so the intake year
+    // is the first three digits. Checked AFTER the domain, so somebody on
+    // the right domain with the wrong prefix gets told about the prefix
+    // rather than being told their domain is wrong.
+    final localPart =
+        trimmed.substring(0, trimmed.length - kInstitutionalEmailDomain.length);
+    if (!kAllowedStudentNumberPrefixes.any(localPart.startsWith)) {
+      return "Hops is open to student numbers starting "
+          "${_prefixesInWords()}. Yours starts with "
+          "\"${localPart.length >= 3 ? localPart.substring(0, 3) : localPart}\".";
+    }
+    return null;
+  }
 
   return "Use your Richfield student email "
       "(ending in $kInstitutionalEmailDomain) to create a Hops account.";
+}
+
+/// Student-number prefixes allowed to sign up.
+///
+/// A Richfield address is the student number, so the first three digits are
+/// the intake year — this restricts Hops to current cohorts rather than
+/// every address the domain has ever issued.
+///
+/// Signup only. Sign-in and password reset deliberately do NOT consult this
+/// (see validateAccountEmail's own note on that split): an account created
+/// under an older prefix must keep working, or adding a year here would
+/// silently lock out everybody who came before it.
+///
+/// Compared with startsWith against the part before the '@'.
+const List<String> kAllowedStudentNumberPrefixes = <String>[
+  '401', '402', '403', '404',
+];
+
+/// "401, 402, 403 or 404" — for the message above, so the list stays the
+/// single source of truth and a new prefix cannot be added to the check
+/// while the wording still names the old set.
+String _prefixesInWords() {
+  if (kAllowedStudentNumberPrefixes.length == 1) {
+    return kAllowedStudentNumberPrefixes.first;
+  }
+  final head =
+      kAllowedStudentNumberPrefixes.sublist(0, kAllowedStudentNumberPrefixes.length - 1);
+  return "${head.join(', ')} or ${kAllowedStudentNumberPrefixes.last}";
 }
 
 // Deliberately exact (case-insensitive) matches against the single most

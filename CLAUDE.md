@@ -127,9 +127,11 @@ flutter analyze                        # static analysis (flutter_lints, see ana
 flutter test                           # run tests in test/
 flutter build apk                      # Android build
 flutter build windows                  # Windows desktop build
+
+# P91nalsAaHPslLS5KUFSFjUWAkE9aABIiYb2OxfJaMS9baSQ#fIge7ZKQrr9F_FfnlQViInVd5PURFj-zx5bi533xoFQ
 ```
 
-`flutter test` passes: **374 tests**, all green. The default counter-app `widget_test.dart` that
+`flutter test` passes: **431 tests**, all green. The default counter-app `widget_test.dart` that
 used to break the run has been deleted. Treat a failure as a real regression.
 
 What is and isn't covered, so you know what a green run actually proves:
@@ -140,6 +142,16 @@ What is and isn't covered, so you know what a green run actually proves:
   window-rollover tolerance, flare signature chunking reassembled at full RSA-2048 length. This is
   the highest-value file in the suite — it pins the tightest constraint in the codebase and is
   pure Dart with no plugins.
+- `test/utils/profanity_filter_test.dart` (47) — the filter, and both ways it can be
+  wrong. Letting abuse through is the obvious failure; refusing honest text is the more
+  damaging one in a safety app, and this file caught it for real — `cunt` was in the
+  substring list and rejected **"Scunthorpe"**, the textbook example. A student who can't
+  file a report because of where they're standing has been failed by the thing meant to
+  protect them. So the folded check matches whole tokens, with a short substring list whose
+  entries appear inside no innocent word. Also pins that `containsProfanity` (used to
+  REFUSE text) catches `sh1t`/`f@ck`/`f u c k` while `censorProfanity` (used to rewrite
+  text going out anyway) deliberately stays on the plain pattern, so an asterisk run always
+  lines up with what it replaced.
 - `test/utils/password_policy_test.dart` (35) — username/email/password rules and strength
   scoring. The blocklist tests guard two things that are easy to undo: the blocklist is checked
   **before** the character-class rules (below them it is unreachable, since every entry is
